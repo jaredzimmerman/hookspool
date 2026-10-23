@@ -1,0 +1,56 @@
+# hookspool-intake.service: the loopback HTTP intake (docs/ARCHITECTURE.md section 2).
+# Install as /etc/systemd/system/hookspool-intake.service, then `systemctl daemon-reload`.
+# Replace User/Group (a dedicated account is best; on a host that runs the agent as root, set root and
+# drop nothing else), the hookspool path, and the state dir if you moved it. Keep ReadWritePaths equal
+# to the state dir, and keep it in step with hookspool-dispatch.service.
+[Unit]
+Description=hookspool intake (verify, spool, acknowledge)
+After=network.target
+# No start limit: while ExecStartPre=check fails (an upgrade before `migrate`), systemd keeps retrying
+# every RestartSec instead of giving up with "start request repeated too quickly".
+StartLimitIntervalSec=0
+# The intake never applies a schema migration: on an older database `hookspool check` exits 2 and systemd
+# keeps retrying every 2 s until `hookspool migrate` has run. The dispatch unit's ExecStartPre runs the
+# same check, so after a package upgrade the dispatcher does NOT fix the schema on its own: follow
+# "Upgrading" in deploy/README.md (stop dispatch, migrate, start). On a new install `migrate` creates the
+# spool before either service starts. There is no hard dependency, so neither service can block the other.
+Wants=hookspool-dispatch.service
+
+[Service]
+Type=simple
+User=hookspool
+Group=hookspool
+Environment=HOOKSPOOL_HOME=/var/lib/hookspool
+Environment=HOOKSPOOL_LOG=json
+ExecStartPre=/usr/local/bin/hookspool check
+ExecStart=/usr/local/bin/hookspool intake
+ExecReload=/usr/local/bin/hookspool reload
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+LimitNOFILE=4096
+
+# Hardening. The intake binds loopback, reads the config and the secrets, writes the spool, and
+# fetches Plaid's verification keys when a Plaid source is configured.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/hookspool
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

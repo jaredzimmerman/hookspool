@@ -1,0 +1,6 @@
+# Everything the test suite and CI need beyond the standard library.
+# Runtime dependencies are cryptography and PyJWT (Plaid's ES256 verification); the rest is tooling.
+cryptography>=42
+PyJWT>=2.8
+pytest>=8
+ruff>=0.15,<0.18

@@ -1,0 +1,18 @@
+# Kaneo "generic webhook" integration, as config only (no Python).
+# Source of the format: usekaneo/kaneo, apps/api/src/plugins/generic-webhook (client.ts signs
+# JSON.stringify(payload) with HMAC-SHA256 and sends the lowercase hex in X-Kaneo-Signature, no
+# prefix; events.ts builds the {event, timestamp, project, task, actor, data} envelope).
+#
+# Kaneo sends no delivery id, so duplicates are recognised by the body hash. Whether Kaneo retries
+# a failed delivery is not documented; sender_retries is left unset until it is known.
+[sources.kaneo]
+module = "hookspool.sources.template"
+scheme = "hmac-sha256-hex"
+header = "X-Kaneo-Signature"
+key = "project.id"
+dedup = "body_sha256"
+event_type = "event"
+attrs = { event = "event", project = "project.id" }
+span = "mail"
+action = "hermes:kaneo"
+secrets.secret = { file = "/etc/hookspool/secrets/kaneo" }

@@ -1,0 +1,11 @@
+# capture: body changed after signing
+# now: 1800000000
+# expect: unverified
+# tamper_of: event.http
+POST /hooks/trello HTTP/1.1
+Content-Type: application/json
+User-Agent: Trello-Webhooks
+X-Trello-Webhook: 0EP+GXv0EHivNvBiThsOHAF4lc0=
+Content-Length: 108
+
+{"model":{"id":"board-2"},"action":{"id":"a-1","type":"updateCard","data":{"text":"PAYLOAD-SENTINEL-7f3a"}}}

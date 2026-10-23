@@ -1,0 +1,9 @@
+# capture: base64 HMAC-SHA1 over body + callback URL
+# now: 1800000000
+# expect: queued
+POST /hooks/kithead HTTP/1.1
+Content-Type: application/json
+X-Kit-Webhook: +1vE9qa3CBkhjmM6IZNMkgLMCCI=
+Content-Length: 79
+
+{"model":{"id":"board-1"},"action":{"id":"a-1","text":"PAYLOAD-SENTINEL-7f3a"}}

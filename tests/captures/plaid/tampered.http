@@ -1,0 +1,9 @@
+# capture: body changed after signing: request_body_sha256 mismatch
+# now: 1800000000
+# expect: unverified
+POST /hooks/plaid HTTP/1.1
+Content-Type: application/json
+Plaid-Verification: eyJhbGciOiJFUzI1NiIsImtpZCI6InRlc3Qta2lkLTAwMDEiLCJ0eXAiOiJKV1QifQ.eyJpYXQiOjE4MDAwMDAwMDAsInJlcXVlc3RfYm9keV9zaGEyNTYiOiJiYmVmMDZkYWFlNDE1N2Q0YTY3NzI2MmMxMjI3OThhNWZjYjE4ZmEwOGQyNjVkNjBlYjI3M2FkZWI0OGE4NzM5In0.ZtytjckgowxDu564wMmNuE3xHzbpHjBv8JE1Eb7Uu96DiANBk9JnEMLKYPMQ15QCZFNo7BZiANXH4VV4wB_vQw
+Content-Length: 150
+
+{"webhook_type":"TRANSACTIONS","webhook_code":"SYNC_UPDATES_AVAILABLE","itel_id":"item-abc123","environment":"sandbox","note":"PAYLOAD-SENTINEL-7f3a"}

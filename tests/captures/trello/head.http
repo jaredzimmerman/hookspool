@@ -1,0 +1,7 @@
+# capture: unsigned HEAD handshake, constant 200
+# now: 1800000000
+# expect: challenge
+HEAD /hooks/trello HTTP/1.1
+User-Agent: Trello-Webhooks
+
+

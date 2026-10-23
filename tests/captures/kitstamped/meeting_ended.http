@@ -1,0 +1,10 @@
+# capture: timestamped v0 signature at '# now'
+# now: 1800000000
+# expect: queued
+POST /hooks/kitstamped HTTP/1.1
+Content-Type: application/json
+X-Kit-Timestamp: 1800000000
+X-Kit-Signature: v0=d983bde2923b053fa3dcdb58755a2d3102e04d862d738ece7057b3febd11b0f3
+Content-Length: 118
+
+{"event":"meeting.ended","event_ts":1799999999000,"payload":{"object":{"uuid":"m-1","topic":"PAYLOAD-SENTINEL-7f3a"}}}

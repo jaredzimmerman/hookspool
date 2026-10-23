@@ -1,0 +1,39 @@
+name: plugins
+
+# Runs on the plain pull_request event (not its _target variant), so a fork's code runs with a
+# read-only token and no secrets.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugins-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plugin-checks:
+    name: conformance kit, core guard, secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0              # the changed files are found against the PR's base commit
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install
+        run: python -m pip install -r requirements-dev.txt
+      - name: Plugin checks
+        # discover the changed sources and templates, run the conformance kit on each, the
+        # core-has-no-per-source-code guard and the secret/hostname scan; the table goes to the job summary.
+        # No owner denylist here: a step's env is printed in the run log, and this repo's logs are public. The
+        # denylist (HOOKSPOOL_DENYLIST or deploy/local/denylist.txt) is applied locally, before publishing.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python .github/scripts/plugin_ci.py all --base "$BASE_SHA"

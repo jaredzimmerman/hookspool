@@ -1,0 +1,9 @@
+# capture: iat 301 s old: outside the 300 s window
+# now: 1800000000
+# expect: unverified
+POST /hooks/plaid HTTP/1.1
+Content-Type: application/json
+Plaid-Verification: eyJhbGciOiJFUzI1NiIsImtpZCI6InRlc3Qta2lkLTAwMDEiLCJ0eXAiOiJKV1QifQ.eyJpYXQiOjE3OTk5OTk2OTksInJlcXVlc3RfYm9keV9zaGEyNTYiOiJiYmVmMDZkYWFlNDE1N2Q0YTY3NzI2MmMxMjI3OThhNWZjYjE4ZmEwOGQyNjVkNjBlYjI3M2FkZWI0OGE4NzM5In0.EJ-9LL7INRyPZVud3RxGVnwxqrRKgWwLadjGyIq0u1DQwljDGY7lt2gJh9NmE2aKfeLauf_i2So2wWu6oC6sAg
+Content-Length: 150
+
+{"webhook_type":"TRANSACTIONS","webhook_code":"SYNC_UPDATES_AVAILABLE","item_id":"item-abc123","environment":"sandbox","note":"PAYLOAD-SENTINEL-7f3a"}

@@ -1,0 +1,11 @@
+# capture: a verified ping is acked, not enqueued
+# now: 1800000000
+# expect: ignored
+POST /hooks/kitsigned HTTP/1.1
+Content-Type: application/json
+X-Kit-Event: ping
+X-Kit-Delivery: d-ping
+X-Kit-Signature: sha256=60363f4dd7b31ce683f9287a9cab9e33d78a84fb8add796b433bd4c40198aab0
+Content-Length: 54
+
+{"repo":"octo/widgets","note":"PAYLOAD-SENTINEL-7f3a"}

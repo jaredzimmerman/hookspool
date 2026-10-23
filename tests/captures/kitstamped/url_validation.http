@@ -1,0 +1,10 @@
+# capture: verified handshake
+# now: 1800000000
+# expect: challenge
+POST /hooks/kitstamped HTTP/1.1
+Content-Type: application/json
+X-Kit-Timestamp: 1800000000
+X-Kit-Signature: v0=94d35e610a97894cfc660a1948b793574b6da7a5f01f234832743babb336fb76
+Content-Length: 90
+
+{"event":"endpoint.url_validation","payload":{"plainToken":"plain-PAYLOAD-SENTINEL-7f3a"}}

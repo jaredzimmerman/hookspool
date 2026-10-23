@@ -1,0 +1,9 @@
+vps-src/
+*.pyc
+__pycache__/
+.venv/
+deploy/local/
+.pytest_cache/
+build/
+dist/
+*.egg-info/

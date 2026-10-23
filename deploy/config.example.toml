@@ -1,0 +1,173 @@
+# hookspool config.example.toml: a complete, working shape for one host. Copy to
+# <HOOKSPOOL_HOME>/config.toml (or deploy/local/config.toml, which is gitignored) and replace every
+# placeholder: the /etc/hookspool/... secret files, the /opt/hookspool/... script paths, the
+# callback URL and the alert command. `hookspool check` is the judge; both services run it before
+# they start. Reference: docs/ARCHITECTURE.md section 15.
+#
+# Layout assumed below (change it freely, but keep the unit files' ReadWritePaths in step):
+#   /var/lib/hookspool                 state dir: config.toml, spool.db, dispatch.lock
+#   /var/lib/hookspool/scripts/<name>  one state_dir per script destination
+#   /etc/hookspool/secrets/<source>    one-line secret files, mode 0600
+#   /etc/hookspool/<name>.env          KEY=value env files for script destinations, mode 0600
+#   /opt/hookspool/scripts             deploy/scripts/*.py copied together
+
+[spool]
+home = "/var/lib/hookspool"            # HOOKSPOOL_HOME overrides
+store_raw = true                       # keep original bodies so replay and `source test` can re-verify
+
+[intake]
+listen = "127.0.0.1:8650"              # loopback only; the reverse proxy is the only client
+max_body_bytes = 1048576               # 413 above this. Raise it together with the source, route and
+                                       # destination limits below (see the GitHub row in deploy/README.md)
+
+[dispatch]
+parallel = 4
+
+[coalesce]                             # defaults for every window field; span, source and route override
+max_events = 500
+max_bytes = 786432                     # 768 KiB, at most 0.75 x the destination's max_body_bytes
+
+[limits]
+min_free_bytes = 536870912             # the intake answers 503 below this much free space
+
+[retention]
+delivered_days = 7
+attempts_days = 30
+dropped_days = 7
+issues_days = 90
+
+[alerts]
+# The deployment replaces this with its chat sender; hookspool appends the alert text as the last argument.
+argv = ["logger", "-t", "hookspool"]
+rate_limit_s = 1800
+
+[hermes]
+base_url = "http://127.0.0.1:8644"     # the gateway's webhook listener
+subscriptions_path = "~/.hermes/webhook_subscriptions.json"   # routes and secrets are read from here
+max_body_bytes = 1048576               # must match the gateway's own webhook limit
+legacy_signature = true                # also send X-Hub-Signature-256
+
+# Spans (quiet_s, max_s) are the only per-product coalescing decision. The defaults are below; edit or add.
+[spans]
+burst = { quiet_s = 120, max_s = 600 }     # code and CI
+mail = { quiet_s = 30, max_s = 120 }       # mail, boards
+calendar = { quiet_s = 45, max_s = 180 }
+sync = { quiet_s = 60, max_s = 300 }       # bank backfills
+immediate = { quiet_s = 0, max_s = 0 }     # meetings, security
+
+# ---------------------------------------------------------------------------------------------
+# Sources. One table each, one proxy location each (deploy/nginx.example.conf).
+# ---------------------------------------------------------------------------------------------
+
+# GitHub, as config only (examples/sources/github.toml explains each line). The path chooses the
+# route: the proxy sets X-Hookspool-Route to "ci" or "prs" and the routes below match it.
+# GitHub does not retry a failed delivery: the sweep in deploy/README.md redelivers.
+[sources.github]
+module = "hookspool.sources.template"
+scheme = "hmac-sha256-hex"
+header = "X-Hub-Signature-256"
+prefix = "sha256="
+key = "repository.full_name"
+dedup = "header:X-GitHub-Delivery"
+ignore = "header:X-GitHub-Event=ping"
+event_type = "header:X-GitHub-Event"
+event_header = "X-GitHub-Event"           # Hermes' GitHub route reads the event type here
+attrs = { repo = "repository.full_name", event = "header:X-GitHub-Event" }
+keep_headers = ["X-GitHub-Event", "X-GitHub-Delivery"]
+sender_retries = false
+span = "burst"
+action = "hermes:github-prs"           # a request that names no route goes here
+expect_every_s = 0                     # 0 = no liveness expectation
+secrets.secret = { file = "/etc/hookspool/secrets/github" }
+
+# Plaid: ES256 JWT verified against Plaid's published keys. The client id and secret are used only to
+# fetch those keys. Plaid retries for hours.
+[sources.plaid]
+span = "sync"
+env = "production"                     # or "sandbox" / "development"
+action = "hermes:plaid"
+secrets.client_id = { env_file = "/etc/hookspool/plaid.env", key = "PLAID_CLIENT_ID" }
+secrets.secret = { env_file = "/etc/hookspool/plaid.env", key = "PLAID_SECRET" }
+
+# Gmail through Cloud Pub/Sub push: the secret is the token in the push URL (?token=...). One batch
+# per mailbox; the delta script reads the mailbox once for all the pushes in it.
+[sources.gmail]
+span = "mail"
+action = "script:gmail_delta"
+expect_every_s = 0                     # 0 until the sender points here (deploy/README.md, section 2); then 345600
+                                       # (4 days): that much silence opens a source_silent issue (the watch lapsed?)
+secrets.push_token = { file = "/etc/hookspool/secrets/gmail_push_token" }
+
+# Google Calendar push channels expire (at most a week): keep the renewal sweep running.
+[sources.gcal]
+span = "calendar"
+action = "script:gcal_delta"
+expect_every_s = 0                     # 0 until the sender points here (deploy/README.md, section 2); then 172800
+                                       # (2 days): that much silence opens a source_silent issue
+secrets.channel_token = { file = "/etc/hookspool/secrets/gcal_channel_token" }
+
+# Zoom event subscriptions. The URL-validation handshake is answered only after the signature checks out.
+[sources.zoom]
+span = "immediate"
+action = "hermes:zoom"
+secrets.webhook_secret = { file = "/etc/hookspool/secrets/zoom" }
+
+# Trello: base64 HMAC-SHA1 over the body plus the callback URL (byte for byte what the webhook was
+# registered with). Trello's unsigned HEAD handshake is answered with an empty 200.
+[sources.trello]
+module = "hookspool.sources.template"
+scheme = "hmac-sha1-base64-url"
+header = "X-Trello-Webhook"
+callback_url = "https://hooks.example.com/hooks/trello"
+head_handshake = true
+key = "model.id"
+dedup = "action.id"
+event_type = "action.type"
+attrs = { board = "model.id", event = "action.type" }
+span = "mail"
+action = "hermes:trello"
+secrets.secret = { file = "/etc/hookspool/secrets/trello" }
+
+# ---------------------------------------------------------------------------------------------
+# Routes. A source's own `action` covers everything that no route claims.
+# ---------------------------------------------------------------------------------------------
+
+[[routes]]
+name = "github-ci"
+source = "github"
+match = { route_hint = "ci" }
+destination = "hermes:github-ci"
+
+[[routes]]
+name = "github-prs"
+source = "github"
+match = { route_hint = "prs" }
+destination = "hermes:github-prs"
+quiet_s = 60                           # route-level override of one field; the rest inherit
+
+# ---------------------------------------------------------------------------------------------
+# Destinations. A `hermes:<route>` needs no table unless you tune it; Hermes route names, secrets and
+# profiles come from subscriptions_path.
+# ---------------------------------------------------------------------------------------------
+
+[destinations."hermes:github-ci"]
+max_inflight = 2
+
+# The delta scripts (deploy/scripts/README.md). Keep max_inflight = 1: two passes over one state file
+# would both report the same changes. Every state_dir below must also be in the dispatch unit's
+# ReadWritePaths (deploy/hookspool-dispatch.service).
+[destinations."script:gcal_delta"]
+argv = ["/usr/bin/python3", "/opt/hookspool/scripts/gcal_delta.py", "--batch"]
+cwd = "/opt/hookspool/scripts"
+env_file = "/etc/hookspool/gcal_delta.env"
+state_dir = "/var/lib/hookspool/scripts/gcal"
+timeout_s = 300
+max_inflight = 1
+
+[destinations."script:gmail_delta"]
+argv = ["/usr/bin/python3", "/opt/hookspool/scripts/gmail_delta.py", "--batch"]
+cwd = "/opt/hookspool/scripts"
+env_file = "/etc/hookspool/gmail_delta.env"
+state_dir = "/var/lib/hookspool/scripts/gmail"
+timeout_s = 300
+max_inflight = 1

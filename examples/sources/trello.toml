@@ -1,0 +1,19 @@
+# Trello board webhook, as config only (no Python).
+# Sender docs: https://developer.atlassian.com/cloud/trello/guides/rest-api/webhooks/
+#
+# X-Trello-Webhook is base64(HMAC-SHA1(app secret, body + callbackURL)), where callbackURL is
+# byte-for-byte the URL the webhook was registered with. Trello also sends an unsigned HEAD when a
+# webhook is created and wants an empty 200 (head_handshake). Replace callback_url with your own.
+[sources.trello]
+module = "hookspool.sources.template"
+scheme = "hmac-sha1-base64-url"
+header = "X-Trello-Webhook"
+callback_url = "https://hooks.example.test/hooks/trello"
+head_handshake = true
+key = "model.id"
+dedup = "action.id"
+event_type = "action.type"
+attrs = { board = "model.id", event = "action.type" }
+span = "mail"
+action = "hermes:trello"
+secrets.secret = { file = "/etc/hookspool/secrets/trello" }

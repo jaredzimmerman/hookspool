@@ -1,0 +1,9 @@
+# capture: no token at all
+# now: 1800000000
+# expect: unverified
+POST /hooks/gmail HTTP/1.1
+Content-Type: application/json
+User-Agent: APIs-Google; (+https://developers.google.com/webmasters/APIs-Google.html)
+Content-Length: 233
+
+{"message":{"data":"eyJlbWFpbEFkZHJlc3MiOiAib3duZXJAZXhhbXBsZS50ZXN0IiwgImhpc3RvcnlJZCI6ICI0MjQyIn0=","messageId":"m-1","publishTime":"2026-10-23T10:00:00Z"},"subscription":"projects/test-project/subscriptions/PAYLOAD-SENTINEL-7f3a"}

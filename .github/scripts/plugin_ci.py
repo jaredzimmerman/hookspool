@@ -1,0 +1,535 @@
+#!/usr/bin/env python3
+"""Checks that .github/workflows/plugins.yml runs on a pull request (stdlib only).
+
+Subcommands (each prints a result table and exits 1 when any row failed):
+
+  discover   which source plugins / template configs the change touches
+  kit        run the shared conformance kit (tests/sourcekit.py) on each of them
+  guard      the core-has-no-per-source-code guard
+  scan       secret / hostname / IP scan of the changed files
+  all        discover + kit + guard + scan, and the job summary table
+
+Everything runs locally the same way as in CI::
+
+    python .github/scripts/plugin_ci.py all --base origin/main
+    python .github/scripts/plugin_ci.py kit template:github code:zoom
+    python .github/scripts/plugin_ci.py scan --all
+    python .github/scripts/plugin_ci.py scan --all --include-ladder   # the pre-publish gate: also the tracked .ladder/
+
+The table is also appended to ``$GITHUB_STEP_SUMMARY`` when that is set.
+
+What a "plugin" is
+  ``template:<name>``  ``examples/sources/<name>.toml``, run through ``tests/test_sources_template.py``
+                       (kit cases, captures, the capture-coverage check), selected by test id.
+  ``code:<name>``      ``hookspool/sources/<name>.py``, run through ``tests/test_sources_<name>.py``, which
+                       must parametrize over ``sourcekit.CASES`` (no kit, no merge).
+"""
+from __future__ import annotations
+
+import argparse
+import ast
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SOURCES_DIR = "hookspool/sources"
+EXAMPLES_DIR = "examples/sources"
+TEMPLATE_TESTS = "tests/test_sources_template.py"
+# Shared machinery: a change to any of these can break every source, so the kit runs on all of them.
+SHARED = {"tests/sourcekit.py", "tests/conftest.py", "hookspool/plugin.py", "hookspool/verify.py",
+          "hookspool/intake.py", "hookspool/sources/template.py", TEMPLATE_TESTS}
+NOT_A_SOURCE = {"__init__", "template"}
+# Never scanned. ``.ladder/`` (the build ledger and task notes) is skipped for pull requests; it is tracked in
+# this repository, so ``scan --all`` skips it too unless ``--include-ladder`` is given. Run
+# ``scan --all --include-ladder`` as the pre-publish gate, not plain ``scan --all``.
+SKIP_TREES = (".git/", ".ladder/", "vps-src/", "deploy/local/")
+LADDER = ".ladder/"
+# Captures are requests signed with test keys; a Plaid capture carries a JWT by design.
+JWT_OK_UNDER = ("tests/captures/",)
+CORE_ALLOWLIST = os.path.join(".github", "core-allowlist.txt")
+
+
+# ---- results ---------------------------------------------------------------------------------------------
+@dataclass
+class Row:
+    check: str
+    subject: str
+    ok: bool
+    detail: str = ""
+
+    def md(self) -> str:
+        detail = self.detail.replace("|", "\\|").replace("\n", " ")
+        return f"| {self.check} | `{self.subject}` | {'pass' if self.ok else '**FAIL**'} | {detail} |"
+
+
+@dataclass
+class Report:
+    rows: list[Row] = field(default_factory=list)
+
+    def add(self, check: str, subject: str, ok: bool, detail: str = "") -> Row:
+        row = Row(check, subject, ok, detail)
+        self.rows.append(row)
+        return row
+
+    @property
+    def ok(self) -> bool:
+        return all(r.ok for r in self.rows)
+
+    def table(self) -> str:
+        head = "| Check | Subject | Result | Detail |\n|---|---|---|---|\n"
+        return head + "\n".join(r.md() for r in self.rows) + "\n"
+
+    def emit(self, title: str) -> None:
+        text = f"### {title}\n\n{self.table()}"
+        print(text)
+        path = os.environ.get("GITHUB_STEP_SUMMARY")
+        if path:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(text + "\n")
+
+
+def _git(*args: str) -> str:
+    out = subprocess.run(["git", "-C", ROOT, *args], capture_output=True, text=True)
+    if out.returncode != 0:
+        raise SystemExit(f"git {' '.join(args)}: {out.stderr.strip()}")
+    return out.stdout
+
+
+# ---- discovery -------------------------------------------------------------------------------------------
+def all_templates() -> list[str]:
+    d = os.path.join(ROOT, EXAMPLES_DIR)
+    return sorted(f[:-5] for f in os.listdir(d) if f.endswith(".toml")) if os.path.isdir(d) else []
+
+
+def all_code_sources() -> list[str]:
+    d = os.path.join(ROOT, SOURCES_DIR)
+    return sorted(f[:-3] for f in os.listdir(d)
+                  if f.endswith(".py") and f[:-3] not in NOT_A_SOURCE) if os.path.isdir(d) else []
+
+
+def changed_files(base: str | None) -> list[str]:
+    """Files added, copied, modified or renamed between ``base`` and HEAD (three dots: since the merge
+    base), plus anything uncommitted when running locally. Deleted files are not checked."""
+    if not base:
+        return []
+    names = set(_git("diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD").split())
+    names |= set(_git("diff", "--name-only", "--diff-filter=ACMR", "HEAD").split())
+    names |= set(_git("ls-files", "--others", "--exclude-standard").split())
+    return sorted(n for n in names if not n.startswith(SKIP_TREES))
+
+
+def discover(files: list[str]) -> list[str]:
+    """``kind:name`` for every plugin the changed ``files`` touch."""
+    templates, codes = set(all_templates()), set(all_code_sources())
+    found: set[str] = set()
+    if any(f in SHARED for f in files):
+        return sorted([f"template:{t}" for t in templates] + [f"code:{c}" for c in codes])
+
+    def name_hit(name: str) -> None:
+        if name in templates:
+            found.add(f"template:{name}")
+        if name in codes:
+            found.add(f"code:{name}")
+
+    for f in files:
+        m = re.fullmatch(rf"{SOURCES_DIR}/([A-Za-z0-9_]+)\.py", f)
+        if m and m.group(1) not in NOT_A_SOURCE:
+            found.add(f"code:{m.group(1)}")
+        m = re.fullmatch(rf"{EXAMPLES_DIR}/([A-Za-z0-9_-]+)\.toml", f)
+        if m:
+            found.add(f"template:{m.group(1)}")
+        m = re.fullmatch(r"tests/captures/([A-Za-z0-9_-]+)/.+", f)
+        if m:
+            name_hit(m.group(1))
+        m = re.fullmatch(r"tests/test_sources_([A-Za-z0-9_]+)\.py", f)
+        if m and m.group(1) != "template":
+            name_hit(m.group(1))
+    return sorted(found)
+
+
+# ---- the conformance kit ---------------------------------------------------------------------------------
+def _pytest(args: list[str], quiet: str = "-q") -> tuple[int, str, float]:
+    t0 = time.monotonic()
+    p = subprocess.run([sys.executable, "-m", "pytest", quiet, "-p", "no:cacheprovider", "--no-header", *args],
+                       cwd=ROOT, capture_output=True, text=True)
+    return p.returncode, p.stdout + p.stderr, time.monotonic() - t0
+
+
+def _summary_line(out: str) -> str:
+    lines = [ln for ln in out.strip().splitlines() if re.search(r"\b(passed|failed|error|no tests ran)\b", ln)]
+    return lines[-1].strip(" =") if lines else "no pytest summary"
+
+
+def _failed_cases(out: str) -> list[str]:
+    ids = re.findall(r"^FAILED \S+?::\S+?\[(.+?)\]", out, flags=re.M)
+    return ids
+
+
+def uses_kit(path: str) -> bool:
+    """A source's test module must really use the shared kit's ``CASES``: an ``sourcekit.CASES`` attribute
+    or ``from sourcekit import CASES`` in code (a comment or string that mentions them does not count)."""
+    try:
+        with open(os.path.join(ROOT, path), encoding="utf-8") as f:
+            tree = ast.parse(f.read(), path)
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return False
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Attribute) and node.attr == "CASES"
+                and isinstance(node.value, ast.Name) and node.value.id == "sourcekit"):
+            return True
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[-1] == "sourcekit" \
+                and any(a.name == "CASES" for a in node.names):
+            return True
+    return False
+
+
+def template_nodeids(name: str) -> list[str]:
+    code, out, _ = _pytest(["--collect-only", TEMPLATE_TESTS], quiet="-q")
+    if code != 0:
+        return []
+    ids = [ln.strip() for ln in out.splitlines() if "::" in ln and "[" in ln]
+    # ids look like ``test_x[<case>-<name>.toml]`` or ``test_y[<name>/event.http]``; a case id has no hyphen,
+    # so a template ``page`` does not select the tests of ``status-page``.
+    pat = re.compile(rf"\[(?:\w+-)?{re.escape(name)}\.toml\]$|\[{re.escape(name)}/")
+    return [i for i in ids if pat.search(i)]
+
+
+def run_kit(spec: str, report: Report, test_file: str | None = None) -> None:
+    kind, _, name = spec.partition(":")
+    if kind == "template":
+        toml = f"{EXAMPLES_DIR}/{name}.toml"
+        if not os.path.exists(os.path.join(ROOT, toml)):
+            report.add("kit", spec, False, f"{toml} does not exist")
+            return
+        if not os.path.exists(os.path.join(ROOT, "tests", "captures", name, "event.http")):
+            report.add("kit", spec, False, f"tests/captures/{name}/event.http is required (a request signed "
+                                           f"with the test secret)")
+            return
+        ids = template_nodeids(name)
+        if not ids:
+            report.add("kit", spec, False, f"no tests collected for {name}.toml in {TEMPLATE_TESTS}")
+            return
+        code, out, secs = _pytest(ids)
+    elif kind == "code":
+        test_file = test_file or f"tests/test_sources_{name}.py"
+        if not os.path.exists(os.path.join(ROOT, test_file)):
+            report.add("kit", spec, False, f"{test_file} is missing: a source plugin needs a kit test "
+                                           f"(see tests/sourcekit.py)")
+            return
+        if not uses_kit(test_file):
+            report.add("kit", spec, False, f"{test_file} does not parametrize over sourcekit.CASES")
+            return
+        code, out, secs = _pytest([test_file])
+    else:
+        report.add("kit", spec, False, "spec must be template:<name> or code:<name>")
+        return
+    detail = f"{_summary_line(out)} ({secs:.1f}s)"
+    if code != 0:
+        bad = _failed_cases(out)
+        detail += "; failing cases: " + (", ".join(sorted(set(bad))[:12]) or "see log")
+        print(out)
+    report.add("kit", spec, code == 0, detail)
+
+
+# ---- core has no per-source code -------------------------------------------------------------------------
+def load_allowlist() -> dict[tuple[str, str], str]:
+    """``path | literal | reason`` lines of ``.github/core-allowlist.txt``."""
+    out: dict[tuple[str, str], str] = {}
+    p = os.path.join(ROOT, CORE_ALLOWLIST)
+    if not os.path.exists(p):
+        return out
+    with open(p, encoding="utf-8") as f:
+        for ln in f:
+            ln = ln.strip()
+            if not ln or ln.startswith("#"):
+                continue
+            parts = [x.strip() for x in ln.split("|", 2)]
+            if len(parts) == 3 and all(parts):
+                out[(parts[0], parts[1])] = parts[2]
+    return out
+
+
+def source_names() -> set[str]:
+    return set(all_templates()) | set(all_code_sources())
+
+
+def core_files() -> list[str]:
+    """The files that must stay source-agnostic: everything under ``hookspool/`` except the per-source plugin
+    modules themselves. The shared machinery in ``hookspool/sources/`` (``__init__.py`` and the template
+    engine ``template.py``) is core and is guarded."""
+    out = []
+    for base, _dirs, files in os.walk(os.path.join(ROOT, "hookspool")):
+        rel = os.path.relpath(base, ROOT).replace(os.sep, "/")
+        if "__pycache__" in rel:
+            continue
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            if rel == SOURCES_DIR and f[:-3] not in NOT_A_SOURCE:
+                continue                  # a source plugin: it names its own vendor
+            out.append(f"{rel}/{f}")
+    return sorted(out)
+
+
+def _docstring_nodes(tree: ast.AST) -> set[int]:
+    ids = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = getattr(node, "body", [])
+            if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant):
+                ids.add(id(body[0].value))
+    return ids
+
+
+def core_violations(names: set[str], files: list[str] | None = None,
+                    allow: dict[tuple[str, str], str] | None = None) -> list[tuple[str, int, str, str]]:
+    """String literals in core code (docstrings and comments excluded) that name a source: the shape of
+    ``if source == "github"``, a header table keyed by a vendor, a per-vendor default. Returns
+    ``(path, line, literal, source)``."""
+    allow = load_allowlist() if allow is None else allow
+    hits = []
+    pats = {n: re.compile(rf"(?<![a-z0-9]){re.escape(n.lower())}(?![a-z0-9])") for n in names}
+    for rel in files if files is not None else core_files():
+        try:
+            with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
+                tree = ast.parse(f.read(), rel)
+        except (OSError, SyntaxError) as e:
+            hits.append((rel, 0, f"unparseable: {e}", ""))
+            continue
+        skip = _docstring_nodes(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
+                low = node.value.lower()
+                for n, pat in pats.items():
+                    if pat.search(low) and (rel, node.value) not in allow:
+                        hits.append((rel, node.lineno, node.value, n))
+    return sorted(set(hits))
+
+
+def run_guard(report: Report) -> None:
+    names = source_names()
+    hits = core_violations(names)
+    for rel, line, lit, n in hits:
+        report.add("core-guard", f"{rel}:{line}", False,
+                   f"string {lit!r} names source '{n}'; move it into the source plugin or config")
+    if not hits:
+        report.add("core-guard", "hookspool/ (core)", True,
+                   f"no per-source literals for {len(names)} sources ({len(load_allowlist())} allowlisted)")
+
+
+# ---- secret / hostname scan ------------------------------------------------------------------------------
+SECRET_PATTERNS = {
+    "private key block": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    "GitHub token": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b"),
+    "Slack token": re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
+    "AWS access key id": re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
+    "Google API key": re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
+    "OpenAI/Anthropic-style key": re.compile(r"\bsk-[A-Za-z0-9_-]{24,}"),
+    "Telegram bot token": re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b"),
+    "JWT": re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
+    "credentials in a URL": re.compile(r"\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s:@]{3,}@[^/\s]+"),
+    "assigned secret": re.compile(
+        r"""(?i)\b(?:secret|token|password|passwd|api[_-]?key)\b["']?\s*[:=]\s*["']([A-Za-z0-9+/_=-]{24,})["']"""),
+}
+# Hosts that may appear: reserved names (RFC 2606/6761), single-label names, the loopback and
+# documentation addresses, and the public API/docs hosts the shipped sources link to.
+HOST_OK_SUFFIX = (".example", ".test", ".invalid", ".localhost", ".example.com", ".example.org", ".example.net",
+                  "googleapis.com", "google.com", "github.com", "githubusercontent.com", "zoom.us", "plaid.com",
+                  "atlassian.com", "trello.com", "standardwebhooks.com", "python.org", "pypi.org",
+                  "readthedocs.io", "shields.io", "mermaid.js.org")
+HOST_OK_EXACT = {"localhost", "example.com", "example.org", "example.net", "127.0.0.1", "0.0.0.0", "[::1]"}
+URL_RE = re.compile(r"""\b(?:https?|wss?)://(?:[^/\s'"<>@]*@)?(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)""")
+# A bare host name (``server_name hooks.example.com;``, a path under /etc/nginx/sites-available/): labels, then a
+# well-known public TLD. Short TLDs that are also common attribute names (``.io``, ``.app``, ``.dev``, ``.me``,
+# ``.co``) are checked in non-Python files only, where a dotted name is not code.
+FQDN_TLDS = "com|net|org|biz|edu|gov|us|uk|de|fr|nl|eu|ca|au|ai|cloud|xyz|online|site|tech"
+FQDN_TLDS_TEXT_ONLY = "io|app|dev|me|co"
+FQDN_RE = re.compile(rf"(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+(?:{FQDN_TLDS}))(?![A-Za-z0-9_-])",
+                     )
+FQDN_TEXT_RE = re.compile(
+    rf"(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+(?:{FQDN_TLDS}|{FQDN_TLDS_TEXT_ONLY}))"
+    rf"(?![A-Za-z0-9_-])")
+IPV4_RE = re.compile(r"(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![\d.])")
+DOC_NETS = ((192, 0, 2), (198, 51, 100), (203, 0, 113))
+ALLOW_MARK = "hookspool-scan: allow"
+MAX_SCAN_BYTES = 8 * 1024 * 1024
+
+
+def local_deny_terms(env=None, root: str = ROOT) -> list[str]:
+    """Owner-specific terms, kept out of the repo: ``HOOKSPOOL_DENYLIST`` (comma separated) and the
+    gitignored ``deploy/local/denylist.txt`` (one per line; ``HOOKSPOOL_DENYLIST_FILE`` overrides the path)."""
+    env = os.environ if env is None else env
+    terms = [t.strip() for t in env.get("HOOKSPOOL_DENYLIST", "").split(",")]
+    path = env.get("HOOKSPOOL_DENYLIST_FILE") or os.path.join(root, "deploy", "local", "denylist.txt")
+    try:
+        with open(path, encoding="utf-8") as f:
+            terms += [ln.strip() for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
+    except OSError:
+        pass
+    return sorted({t for t in terms if t})
+
+
+def host_allowed(host: str) -> bool:
+    h = host.lower().rstrip(".")
+    ip = IPV4_RE.fullmatch(h)
+    if ip:
+        return ip_allowed(*(int(x) for x in ip.groups()))
+    if h in HOST_OK_EXACT or "." not in h.strip("[]"):
+        return True
+    return any(h == s.lstrip(".") or h.endswith(s if s.startswith(".") else "." + s) for s in HOST_OK_SUFFIX)
+
+
+def ip_allowed(a: int, b: int, c: int, d: int) -> bool:
+    if max(a, b, c, d) > 255:
+        return True                     # not an address (a version string, say)
+    if a == 127 or (a, b, c, d) == (0, 0, 0, 0) or (a, b, c) in DOC_NETS:
+        return True
+    if a == 10 or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168) or (a == 169 and b == 254):
+        return True                     # RFC 1918 / link-local: the SSRF tests need them, and they identify no one
+    return a == 255 or a == 0           # masks, wildcards
+
+
+def scan_text(rel: str, text: str, deny: list[str] | None = None) -> list[tuple[int, str, str]]:
+    """``(line, kind, excerpt)`` for each finding in ``text``. A line carrying ``hookspool-scan: allow``
+    is skipped (use it for a documented placeholder, with the reason beside it)."""
+    deny_rx = re.compile("|".join(re.escape(t) for t in deny), re.I) if deny else None
+    out = []
+    for i, ln in enumerate(text.splitlines(), 1):
+        if ALLOW_MARK in ln:
+            continue
+        for kind, rx in SECRET_PATTERNS.items():
+            if kind == "JWT" and rel.startswith(JWT_OK_UNDER):
+                continue
+            m = rx.search(ln)
+            if m and not (kind == "assigned secret" and re.search(r"(?i)test|example|placeholder|dummy|sentinel|fake",
+                                                                  m.group(1))):
+                out.append((i, kind, _redact(m.group(0))))
+        seen_hosts = set()
+        for m in URL_RE.finditer(ln):
+            seen_hosts.add(m.group(1).lower())
+            if not host_allowed(m.group(1)):
+                out.append((i, "hostname", m.group(1)))
+        for m in (FQDN_RE if rel.endswith(".py") else FQDN_TEXT_RE).finditer(ln):
+            h = m.group(1)
+            if h.lower() not in seen_hosts and not host_allowed(h):
+                out.append((i, "hostname", h))
+        for m in IPV4_RE.finditer(ln):
+            nums = tuple(int(x) for x in m.groups())
+            if not ip_allowed(*nums):
+                out.append((i, "IP address", m.group(0)))
+        if deny_rx:
+            m = deny_rx.search(ln)
+            if m:
+                out.append((i, "denylisted term", "<local denylist>"))   # never echo the term itself
+    return out
+
+
+def _redact(s: str) -> str:
+    return s if len(s) <= 12 else s[:6] + "..." + f"({len(s)} chars)"
+
+
+def tracked_files(include_ladder: bool = False) -> list[str]:
+    names = _git("ls-files", "-co", "--exclude-standard").split("\n")
+    skip = tuple(t for t in SKIP_TREES if include_ladder is False or t != LADDER)
+    return sorted(n for n in names if n and not n.startswith(skip))
+
+
+def read_text(path: str) -> str | None:
+    """The file as text, or None for a binary (a NUL byte), a file that is not UTF-8, or one too large.
+    Whatever its extension: a key, certificate or env file is exactly what must not slip through."""
+    try:
+        if os.path.getsize(path) > MAX_SCAN_BYTES:
+            return None
+        with open(path, "rb") as f:
+            raw = f.read()
+        if b"\0" in raw:
+            return None
+        return raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def run_scan(report: Report, files: list[str]) -> None:
+    deny = local_deny_terms()
+    scanned = bad = 0
+    for rel in files:
+        path = os.path.join(ROOT, rel)
+        text = read_text(path) if os.path.isfile(path) else None
+        if text is None:
+            continue
+        scanned += 1
+        for line, kind, excerpt in scan_text(rel, text, deny):
+            bad += 1
+            report.add("scan", f"{rel}:{line}", False, f"{kind}: {excerpt}")
+    report.add("scan", f"{scanned} files", bad == 0,
+               ("no secrets, hostnames or IPs" if not bad else f"{bad} finding(s)")
+               + (f"; {len(deny)} local denylist term(s) applied" if deny else "; no local denylist"))
+
+
+# ---- commands --------------------------------------------------------------------------------------------
+def cmd_discover(args, report: Report) -> list[str]:
+    files = changed_files(args.base)
+    specs = discover(files)
+    report.add("discover", f"{len(files)} changed files", True,
+               ", ".join(specs) if specs else "no source plugin or template touched")
+    return specs
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="plugin_ci", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for name in ("discover", "all"):
+        p = sub.add_parser(name)
+        p.add_argument("--base", default=os.environ.get("BASE_SHA") or "origin/main",
+                       help="merge-base ref to diff against (default: $BASE_SHA or origin/main)")
+        p.add_argument("--json", action="store_true", help="discover: print the specs as JSON")
+        if name == "all":
+            p.add_argument("--all-files", action="store_true", help="scan every tracked file, not only changes")
+            p.add_argument("--include-ladder", action="store_true", help="with --all-files: also the tracked .ladder/")
+    k = sub.add_parser("kit")
+    k.add_argument("specs", nargs="+", help="template:<name> or code:<name>")
+    k.add_argument("--test-file", help="code: the kit test module (default tests/test_sources_<name>.py)")
+    sub.add_parser("guard")
+    s = sub.add_parser("scan")
+    s.add_argument("--all", action="store_true", help="every tracked file (except .ladder/ unless --include-ladder)")
+    s.add_argument("--include-ladder", action="store_true", help="with --all: also the tracked .ladder/ (pre-publish)")
+    s.add_argument("--base", default=os.environ.get("BASE_SHA") or "origin/main")
+    s.add_argument("paths", nargs="*", help="scan these files only")
+    args = ap.parse_args(argv)
+
+    report = Report()
+    if args.cmd == "discover":
+        specs = cmd_discover(args, report)
+        if args.json:
+            print(json.dumps(specs))
+        else:
+            report.emit("Plugin discovery")
+        return 0
+    if args.cmd == "kit":
+        for spec in args.specs:
+            run_kit(spec, report, args.test_file)
+        report.emit("Conformance kit")
+    elif args.cmd == "guard":
+        run_guard(report)
+        report.emit("Core guard")
+    elif args.cmd == "scan":
+        files = args.paths or (tracked_files(args.include_ladder) if args.all else changed_files(args.base))
+        run_scan(report, files)
+        report.emit("Secret and hostname scan")
+    else:   # all
+        specs = cmd_discover(args, report)
+        for spec in specs:
+            run_kit(spec, report)
+        run_guard(report)
+        run_scan(report, tracked_files(args.include_ladder) if args.all_files else changed_files(args.base))
+        report.emit("Plugin checks")
+    return 0 if report.ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

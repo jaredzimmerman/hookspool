@@ -1,0 +1,9 @@
+# capture: task.created signed with the test secret
+# now: 1800000000
+# expect: queued
+POST /hooks/kaneo HTTP/1.1
+Content-Type: application/json
+X-Kaneo-Signature: 78d4511cb7c769a2e446478e46fa5ac68c6a3e46092b195292c27996bc15cf97
+Content-Length: 355
+
+{"event":"task.created","timestamp":"2026-01-01T00:00:00.000Z","integration":{"type":"generic-webhook"},"project":{"id":"proj-1","name":"Demo","workspaceId":"ws-1"},"task":{"id":"t-1","number":1,"title":"PAYLOAD-SENTINEL-7f3a","status":"todo","priority":"low","url":"https://kaneo.example.test/t/1"},"actor":{"id":"u-1","name":"Ann"},"data":{"title":"x"}}
