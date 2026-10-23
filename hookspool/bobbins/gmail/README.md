@@ -14,9 +14,9 @@ Gmail users.watch -> Pub/Sub topic -> push subscription -> POST /hooks/<instance
 
 | output | when | carries |
 |---|---|---|
-| `scheduling` | new inbox mail in the **owner's** mailbox that asks for the owner's availability (matched on the subject and the first 4000 characters of the text) | `account`, `message_id`, `thread_id`, `rfc_message_id`, `from`, `from_address`, `from_domain`, `subject`, `received`, `excerpt` (first 1500 characters), `free_windows_text` (the owner's free working-hours windows over the next 7 weekdays, from free/busy) |
+| `scheduling` | new inbox mail in the **owner's** mailbox that asks for the owner's availability (matched on the subject and the first 4000 characters of the text) | `account`, `message_id`, `thread_id`, `rfc_message_id`, `from`, `from_address`, `from_domain`, `subject`, `received`, `excerpt` (first 1500 characters), `free_windows_text` (the owner's free working-hours windows over the next 7 days, weekdays only, from free/busy) |
 | `agent-mail` | new inbox mail in the **assistant's** mailbox (the `agent` setting) | the same fields, without free windows |
-| `agent-schedule` | a message a deployment's `hooks.classify` hands off (see below) | whatever the hook returns, plus the standard fields and `free_windows_text` (next 14 weekdays) |
+| `agent-schedule` | a message a deployment's `hooks.classify` hands off (see below) | whatever the hook returns, plus the standard fields and `free_windows_text` (next 14 days, weekdays only) |
 | `mailbox-changed` | a pass read new mail in a mailbox; one per mailbox per batch | `account`, `new_messages`, `history_id` |
 
 Every item has a `key` (`<account>:<thread>`, or the mailbox for `mailbox-changed`) that becomes the
@@ -101,7 +101,7 @@ dropped, HTTP 404) only records Gmail's current history id; nothing is reported 
 * A Gmail watch lasts seven days: renew it (a `users.watch` call) daily; see SETUP.md for the sweep.
 * HTTP errors map as everywhere in hookspool: 408, 425, 429 and 5xx retry the batch (exit 75); another 4xx,
   including a revoked credential, is permanent (exit 65): the batch is dead-lettered and an issue opens.
-* Logs carry counts and ids only, never subjects, addresses or bodies.
+* Logs carry counts and the label `owner` or `agent` only, never subjects, addresses or bodies.
 
 ## Replaces the delta script
 

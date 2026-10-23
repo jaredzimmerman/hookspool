@@ -336,6 +336,18 @@ def test_every_scheduling_request_in_one_pass_is_reported(make, google):
     assert gstate(rig)["handled"] == ["m1", "m2"], "both are handled because both were reported"
 
 
+def test_logs_use_a_label_never_the_mailbox_address(make, google):
+    rig = make()
+    gseed(rig)
+    google.history = [hist("m1", history_id="130")]
+    google.messages["m1"] = gmsg("m1")
+    rc, _emits, err = rig.run(gpush())
+    assert rc == 0 and "push owner " in err and OWNER not in err
+    rig2 = make()
+    rc, _emits, err = rig2.run(gpush(OWNER))  # no state yet: bootstrap path
+    assert rc == 0 and OWNER not in err
+
+
 def test_the_agents_mailbox_reports_a_burst_of_any_size(make, google):
     rig = make()
     gseed(rig, AGENT)

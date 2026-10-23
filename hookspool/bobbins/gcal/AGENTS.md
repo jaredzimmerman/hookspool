@@ -50,11 +50,14 @@ Secrets used below: `channel_token` (made in step 2) and `cred`. There are no re
    `id` and `token` equal to the content of the token file (read it inside the command, do not echo it). Check
    the response has a `resourceId` and an `expiration` at most a week away. Then check
    `hookspool list --source gcal`: the `sync` ping is acknowledged and not queued.
-8. **Verify.** Ask the person to change an event, or run
-   `hookspool source test gcal --request <HOOKSPOOL_DIR>/bobbins/gcal/captures/event.http`. Check
-   `hookspool list --source gcal` shows a batch that ends `delivered`. `retry` means a transient error
-   (`hookspool show <BATCH_ID> --attempts`); `dead` with `exit 65` means Google refused the credential or the
-   request: tell the person.
+8. **Verify.** Goal: a real push is received and processed. Ask the person to change an event on
+   `<CALENDAR_ID>`. Check `hookspool list --source gcal` shows a batch that ends `delivered`. `retry` means
+   a transient error (`hookspool show <BATCH_ID> --attempts`); `dead` with `exit 65` means Google refused the
+   credential or the request: tell the person. Optionally, `hookspool source test gcal --request <FILE>`
+   checks the request path offline: it queues nothing, and it verifies the request against the configured
+   token, so `<FILE>` must be a capture that carries the real channel token (the shipped
+   `captures/event.http` carries a fixture token and will report `unverified`). Only a real push proves
+   delivery.
 9. **Renew the channel daily** (`outward`: installs a recurring job). Goal: the channel never lapses. Schedule
    a job that creates a new channel as in step 7 and stops the old one (`channels.stop`). Check that
    `hookspool status` shows `last_event_age_s` moving.

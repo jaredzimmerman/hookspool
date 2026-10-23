@@ -58,10 +58,12 @@ Secrets used below: `push_token` (made in step 2), `cred_owner`, `cred_agent` (o
    each mailbox with `topicName` `projects/<PROJECT>/topics/<TOPIC>` and `labelIds` `["INBOX"]`. Check the
    response has a `historyId` and an `expiration` seven days away.
 9. **Verify.** Goal: a push arrives and is processed. Ask the person to send the owner a mail asking for
-   availability, or use `hookspool source test gmail --request <HOOKSPOOL_DIR>/bobbins/gmail/captures/event.http`
-   for the request path alone. Check `hookspool list --source gmail` shows a batch that ends `delivered`.
-   If it ends `retry`, read the error with `hookspool show <BATCH_ID>`; `dead` with `exit 65` means a
-   credential or request was refused: tell the person.
+   availability. Check `hookspool list --source gmail` shows a batch that ends `delivered`. If it ends
+   `retry`, read the error with `hookspool show <BATCH_ID>`; `dead` with `exit 65` means a credential or
+   request was refused: tell the person. Optionally, `hookspool source test gmail --request <FILE>` checks
+   the request path offline: it queues nothing, and it verifies the request against the configured push
+   token, so `<FILE>` must be a capture that carries the real token (the shipped `captures/event.http`
+   carries a fixture token and will report `unverified`). Only a real push proves delivery.
 10. **Renew the watch daily** (`outward`: installs a recurring job). Goal: the watch never lapses. Schedule
     a job that repeats step 8 once a day. Check that `hookspool status` shows `last_event_age_s` moving.
 

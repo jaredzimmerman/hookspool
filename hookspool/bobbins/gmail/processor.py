@@ -206,6 +206,7 @@ def _scheduling_item(msg: dict, cfg: Config, account: str, text: str) -> dict:
 # ---- one mailbox ------------------------------------------------------------------------------------------------
 def _pass(ctx, cfg: Config, account: str, now: datetime) -> list[dict]:
     state_name, secret = cfg.accounts[account]
+    label = "owner" if account == cfg.owner else "agent"  # logs never carry the address
     client = ctx.oauth(secret)
     state = ctx.load_state(state_name, {})
 
@@ -213,7 +214,7 @@ def _pass(ctx, cfg: Config, account: str, now: datetime) -> list[dict]:
         prof = G.gmail_profile(client, cfg.api)
         ctx.save_state(state_name, {"historyId": str(prof["historyId"]), "handled": state.get("handled") or [],
                                     "bootstrapped": now.isoformat()})
-        ctx.log(f"bootstrap {account} ({reason}) historyId={prof['historyId']}")
+        ctx.log(f"bootstrap {label} ({reason}) historyId={prof['historyId']}")
 
     if not state.get("historyId"):
         bootstrap("no history id")
@@ -272,10 +273,10 @@ def _pass(ctx, cfg: Config, account: str, now: datetime) -> list[dict]:
             for x in sched:
                 x.setdefault("free_windows_text", wt)
         out = sched + [x for x in hits if x["event_type"] != "agent-schedule"]
-        ctx.log(f"push {account} new={len(ids)} looked={looked} -> {len(out)} item(s)"
+        ctx.log(f"push {label} new={len(ids)} looked={looked} -> {len(out)} item(s)"
                 + (f" ({len(sched)} schedule)" if sched else ""))
     else:
-        ctx.log(f"push {account} new={len(ids)} looked={looked} -> silent")
+        ctx.log(f"push {label} new={len(ids)} looked={looked} -> silent")
     if looked:
         out.append({"event_type": "mailbox-changed", "source": "gmail", "account": account, "key": account,
                     "new_messages": looked, "history_id": str(newest)})

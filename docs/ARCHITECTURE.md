@@ -831,8 +831,8 @@ A deployment never edits a built-in bobbin. Behaviour changes through:
 
 1. **Settings** (14.3.2).
 2. **A hooks module**: a bobbin that supports hooks declares `[settings.hooks]` with `type = "path"` and
-   documents the functions it calls (e.g. gmail calls `hooks.classify(message, account) -> dict | None`
-   before its own rules; gcal calls `hooks.travel(event, ctx) -> dict | None` for travel blocks). The
+   documents the functions it calls (e.g. gmail calls `hooks.classify(message, account, ctx) -> dict | None`
+   before its own rules; gcal calls `hooks.travel(event, day_events, ctx) -> dict | None` for travel blocks). The
    runtime loads it by file path and passes it as `ctx.hooks`. Hooks are deployment code: the 14.3.7
    rules apply to bobbins, not to hooks.
 3. **A private bobbin** in a `spool.bobbin_path` directory, when the service is not in the repo at all.
