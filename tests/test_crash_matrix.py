@@ -31,7 +31,7 @@ from hookspool.dispatch import Dispatcher
 from hookspool.store import Store, content_hash
 
 T0 = 1_800_000_000.0
-POINTS = ("enqueue:after_batch", "enqueue:after_event", "enqueue:after_seal", "seal:mid", "claim:after_update",
+POINTS = ("enqueue:after_batch", "enqueue:after_event", "enqueue:after_seal", "enqueue:after_tee", "seal:mid", "claim:after_update",
           "deliver:after_emits", "mark:after_update", "recover:mid", "replay:mid", "quarantine:mid",
           "reclassify:mid", "split:mid", "prune:mid")
 
@@ -131,6 +131,8 @@ def enq(key, i, **kw):
 # 1. enqueue: joins, a post-join seal (max_events), a pre-join seal (max_bytes), a duplicate
 enq("a", 1); enq("a", 2); enq("b", 3, max_events=2); enq("b", 4, max_events=2)
 enq("c", 5, max_bytes=120); enq("c", 6, max_bytes=120); enq("a", 7); enq("a", 1)
+# 1b. one request copied to two tee routes: three event rows, all in one transaction
+enq("t", 8, tees=[("tee-one", "hermes:t1"), ("tee-two", "script:t2")])
 # 2. readiness seals, two per transaction
 T[0] += 500
 ack("sealed", st.seal_ready(T[0], chunk=2))
@@ -243,6 +245,9 @@ def test_kill9_at_every_occurrence_of_every_hook(tmp_path, point, k):
     if not pruning:
         assert acked <= stored, f"acked events lost: {sorted(acked - stored)}"
         assert stored <= acked, "an event whose enqueue never returned is stored"   # every kill is inside a txn
+    if not pruning:
+        copies = rows(db, "SELECT COUNT(*) FROM events WHERE dedup_id='e8'")[0][0]
+        assert copies == (3 if 8 in acked else 0), f"a tee request left {copies} of its 3 copies"
     emit = rows(db, "SELECT COUNT(*) FROM events WHERE dedup_id='emit-1'")[0][0]
     assert emit <= 1
     if any(a[0] == "delivered" and a[2] for a in out) and not pruning:

@@ -51,7 +51,7 @@ HEARTBEAT_STALE_S = 30.0
 
 # Test hook: called with a point name inside write transactions so tests can SIGKILL
 # the process at an exact line. Always None in production.
-# Points: enqueue:after_batch, enqueue:after_event, enqueue:after_seal, seal:mid,
+# Points: enqueue:after_batch, enqueue:after_event, enqueue:after_seal, enqueue:after_tee, seal:mid,
 #         claim:after_update, deliver:after_emits, mark:after_update, recover:mid,
 #         replay:mid, quarantine:mid, reclassify:mid, split:mid, prune:mid
 _test_hook: Callable[[str], None] | None = None
@@ -89,6 +89,7 @@ class EnqueueResult:
     batch_id: int | None     # None only for a duplicate whose original event was pruned
     duplicate: bool = False  # dedup hit; nothing changed (intake answers "duplicate")
     replayed: bool = False   # dedup hit on a dead batch, which was replayed ("replayed")
+    tees: tuple = ()         # one EnqueueResult per tee copy, in the order the tees were given
 
 
 @dataclass(frozen=True)
@@ -255,11 +256,12 @@ class Store:
         """For the intake and the CLI: refuse any version but this code's. Never creates
         the database file (a probe of a missing path must not leave an empty spool behind)."""
         if not os.path.exists(self.path):
-            raise SchemaError(f"no spool at {self.path}: run `hookspool migrate` (or start the dispatcher)")
+            raise SchemaError(f"no spool at {self.path}: run `hookspool migrate` (stop the dispatcher first;"
+                              " see deploy/README.md, Upgrading)")
         v = self.schema_version()
         if v < SCHEMA_VERSION:
             raise SchemaError(f"spool schema {v} is older than {SCHEMA_VERSION}: run `hookspool migrate`"
-                              " (or start the dispatcher)")
+                              " (stop the dispatcher first; see deploy/README.md, Upgrading)")
         if v > SCHEMA_VERSION:
             raise SchemaError(f"spool schema {v} is newer than this hookspool ({SCHEMA_VERSION});"
                               " downgrade is not supported")
@@ -398,23 +400,41 @@ class Store:
         kw = {k: e[k] for k in EMIT_KEYS if k in e and k not in ("source", "key", "action", "payload")}
         return self._prepare(e["source"], e["key"], action, e["payload"], **kw)
 
+    def _tee_copy(self, ev: dict, route: Any, action: Any) -> dict:
+        """A prepared event's copy for a tee route: the same request, its own route, destination
+        and window (inherited from that route as usual)."""
+        for name, v in (("tee route", route), ("tee destination", action)):
+            if not isinstance(v, str) or not v:
+                raise InvalidEvent(f"{name} must be a non-empty string")
+        if action == QUARANTINE or any(ch.isspace() for ch in action):
+            raise InvalidEvent("tee destination is not a valid destination name")
+        plugin_span = self.span_for(ev["source"]) if self.span_for else None
+        win = _config.window_for(self.config, ev["source"], route, plugin_span=plugin_span)
+        return {**ev, "route": route, "action": action, **{k: win[k] for k in _config.WINDOW_FIELDS}}
+
     # ---- enqueue (§5, §7) -------------------------------------------------------------------------
     def enqueue(self, source: str, key: str, action: str, payload: dict, *, route: str | None = None,
                 event_type: str = "", dedup_id: str | None = None, raw: bytes | None = None,
                 headers: dict | None = None, quiet_s: float | None = None, max_s: float | None = None,
                 max_events: int | None = None, max_bytes: int | None = None,
-                not_before: float | None = None) -> EnqueueResult:
+                not_before: float | None = None, tees: Iterable[tuple[str, str]] = ()) -> EnqueueResult:
         """Durably record one event; COMMIT has happened when this returns.
 
         Raises InvalidEvent for a malformed event, SpoolError when the write cannot be made
         durable. Window fields left None inherit route -> source -> span -> [coalesce].
+
+        ``tees`` are ``(route, destination)`` pairs: each gets its own copy of the event, in its
+        own batch with that route's window, in the same transaction (all copies or none). The
+        explicit window arguments apply to the primary copy only. Dedup runs once, on the
+        primary: a duplicate request makes no copies.
         """
         ev = self._prepare(source, key, action, payload, route=route, event_type=event_type,
                            dedup_id=dedup_id, raw=raw, headers=headers, quiet_s=quiet_s, max_s=max_s,
                            max_events=max_events, max_bytes=max_bytes, not_before=not_before)
-        return self._write(lambda c: self._enqueue_txn(c, self.now(), ev))
+        copies = [self._tee_copy(ev, r, d) for r, d in tees]
+        return self._write(lambda c: self._enqueue_txn(c, self.now(), ev, copies))
 
-    def _enqueue_txn(self, c: sqlite3.Connection, now: float, ev: dict) -> EnqueueResult:
+    def _enqueue_txn(self, c: sqlite3.Connection, now: float, ev: dict, tees: Iterable[dict] = ()) -> EnqueueResult:
         src, dd = ev["source"], ev["dedup_id"]
         c.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('last_enqueue_at', ?)", (repr(now),))
         c.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
@@ -438,6 +458,18 @@ class Store:
                         return EnqueueResult(eid, bid, duplicate=False, replayed=True)
                     return EnqueueResult(eid, bid, duplicate=True)
 
+        eid, bid = self._place(c, now, ev, dedup="repoint" if repoint else "insert" if dd is not None else None)
+        copies = []
+        for t in tees:
+            teid, tbid = self._place(c, now, t)
+            copies.append(EnqueueResult(teid, tbid))
+            _hook("enqueue:after_tee")
+        return EnqueueResult(eid, bid, tees=tuple(copies))
+
+    def _place(self, c: sqlite3.Connection, now: float, ev: dict, *, dedup: str | None = None) -> tuple[int, int]:
+        """Append one prepared event to the open batch of its ``(route, key)``, or open one.
+        ``dedup`` is ``insert`` or ``repoint`` for the copy the dedup row points at."""
+        src, dd = ev["source"], ev["dedup_id"]
         b = c.execute("SELECT id, destination, count, bytes, max_bytes, not_before FROM batches"
                       " WHERE route=? AND key=? AND state='open' ORDER BY id DESC LIMIT 1",
                       (ev["route"], ev["key"])).fetchone()
@@ -468,19 +500,17 @@ class Store:
                         (src, ev["route"], bid, ev["event_type"], dd, now, ev["payload"], ev["raw"],
                          ev["headers"], ev["size"]))
         eid = int(cur.lastrowid)
-        if dd is not None:
-            if repoint:
-                c.execute("UPDATE dedup SET event_id=?, seen_at=? WHERE source=? AND dedup_id=?",
-                          (eid, now, src, dd))
-            else:
-                c.execute("INSERT INTO dedup (source, dedup_id, event_id, seen_at) VALUES (?, ?, ?, ?)",
-                          (src, dd, eid, now))
+        if dedup == "repoint":
+            c.execute("UPDATE dedup SET event_id=?, seen_at=? WHERE source=? AND dedup_id=?", (eid, now, src, dd))
+        elif dedup == "insert":
+            c.execute("INSERT INTO dedup (source, dedup_id, event_id, seen_at) VALUES (?, ?, ?, ?)",
+                      (src, dd, eid, now))
         _hook("enqueue:after_event")
         row = c.execute("SELECT count, bytes, max_events, max_bytes FROM batches WHERE id=?", (bid,)).fetchone()
         if row["count"] >= row["max_events"] or row["bytes"] >= row["max_bytes"]:
             self._seal(c, bid, now)                      # post-join seal
             _hook("enqueue:after_seal")
-        return EnqueueResult(eid, bid)
+        return eid, bid
 
     # ---- sealing -------------------------------------------------------------------------------------
     @staticmethod
@@ -808,7 +838,8 @@ class Store:
         """Re-run classification of a quarantine batch's stored requests.
 
         ``fn(source, raw, headers)`` returns enqueue fields (``key``, ``action``, ``payload``,
-        optional ``route``, ``event_type``, ``dedup_id``, window fields) or None for a request
+        optional ``route``, ``event_type``, ``dedup_id``, window fields, and ``tees``, the
+        ``(route, destination)`` pairs of the request's tee copies) or None for a request
         the plugin now ignores; it runs outside any transaction. If it raises, nothing
         changes. Otherwise every result is enqueued and the quarantine batch becomes
         ``delivered`` with ``result = 'reclassified'``, in one transaction."""
@@ -830,12 +861,16 @@ class Store:
             else:
                 raw = bytes(r["raw"] or b"")
             hdrs = e.pop("headers", None)
+            tees = e.pop("tees", None) or ()
             ev = self._emit(e)
             if raw is not None and self._store_raw(ev["source"]):
                 ev["raw"] = raw
             if hdrs is not None:
                 ev["headers"] = json.dumps(hdrs, separators=(",", ":"), ensure_ascii=False)
-            prepared.append(ev)
+            if not isinstance(tees, (list, tuple)) or not all(isinstance(t, (list, tuple)) and len(t) == 2
+                                                              for t in tees):
+                raise InvalidEvent("reclassify tees must be (route, destination) pairs")
+            prepared.append((ev, [self._tee_copy(ev, r, d) for r, d in tees]))
         results: list[EnqueueResult] = []
 
         def txn(c):
@@ -845,8 +880,8 @@ class Store:
             if cur.rowcount != 1:
                 raise ValueError(f"batch {batch_id} changed while reclassifying")
             _hook("reclassify:mid")
-            for ev in prepared:
-                results.append(self._enqueue_txn(c, t, ev))
+            for ev, copies in prepared:
+                results.append(self._enqueue_txn(c, t, ev, copies))
             self._resolve_quarantine_issue(c, b["source"], t)
         self._write(txn)
         return results

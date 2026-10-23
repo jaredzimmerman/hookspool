@@ -155,12 +155,22 @@ A route sends some of a source's events to a different destination or window. Ro
 whose `source` matches and whose `match` is a subset of the event's attributes wins. Events no route claims use the
 source's own `action`.
 
+A route with `tee = true` receives a copy of each event it matches and does not claim it: matching goes on, and the
+event still goes to the first matching route without `tee`, or to the source's `action`. Adding a tee route therefore
+never changes where an event already went. Each copy is an event of its own, in its own batch for
+`(route, key)` with the tee route's window, and retry, the breaker, dead batches, `replay`, `exclude`, `split` and `drop`
+act on each copy separately, so a failing tee destination never delays the primary copy. All copies of one request are
+committed in the same transaction before the sender gets its 2xx. Dedup and `ignore` run once per request: a duplicate or
+an ignored request makes no copies. (A redelivered duplicate whose primary copy is dead replays that copy only; a dead tee
+copy waits for `hookspool replay`.)
+
 | key | default | meaning |
 |---|---|---|
 | `name` | required | the route's name, as it appears in logs, `list` and `status`. It must be unique |
 | `source` | required | the source this route applies to |
 | `match` | `{}` | attribute values that must all be equal (as strings) to the event's attributes. A source's `attrs` supply them; `route_hint` (the proxy's `X-Hookspool-Route` header) is always available |
-| `destination` | the source's `action` | where matching events go |
+| `destination` | the source's `action` | where matching events go. Required for a tee route |
+| `tee` | `false` | `true`: the route gets a copy of each matching event and does not claim it (see above) |
 | `quiet_s`, `max_s`, `max_events`, `max_bytes` | inherited | window fields for this route |
 
 ```toml
@@ -170,6 +180,27 @@ source = "github"
 match = { route_hint = "ci" }
 destination = "hermes:github-ci"
 quiet_s = 60
+```
+
+`check` keeps one event from reaching one destination twice: a tee route's `destination` may not be the source's `action`
+or the destination of any route without `tee` on the same source (whatever the matches), nor the destination of an earlier
+tee route whose `match` can select the same events. A source has at most 8 tee routes. The byte rules below apply to each
+tee route as to any other, so every copy fits its own route's `max_bytes`.
+
+```toml
+# Every pull_request event still reaches the agent's PR route (the source action);
+# a copy also wakes the repo's dispatcher job, at most once per burst.
+[[routes]]
+name = "widgets-dispatch"
+source = "github-prs"
+match = { repo = "owner/widgets" }
+tee = true
+destination = "script:run-widgets-dispatcher"
+quiet_s = 120
+max_s = 600
+
+[destinations."script:run-widgets-dispatcher"]
+argv = ["/usr/local/bin/run-job", "widgets-dispatcher"]
 ```
 
 ## Windows
@@ -218,7 +249,8 @@ only what goes on the wire:
 
 - each event of a batch is its own POST, in event order; the body is the event's stored payload
 - `webhook-id` is `hs_<instance>_<batch>_<event id>`, the same on every attempt, with the Standard Webhooks signature and
-  `X-Hub-Signature-256` computed over that body; `event_header` and `dedup_header` add the event's type and dedup id
+  `X-Hub-Signature-256` computed over that body (unwrap always sends `X-Hub-Signature-256`, whatever
+  `hermes.legacy_signature` says); `event_header` and `dedup_header` add the event's type and dedup id
 - the batch is delivered only when every event's request succeeded. The first failure stops the attempt and the whole batch
   is retried (or goes dead) exactly as a document would; events the receiver already accepted are sent again with the same
   id, which a receiver that keeps ids (Hermes does) answers `duplicate`

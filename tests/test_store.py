@@ -122,6 +122,22 @@ def test_a_schema_1_spool_upgrades_in_place_keeping_its_attempts(tmp_path):
     assert [(a["batch_id"], a["events_delivered"], a["failed_event_id"]) for a in s.attempts(1)] == [(1, None, None)]
 
 
+def test_an_old_or_missing_spool_names_the_upgrade_steps_that_work_under_the_units(tmp_path):
+    """The units run ``hookspool check`` before the dispatcher starts, so "start the dispatcher" never migrates."""
+    with pytest.raises(store_mod.SchemaError) as e:
+        Store(str(tmp_path / "absent.db"), cfg()).check_schema()
+    assert "stop the dispatcher first; see deploy/README.md, Upgrading" in str(e.value)
+    assert "start the dispatcher)" not in str(e.value)
+    s = Store(str(tmp_path / "old.db"), cfg())
+    s.ensure_schema()
+    s._conn().execute("PRAGMA user_version=1")
+    s._conn().execute("UPDATE meta SET value='1' WHERE key='schema_version'")
+    with pytest.raises(store_mod.SchemaError) as e:
+        s.check_schema()
+    assert "older than 2: run `hookspool migrate` (stop the dispatcher first; see deploy/README.md, Upgrading)" \
+        in str(e.value)
+
+
 # ---- readiness truth table (§5) -----------------------------------------------------------------
 @pytest.mark.parametrize("quiet,mx,first,last,now,ready", [
     (0, 0, 0, 0, 0, True),          # immediate

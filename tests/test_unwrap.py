@@ -269,6 +269,17 @@ def test_unwrap_deliver_stops_at_the_first_failure_and_reports_progress():
     assert out.reason == "event 1 (2 of 3): http 429"
 
 
+def test_a_hermes_413_names_the_fix_for_one_event_when_unwrapped(make_config, stub):
+    s = stub()
+    for spec, want in ((dict(UNWRAP), "exclude the event or raise max_body_bytes"), ({}, "split the batch")):
+        s.respond({"status": 413})
+        d = build(make_config(port=s.port, destinations={DEST: spec}), DEST)
+        doc = doc_for(1)
+        out = d.deliver(doc, encode(doc), "hs_x_7", replace(make_ctx(wall=True), payloads=(b'{"a":1}',)))
+        assert (out.kind, out.klass, out.status) == ("dead", "permanent", 413)
+        assert want in out.detail and ("split" in out.detail) == (spec == {}), out.detail
+
+
 def test_a_destination_out_of_time_stops_sending(make_config, stub):
     s = stub()
     d = build(make_config(port=s.port, destinations={DEST: dict(UNWRAP)}), DEST)

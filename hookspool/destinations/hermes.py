@@ -178,9 +178,10 @@ class HermesDestination(Destination):
             return Outcome.config(f"unknown route {self.route!r} (http 404)", status=code,
                                   detail=f"http 404: Hermes has no route {self.route!r} here")
         if code == 413:
-            return Outcome.permanent("http 413 payload too large for Hermes", status=code,
-                                     detail="http 413: the document exceeds Hermes' max_body_bytes;"
-                                            " split the batch")
+            detail = ("http 413: the event exceeds Hermes' max_body_bytes; exclude the event or raise"
+                      " max_body_bytes" if self.unwrap else
+                      "http 413: the document exceeds Hermes' max_body_bytes; split the batch")
+            return Outcome.permanent("http 413 payload too large for Hermes", status=code, detail=detail)
         return classify_status(resp, ctx.now(), redirect_permanent=False)
 
     # ---- check ---------------------------------------------------------------------------------

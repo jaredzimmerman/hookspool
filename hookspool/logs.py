@@ -19,7 +19,7 @@ import time
 from . import config as _config
 
 FIELDS = ("source", "route", "batch", "event", "destination", "attempt", "status", "bytes",
-          "duration_ms", "reason")
+          "duration_ms", "reason", "tee")
 _RESERVED = {"msg", "message", "args", "name", "levelname", "levelno", "pathname", "filename", "module",
              "exc_info", "exc_text", "stack_info", "lineno", "funcName", "created", "msecs",
              "relativeCreated", "thread", "threadName", "processName", "process", "taskName"}

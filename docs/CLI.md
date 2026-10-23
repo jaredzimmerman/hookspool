@@ -258,4 +258,5 @@ Source tools.
 
 `source test` replays a captured request through the source's verify, handshake, ignore, key, dedup and attrs stages
 offline. It never writes to the spool. It prints a JSON report whose `result` is `queued`, `ignored`, `challenge` or
-`unverified`, and exits 0 for the first three, 1 for `unverified`, 2 when the capture or the plugin cannot be loaded.
+`unverified` (a `queued` report names the `route` and `destination` the event would take, and in `tees` each tee route
+that would get a copy), and exits 0 for the first three, 1 for `unverified`, 2 when the capture or the plugin cannot be loaded.

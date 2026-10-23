@@ -19,11 +19,22 @@ The changes below will ship as 0.2.0.
   receiver answers `duplicate`. Hermes `ignored`/`coalesced` answers open no issue in this mode, and `hookspool check`
   allows the gateway route's own `events` filter and `coalesce` there, and warns when an unwrapped route coalesces.
 - Attempt rows record an unwrap delivery's progress: `events_delivered` and `failed_event_id` (ids and counts, no bodies).
+- Tee routes: `tee = true` on a `[[routes]]` entry gives that route a copy of each event it matches without claiming the
+  event, which still goes to the first matching non-tee route or the source's `action`, so adding a tee route never changes
+  where an event already went. Each copy is its own event in its own batch with the tee route's window; retry, the breaker,
+  dead batches, `replay`, `exclude`, `split` and `drop` act on each copy, and a failing tee destination never delays the
+  primary. All copies of a request are committed in one transaction before the 2xx; dedup and `ignore` run once per request.
+  `check` refuses a tee destination that is the source's `action` or another route's destination on the same source, and
+  more than 8 tee routes per source. The intake logs one `queued` line per copy (`tee: true` on the copies), and
+  `hookspool source test` lists the `tees` a request would feed.
 
 ### Changed
 
-- Spool schema 2 (migration `0002_unwrap.sql` adds the two attempt columns). The dispatcher applies it at startup, or run
-  `hookspool migrate`; the intake refuses a schema 1 spool until then, so restart the dispatcher first.
+- Spool schema 2 (migration `0002_unwrap.sql` adds the two attempt columns). Stop the dispatcher and run `hookspool migrate`
+  (deploy/README.md, Upgrading): both services run `hookspool check` before they start and refuse a schema 1 spool, so a
+  restart alone does not migrate it.
+- The message for an old or missing spool now says to stop the dispatcher and run `hookspool migrate`, and points to
+  deploy/README.md; a Hermes 413 under `unwrap` says to exclude the event or raise `max_body_bytes` (one event, not a batch).
 
 ## [0.1.0]
 

@@ -79,7 +79,8 @@ _BREAKER_KEYS = {"trip_after", "cooldown_initial_s", "cooldown_max_s"}
 _TOP_KEYS = set(_SECTION_KEYS) | {"spans", "sources", "routes", "destinations"}
 SOURCE_KEYS = {"module", "span", "secrets", "dedup_window_s", "expect_every_s", "max_body_bytes", "action",
                "keep_headers", "store_raw", "event_header", *WINDOW_FIELDS}
-ROUTE_KEYS = {"name", "source", "match", "destination", *WINDOW_FIELDS}
+ROUTE_KEYS = {"name", "source", "match", "destination", "tee", *WINDOW_FIELDS}
+MAX_TEES = 8                         # tee routes per source (``check``) and copies per event (intake)
 _DEST_COMMON = {"type", "module", "timeout_s", "max_body_bytes", "max_inflight"}
 _DEST_UNWRAP = {"unwrap", "event_header", "dedup_header"}       # one request per event (hermes, http)
 DEST_KEYS = {
@@ -236,14 +237,39 @@ def _match(match: dict | None, attrs: dict) -> bool:
 
 
 def resolve_route(cfg: dict, source: str, attrs: dict | None, default_action: str | None) -> tuple[str, str | None]:
-    """(route name, destination). First ``[[routes]]`` entry whose source matches and whose
-    ``match`` is a subset of ``attrs`` wins; otherwise the implicit route ``<source>`` with the
-    source's ``action`` (config) or the plugin's ``default_action``."""
+    """(route name, destination). First ``[[routes]]`` entry that is not a tee, whose source matches
+    and whose ``match`` is a subset of ``attrs`` wins; otherwise the implicit route ``<source>`` with
+    the source's ``action`` (config) or the plugin's ``default_action``."""
     attrs = attrs or {}
     for r in cfg.get("routes") or []:
-        if isinstance(r, dict) and r.get("source") == source and _match(r.get("match"), attrs):
+        if isinstance(r, dict) and r.get("tee") is not True and r.get("source") == source \
+                and _match(r.get("match"), attrs):
             return str(r["name"]), r.get("destination") or source_cfg(cfg, source).get("action") or default_action
     return source, source_cfg(cfg, source).get("action") or default_action
+
+
+def resolve_tees(cfg: dict, source: str, attrs: dict | None, primary: str | None = None) -> list[tuple[str, str]]:
+    """(route name, destination) of every ``tee = true`` route that matches, in file order.
+
+    A tee route gets a copy of the event and does not claim it, so the primary route is
+    resolved as if the tee routes were not there. A tee whose destination is the primary's,
+    or one an earlier tee already received, is skipped (``check`` refuses such a config), and
+    at most ``MAX_TEES`` copies are made."""
+    attrs = attrs or {}
+    out: list[tuple[str, str]] = []
+    seen = {primary} if primary else set()
+    for r in cfg.get("routes") or []:
+        if not (isinstance(r, dict) and r.get("tee") is True and r.get("source") == source
+                and _match(r.get("match"), attrs)):
+            continue
+        dest = r.get("destination")
+        if not isinstance(dest, str) or not dest or dest in seen:
+            continue
+        seen.add(dest)
+        out.append((str(r["name"]), dest))
+        if len(out) >= MAX_TEES:
+            break
+    return out
 
 
 def route_destination(cfg: dict, route: str) -> str | None:
@@ -681,6 +707,12 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
             if r.get(f) is not None:
                 _num(rep, f"{where}.{f}", r[f], integer=f in ("max_events", "max_bytes"),
                      minimum=1 if f in ("max_events", "max_bytes") else 0)
+        tee = r.get("tee")
+        if tee is not None and not isinstance(tee, bool):
+            rep.err(f"{where}.tee: must be true or false")
+        elif tee is True and r.get("destination") is None:
+            rep.err(f"{where}.destination: required for a tee route (the copy needs a destination of its own)")
+    _check_tees(rep, routes, sources, plugins)
 
     # destinations
     dests = cfg.get("destinations")
@@ -813,6 +845,49 @@ def _check_unwrap(rep: Report, where: str, d: dict) -> None:
     for k in hdrs:
         if isinstance(k, str) and k.lower() in names:
             rep.err(f"{where}.headers: {k!r} is also the event_header or dedup_header")
+
+
+def _overlap(a: Any, b: Any) -> bool:
+    """Can one event match both ``match`` tables? Only a key both set to different values rules it out."""
+    a = a if isinstance(a, dict) else {}
+    b = b if isinstance(b, dict) else {}
+    return all(str(a[k]) == str(b[k]) for k in set(a) & set(b))
+
+
+def _check_tees(rep: Report, routes: list, sources: dict, plugins: dict) -> None:
+    """Tee routes: at most ``MAX_TEES`` per source, and never a second delivery of one event to the
+    same destination. A tee's destination may not be the source's action or any non-tee route's
+    destination on the same source (whatever the matches), nor an overlapping earlier tee's."""
+    by_source: dict[str, list[dict]] = {}
+    for r in routes:
+        if isinstance(r, dict) and r.get("source") in sources and isinstance(r.get("name"), str) and r["name"]:
+            by_source.setdefault(r["source"], []).append(r)
+    for src, rs in by_source.items():
+        tees = [r for r in rs if r.get("tee") is True]
+        if not tees:
+            continue
+        if len(tees) > MAX_TEES:
+            rep.err(f"sources.{src}: {len(tees)} tee routes; at most {MAX_TEES} may copy one source's events")
+        s = sources[src] if isinstance(sources[src], dict) else {}
+        action = s.get("action") or getattr(plugins.get(src), "action", None)
+        primary: dict[str, str] = {}
+        if isinstance(action, str) and action:
+            primary[action] = "the source's action"
+        for r in rs:
+            d = r.get("destination") or action
+            if r.get("tee") is not True and isinstance(d, str) and d:
+                primary.setdefault(d, f"the destination of route {r['name']}")
+        for i, t in enumerate(tees):
+            d = t.get("destination")
+            if not isinstance(d, str) or not d:
+                continue
+            where = f"routes.{t['name']}.destination"
+            if d in primary:
+                rep.err(f"{where}: {d} is also {primary[d]}; a tee would deliver the same event there twice")
+            for u in tees[:i]:
+                if u.get("destination") == d and _overlap(u.get("match"), t.get("match")):
+                    rep.err(f"{where}: {d} is also the destination of tee route {u['name']}, whose match"
+                            " overlaps this one")
 
 
 def _feeds(cfg: dict, sources: dict, plugins: dict):
