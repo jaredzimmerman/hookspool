@@ -1,11 +1,11 @@
 """Bobbins (ARCHITECTURE §14.3): discovery, manifests, and expansion into ordinary tables.
 
 A bobbin is one directory with a ``bobbin.toml`` manifest, an optional ``source.py``
-and ``processor.py``, captures and a README. Built-in packages live under ``hookspool/bobbins/``;
+and ``processor.py``, captures and a README. Built-in bobbins live under ``hookspool/bobbins/``;
 ``[spool].path`` adds directories searched after them. A ``[bobbins.<instance>]`` table
-enables a package; ``expand`` turns every instance into a ``[sources.<instance>]`` table, a
-``[destinations."script:<instance>"]`` table when the package has a processor, and ``[[routes]]``
-for a multi-output package without one. ``load_config`` calls ``expand``, so the rest of
+enables a bobbin; ``expand`` turns every instance into a ``[sources.<instance>]`` table, a
+``[destinations."script:<instance>"]`` table when the bobbin has a processor, and ``[[routes]]``
+for a multi-output bobbin without one. ``load_config`` calls ``expand``, so the rest of
 hookspool only ever sees ordinary tables.
 
 Nothing here reads a secret: expansion copies secret references, never values.
@@ -120,8 +120,8 @@ class Package:
         return os.path.join(self.dir, f"{module}.py")
 
     def code_module(self, module: str) -> str:
-        """The import name of a module of this package: ``hookspool.bobbins.<pkg>.<mod>`` for a
-        built-in, a private name loaded by file path for a package under ``spool.bobbin_path``."""
+        """The import name of a module of this bobbin: ``hookspool.bobbins.<pkg>.<mod>`` for a
+        built-in, a private name loaded by file path for a bobbin under ``spool.bobbin_path``."""
         if self.builtin:
             return f"{BUILTIN_MODULE}.{os.path.basename(self.dir)}.{module}"
         return f"{PATH_MODULE_PREFIX}{self.module_name}.{module}"
@@ -266,7 +266,7 @@ def validate_manifest(m: Any, dirname: str, spans: dict) -> list[str]:
             if unknown(f"outputs.{k}", o, OUTPUT_KEYS) and "description" in o and not isinstance(o["description"], str):
                 errs.append(f"outputs.{k}.description: must be a string")
         if proc is None and len(outputs) >= 2 and ALL_OUTPUTS not in outputs:
-            errs.append('outputs: a package with several outputs and no processor must declare "*"'
+            errs.append('outputs: a bobbin with several outputs and no processor must declare "*"'
                         " (the source's action; an instance cannot be expanded without it)")
     return errs
 
@@ -276,9 +276,9 @@ def _validate_files(pkg: Package) -> list[str]:
     src = pkg.source
     mod = src.get("module")
     if isinstance(mod, str) and mod and _is_local_module(mod) and not os.path.isfile(pkg.local_file(mod)):
-        errs.append(f"source.module: {mod}.py is not in the package")
+        errs.append(f"source.module: {mod}.py is not in the bobbin")
     if pkg.processor is not None and not os.path.isfile(pkg.local_file("processor")):
-        errs.append("processor: processor.py is not in the package")
+        errs.append("processor: processor.py is not in the bobbin")
     return errs
 
 
@@ -339,11 +339,11 @@ def _spans(cfg: dict) -> dict:
 
 
 def discover_tagged(cfg: dict) -> tuple[dict[str, Package], list[tuple[frozenset | None, str]]]:
-    """Every package found (built-ins first, then ``spool.bobbin_path`` in order) and every problem.
+    """Every bobbin found (built-ins first, then ``spool.bobbin_path`` in order) and every problem.
 
-    A package that shares a name with a built-in, or with an earlier ``spool.bobbin_path`` package, is
-    refused; so are two packages whose names differ only by ``-``/``_`` (they would share a module
-    name). Manifest problems are reported as ``bobbin <name>: ...``; the package is still returned
+    A bobbin that shares a name with a built-in, or with an earlier ``spool.bobbin_path`` bobbin, is
+    refused; so are two bobbins whose names differ only by ``-``/``_`` (they would share a module
+    name). Manifest problems are reported as ``bobbin <name>: ...``; the bobbin is still returned
     (with ``errors``) so ``bobbin list`` can show it.
     """
     errs: list[tuple[frozenset | None, str]] = [(None, e) for e in _packages_table_errors(cfg)]
@@ -373,7 +373,7 @@ def discover_tagged(cfg: dict) -> tuple[dict[str, Package], list[tuple[frozenset
             if pkg.name in found:
                 first = found[pkg.name]
                 if first.builtin and not pkg.builtin:
-                    errs.append((frozenset({pkg.name}), f"{where}: shadows the built-in package {pkg.name!r}; a"
+                    errs.append((frozenset({pkg.name}), f"{where}: shadows the built-in bobbin {pkg.name!r}; a"
                                  " deployment never replaces a built-in (use settings, a hooks module, or another"
                                  " name)"))
                 elif os.path.basename(first.dir) != d and first.origin == origin:
@@ -394,7 +394,7 @@ def discover_tagged(cfg: dict) -> tuple[dict[str, Package], list[tuple[frozenset
 
 
 def discover(cfg: dict) -> tuple[dict[str, Package], list[str]]:
-    """Every package found and every problem with any of them (``check`` reports them all)."""
+    """Every bobbin found and every problem with any of them (``check`` reports them all)."""
     pkgs, tagged = discover_tagged(cfg)
     return pkgs, [m for _, m in tagged]
 
@@ -425,7 +425,7 @@ def code_path_problem(path: str, *, want: str = "any") -> str | None:
     return None
 
 
-_PATH_MODULES: dict[str, tuple[str, str]] = {}    # private module name -> (file, package dir)
+_PATH_MODULES: dict[str, tuple[str, str]] = {}    # private module name -> (file, bobbin dir)
 _LOADED: dict[str, tuple[tuple, Any]] = {}
 _LOAD_LOCK = threading.Lock()
 
@@ -436,7 +436,7 @@ def register_path_module(name: str, file: str, pkg_dir: str) -> None:
 
 
 def load_path_module(name: str):
-    """Load a ``spool.bobbin_path`` package's module by file path under its private name (never
+    """Load a ``spool.bobbin_path`` bobbin's module by file path under its private name (never
     through ``sys.path``). Loaded again when the file changes, so an intake reload picks up
     edited source code. Refuses code that fails the ownership rules."""
     with _LOAD_LOCK:
@@ -486,7 +486,7 @@ def _settings_for(pkg: Package, given: Any, where: str, errs: list[str]) -> dict
     decl = pkg.settings
     for k in given:
         if k not in decl:
-            errs.append(f"{where}.settings.{k}: package {pkg.name!r} has no such setting")
+            errs.append(f"{where}.settings.{k}: bobbin {pkg.name!r} has no such setting")
     for k, d in decl.items():
         if not isinstance(d, dict):
             continue
@@ -498,7 +498,7 @@ def _settings_for(pkg: Package, given: Any, where: str, errs: list[str]) -> dict
                 continue
             out[k] = copy.deepcopy(v)
         elif d.get("required") is True:
-            errs.append(f"{where}.settings.{k}: required by package {pkg.name!r}")
+            errs.append(f"{where}.settings.{k}: required by bobbin {pkg.name!r}")
         else:
             out[k] = copy.deepcopy(d.get("default"))
     return out
@@ -512,10 +512,10 @@ def _secrets_for(pkg: Package, given: Any, where: str, errs: list[str]) -> dict:
         return {}
     for k in given:
         if k not in pkg.secrets:
-            errs.append(f"{where}.secrets.{k}: package {pkg.name!r} has no such secret")
+            errs.append(f"{where}.secrets.{k}: bobbin {pkg.name!r} has no such secret")
     for k in pkg.secrets:
         if k not in given:
-            errs.append(f"{where}.secrets.{k}: required by package {pkg.name!r}")
+            errs.append(f"{where}.secrets.{k}: required by bobbin {pkg.name!r}")
     return {k: copy.deepcopy(v) for k, v in given.items() if k in pkg.secrets}
 
 
@@ -528,7 +528,7 @@ def _outputs_for(pkg: Package, given: Any, where: str, errs: list[str]) -> dict:
     out = {}
     for k, v in given.items():
         if k not in pkg.outputs:
-            errs.append(f"{where}.outputs.{k}: package {pkg.name!r} has no such output")
+            errs.append(f"{where}.outputs.{k}: bobbin {pkg.name!r} has no such output")
             continue
         if not isinstance(v, str) or not v:
             errs.append(f"{where}.outputs.{k}: must be a destination name")
@@ -552,11 +552,11 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
             errs.append(f"{where}.{k}: unknown key")
     pname = spec.get("bobbin", inst)
     if not isinstance(pname, str) or pname not in pkgs:
-        errs.append(f"{where}.bobbin: unknown package {pname!r} (see `hookspool bobbin list`)")
+        errs.append(f"{where}.bobbin: unknown bobbin {pname!r} (see `hookspool bobbin list`)")
         return None
     pkg = pkgs[pname]
     if pkg.errors:
-        errs.append(f"{where}: package {pname!r} is invalid (see the bobbin {pname} errors)")
+        errs.append(f"{where}: bobbin {pname!r} is invalid (see the bobbin {pname} errors)")
         return None
     settings = _settings_for(pkg, spec.get("settings"), where, errs)
     secrets = _secrets_for(pkg, spec.get("secrets"), where, errs)
@@ -586,7 +586,7 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
         errs.append(f"{where}.expect: must be true or false")
     elif expect is True:
         if msrc.get("expect_every_s") is None and spec.get("expect_every_s") is None:
-            errs.append(f"{where}.expect: package {pname!r} recommends no expect_every_s; set expect_every_s")
+            errs.append(f"{where}.expect: bobbin {pname!r} recommends no expect_every_s; set expect_every_s")
         elif msrc.get("expect_every_s") is not None:
             src["expect_every_s"] = msrc["expect_every_s"]
     for k in SOURCE_OVERRIDES:
@@ -606,7 +606,7 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
             sd = spec.get("state_dir")
             dest["state_dir"] = sd if sd is not None else os.path.join(home, "services", inst)
         elif "state_dir" in spec:
-            errs.append(f"{where}.state_dir: package {pname!r} keeps no state")
+            errs.append(f"{where}.state_dir: bobbin {pname!r} keeps no state")
         dest["env"] = {
             "HOOKSPOOL_BOBBIN": pkg.name,
             "HOOKSPOOL_BOBBIN_INSTANCE": inst,
@@ -618,17 +618,17 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
     else:
         for k in PROCESSOR_OVERRIDES:
             if k in spec:
-                errs.append(f"{where}.{k}: only for a package with a processor")
+                errs.append(f"{where}.{k}: only for a bobbin with a processor")
         declared = list(pkg.outputs)
         if len(declared) == 1:
             only = declared[0]
             if only not in outputs:
-                errs.append(f"{where}.outputs.{only}: required (the package's only output is the source's action)")
+                errs.append(f"{where}.outputs.{only}: required (the bobbin's only output is the source's action)")
             else:
                 src["action"] = outputs[only]
         else:
             if ALL_OUTPUTS not in outputs:
-                errs.append(f"{where}.outputs.\"*\": required for a package with several outputs and no processor,"
+                errs.append(f"{where}.outputs.\"*\": required for a bobbin with several outputs and no processor,"
                             " so that no event reaches a route without an action")
             else:
                 src["action"] = outputs[ALL_OUTPUTS]
@@ -668,8 +668,8 @@ def expand(cfg: dict, *, cli_home: str | None = None) -> dict:
     if errs:
         raise BobbinError(errs)
     pkgs, tagged = discover_tagged(cfg)
-    # loading fails only on problems that concern a package in use (or the search path itself);
-    # `check` reports the rest, so a broken unused package never stops a running deployment
+    # loading fails only on problems that concern a bobbin in use (or the search path itself);
+    # `check` reports the rest, so a broken unused bobbin never stops a running deployment
     used = {str(s.get("bobbin", i)) if isinstance(s, dict) else str(i) for i, s in services.items()}
     errs.extend(m for names, m in tagged if names is None or names & used)
     home = _config.home_dir(cfg, cli_home)
@@ -710,7 +710,7 @@ def expand(cfg: dict, *, cli_home: str | None = None) -> dict:
 
 # ---- check -----------------------------------------------------------------------------------------------
 def check(cfg: dict, rep) -> None:
-    """The package rules of ``hookspool check`` (§14.3.2, 14.3.3, 14.3.6) on an expanded config.
+    """The bobbin rules of ``hookspool check`` (§14.3.2, 14.3.3, 14.3.6) on an expanded config.
     Adds to ``rep`` (a ``config.Report``)."""
     services = cfg.get("bobbins")
     metas = cfg.get("_bobbins")
@@ -739,7 +739,7 @@ def check(cfg: dict, rep) -> None:
             for p in [meta["dir"], *Package(meta["bobbin"], meta["dir"], meta["origin"]).code_files()]:
                 problem = code_path_problem(p)
                 if problem:
-                    rep.err(f"bobbins.{inst}: package code {problem}")
+                    rep.err(f"bobbins.{inst}: bobbin code {problem}")
         if meta.get("hooks"):
             problem = code_path_problem(meta["hooks"], want="file")
             if problem:
@@ -760,7 +760,7 @@ def check(cfg: dict, rep) -> None:
                 continue
             d = r.get("destination")
             if d is not None and d != dname:
-                rep.err(f"routes.{r.get('name')}: sends {inst} events to {d}, bypassing the package's processor"
+                rep.err(f"routes.{r.get('name')}: sends {inst} events to {d}, bypassing the bobbin's processor"
                         f" ({dname}); route its outputs with [bobbins.{inst}].outputs, or make it a tee")
         for et, d in (meta.get("outputs") or {}).items():
             e = _config._action_ok(cfg, d)
@@ -777,7 +777,7 @@ def check(cfg: dict, rep) -> None:
 
 
 def _warn_no_event_type_attr(cfg: dict, inst: str, rep) -> None:
-    """The routes generated for a multi-output package match ``event_type`` in ``attrs`` (§14.3.3 step 3);
+    """The routes generated for a multi-output bobbin match ``event_type`` in ``attrs`` (§14.3.3 step 3);
     a source that does not expose it sends every event to the ``"*"`` output. Warn, since the plugin's
     ``attrs`` can only be judged by running it."""
     s = (cfg.get("sources") or {}).get(inst) or {}
@@ -849,7 +849,7 @@ def render(cfg: dict, instance: str | None = None) -> str:
         meta = metas[inst]
         if out:
             out.append("")
-        out.append(f"# [bobbins.{inst}]: package {meta['bobbin']} ({meta['origin']})")
+        out.append(f"# [bobbins.{inst}]: bobbin {meta['bobbin']} ({meta['origin']})")
         out.extend(_table(f"sources.{_key(inst)}", cfg["sources"][inst]))
         if meta.get("destination"):
             d = copy.deepcopy(cfg["destinations"][meta["destination"]])
@@ -872,10 +872,10 @@ _SCAFFOLD_BODY = '{"id":"evt_1","type":"example","note":"made-up test payload"}'
 
 
 def scaffold(name: str, parent: str, *, template: bool = False, processor: bool = False) -> str:
-    """Write a new package directory ``<parent>/<name>`` and return its path. Refuses an
+    """Write a new bobbin directory ``<parent>/<name>`` and return its path. Refuses an
     invalid name or an existing directory (``ValueError`` / ``FileExistsError``)."""
     if not NAME_RE.match(name):
-        raise ValueError(f"package name {name!r} must match {NAME_RE.pattern}")
+        raise ValueError(f"bobbin name {name!r} must match {NAME_RE.pattern}")
     from . import verify as _verify
     d = os.path.join(os.path.abspath(parent), name)
     os.makedirs(d)
@@ -888,7 +888,7 @@ def scaffold(name: str, parent: str, *, template: bool = False, processor: bool 
         src = '[source]\nmodule = "source"\n'
     outputs = ('[outputs.changed]\ndescription = "TODO: what the processor produces"\n' if processor else
                '[outputs."*"]\ndescription = "every accepted event"\n')
-    manifest = (f'name = "{name}"\nversion = "1"\nsummary = "TODO: one line on what this service sends"\n\n'
+    manifest = (f'name = "{name}"\nversion = "1"\nsummary = "TODO: one line on what the outside service sends"\n\n'
                 f'{src}span = "burst"\nsender_retries = false\n\n'
                 '[secrets.secret]\ndescription = "TODO: the signing secret the provider shows for the webhook"\n\n')
     if processor:
@@ -899,7 +899,7 @@ def scaffold(name: str, parent: str, *, template: bool = False, processor: bool 
                  "# capture: TODO describe the request; signed with " + SCAFFOLD_SECRET + "\n# expect: queued\n"
                  f"POST /hooks/{name} HTTP/1.1\nContent-Type: application/json\nX-Signature: {sig}\n"
                  f"Content-Length: {len(_SCAFFOLD_BODY)}\n\n{_SCAFFOLD_BODY}\n",
-             "README.md": f"# {name}\n\nTODO: what the service sends and what this package does with it.\n\n"
+             "README.md": f"# {name}\n\nTODO: what the outside service sends and what this bobbin does with it.\n\n"
                           "## Setup at the provider\n\nTODO\n\n## Secrets\n\n- `secret`: TODO\n\n"
                           "## Settings\n\nNone yet.\n\n## Outputs\n\nTODO\n\n"
                           f"The capture in `captures/` is signed with the test secret `{SCAFFOLD_SECRET}`.\n"}

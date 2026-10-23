@@ -89,9 +89,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("name")
     p.add_argument("--request", required=True, help=".http capture (start line, headers, blank line, body)")
     p.add_argument("--now", type=float, help="unix seconds to verify at (default: the capture's '# now:' or now)")
-    p = sub.add_parser("bobbin", help="bobbins: list | show <package> | expand [<instance>] | new <name>")
+    p = sub.add_parser("bobbin", help="bobbins: list | show <bobbin> | expand [<instance>] | new <name>")
     p.add_argument("subcmd", choices=("list", "show", "expand", "new"))
-    p.add_argument("name", nargs="?", help="the package (show), the instance (expand) or the new package's name")
+    p.add_argument("name", nargs="?", help="the bobbin (show), the instance (expand) or the new bobbin's name")
     p.add_argument("--dir", default=".", help="new: the parent directory (default: the current directory)")
     p.add_argument("--template", action="store_true", help="new: a template source instead of source.py")
     p.add_argument("--processor", action="store_true", help="new: include a processor.py")
@@ -254,7 +254,7 @@ def _bobbin(a, cfg: dict) -> int:
         return EXIT_OK if rows else EXIT_NOTHING
     p = pkgs.get(a.name)
     if p is None:
-        _err(f"no package {a.name!r} (see `hookspool bobbin list`)")
+        _err(f"no bobbin {a.name!r} (see `hookspool bobbin list`)")
         return EXIT_NOTHING
     src = p.source
     info = {"name": p.name, "version": p.version, "origin": p.origin, "dir": p.dir, "summary": p.summary,

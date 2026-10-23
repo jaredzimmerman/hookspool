@@ -188,7 +188,7 @@ def test_a_required_setting_needs_no_default_and_a_missing_local_module_is_an_er
     root = tmp_path / "r"
     make_pkg(root, "pkg", m.replace('template = { scheme = "url-token", key = "id" }', 'module = "source"'))
     pkg = PK.load_package(str(root / "pkg"), str(root), C.DEFAULTS["spans"])
-    assert has(pkg.errors, "source.py is not in the package")
+    assert has(pkg.errors, "source.py is not in the bobbin")
 
 
 # ---- discovery: names, shadowing, '-'/'_' ----------------------------------------------------------------
@@ -203,7 +203,7 @@ def test_discovery_finds_builtins_then_path_packages(pkgroot, no_builtins):
 def test_a_path_package_may_not_shadow_a_builtin(pkgroot, no_builtins, tmp_path, secrets):
     make_pkg(no_builtins, "relay", MINIMAL.format(name="relay"))
     pkgs, errs = PK.discover({"spool": {"bobbin_path": [str(pkgroot)]}})
-    assert has(errs, "shadows the built-in package 'relay'")
+    assert has(errs, "shadows the built-in bobbin 'relay'")
     assert pkgs["relay"].origin == PK.BUILTIN
     assert has(expand_errors(tmp_path, pkgroot, relay_body(secrets)), "shadows the built-in")
 
@@ -278,7 +278,7 @@ def test_settings_are_typed_with_defaults_applied(tmp_path, pkgroot, no_builtins
     ('{ owner = "o", verbose = 1 }', "settings.verbose: must be true or false"),
     ('{ owner = "o", labels = "x" }', "settings.labels: must be a list"),
     ('{ owner = "o", hooks = "rel/hooks.py" }', "settings.hooks: must be an absolute path"),
-    ('{ owner = "o", color = "red" }', "settings.color: package 'digest' has no such setting"),
+    ('{ owner = "o", color = "red" }', "settings.color: bobbin 'digest' has no such setting"),
 ])
 def test_setting_errors(tmp_path, pkgroot, no_builtins, secrets, settings, want):
     body = digest_body(secrets).replace('settings = { owner = "someone@example.com" }', f"settings = {settings}")
@@ -286,11 +286,11 @@ def test_setting_errors(tmp_path, pkgroot, no_builtins, secrets, settings, want)
 
 
 @pytest.mark.parametrize("edit,want", [
-    (lambda b: b.replace('bobbin = "digest"', 'bobbin = "nope"'), "unknown package 'nope'"),
+    (lambda b: b.replace('bobbin = "digest"', 'bobbin = "nope"'), "unknown bobbin 'nope'"),
     (lambda b: b + "colour = 1\n", "bobbins.mail.colour: unknown key"),
     (lambda b: b.replace("secrets.cred", "secrets.other"), "secrets.cred: required"),
-    (lambda b: b.replace("secrets.cred", "secrets.other"), "secrets.other: package 'digest' has no such secret"),
-    (lambda b: b.replace('summary = "hermes:mail-summary"', 'digest = "hermes:x"'), "outputs.digest: package"),
+    (lambda b: b.replace("secrets.cred", "secrets.other"), "secrets.other: bobbin 'digest' has no such secret"),
+    (lambda b: b.replace('summary = "hermes:mail-summary"', 'digest = "hermes:x"'), "outputs.digest: bobbin"),
     (lambda b: b.replace('summary = "hermes:mail-summary"', "summary = 3"), "outputs.summary: must be a destination"),
     (lambda b: b.replace("expect = true", "expect = 1"), "expect: must be true or false"),
 ])
@@ -306,8 +306,8 @@ def test_instance_overrides_and_processor_only_keys(tmp_path, pkgroot, no_builti
     assert (s["quiet_s"], s["max_s"], s["dedup_window_s"], s["span"], s["expect_every_s"]) == (1, 9, 60, "burst", 99)
     assert d["timeout_s"] == 30 and d["state_dir"] == "/var/tmp/keep"
     errs = expand_errors(tmp_path, pkgroot, relay_body(secrets, 'timeout_s = 3\nstate_dir = "/x"\n'))
-    assert has(errs, "relay.timeout_s: only for a package with a processor")
-    assert has(errs, "relay.state_dir: only for a package with a processor")
+    assert has(errs, "relay.timeout_s: only for a bobbin with a processor")
+    assert has(errs, "relay.state_dir: only for a bobbin with a processor")
 
 
 def test_expect_without_a_recommendation_is_an_error(tmp_path, pkgroot, no_builtins, secrets):
@@ -355,7 +355,7 @@ destination = "hermes:mine"
     assert C.resolve_route(cfg, "ci", {"event_type": "build"}, None) == ("ci-build", "hermes:ci-build")
     assert C.resolve_route(cfg, "ci", {"event_type": "review"}, None) == ("ci", "hermes:ci-other")
     errs = expand_errors(tmp_path, pkgroot, body.replace(', "*" = "hermes:ci-other"', ""))
-    assert has(errs, 'outputs."*": required for a package with several outputs')
+    assert has(errs, 'outputs."*": required for a bobbin with several outputs')
 
 
 # ---- collisions ------------------------------------------------------------------------------------------
@@ -397,7 +397,7 @@ def test_a_clean_expanded_config_passes_check(tmp_path, pkgroot, no_builtins, se
 def test_check_refuses_a_route_that_bypasses_the_processor(tmp_path, pkgroot, no_builtins, secrets):
     route = '\n[[routes]]\nname = "side"\nsource = "mail"\ndestination = "hermes:mail-alert"\n'
     rep = checked(tmp_path, pkgroot, digest_body(secrets) + route)
-    assert has(rep.errors, "routes.side", "bypassing the package's processor")
+    assert has(rep.errors, "routes.side", "bypassing the bobbin's processor")
     rep = checked(tmp_path, pkgroot, digest_body(secrets) + route + "tee = true\n")
     assert not has(rep.errors, "bypassing"), rep.errors
     rep = checked(tmp_path, pkgroot, digest_body(secrets) + route.replace("hermes:mail-alert", "script:mail"))
@@ -429,7 +429,7 @@ def test_check_validates_every_discovered_manifest(tmp_path, pkgroot, no_builtin
     rep = checked(tmp_path, pkgroot, relay_body(secrets))
     assert has(rep.errors, "bobbin broken: bogus: unknown key")
     body = relay_body(secrets) + '\n[bobbins.b]\nbobbin = "broken"\nsecrets.secret = { file = "/x" }\n'
-    assert has(expand_errors(tmp_path, pkgroot, body), "package 'broken' is invalid")
+    assert has(expand_errors(tmp_path, pkgroot, body), "bobbin 'broken' is invalid")
 
 
 def test_user_config_cannot_set_processor_or_hookspool_env(tmp_path, pkgroot, no_builtins, secrets):
@@ -461,7 +461,7 @@ secrets.secret = { file = "%s" }
 def test_group_writable_package_code_is_refused(tmp_path, pkgroot, no_builtins, secrets):
     os.chmod(pkgroot / "relay" / "source.py", 0o664)
     rep = checked(tmp_path, pkgroot, relay_body(secrets))
-    assert has(rep.errors, "bobbins.relay: package code", "group- or other-writable")
+    assert has(rep.errors, "bobbins.relay: bobbin code", "group- or other-writable")
     with pytest.raises(ImportError, match="group- or other-writable"):
         C.default_plugin_loader("relay", "_hookspool_bobbins.relay.source")
     os.chmod(pkgroot / "relay" / "source.py", 0o644)
@@ -511,7 +511,7 @@ def test_path_package_source_loads_by_file_path_not_sys_path(tmp_path, pkgroot, 
 
 
 # ---- service expand: golden output, no secrets ----------------------------------------------------------
-GOLDEN = """# [bobbins.mail]: package digest ({root})
+GOLDEN = """# [bobbins.mail]: bobbin digest ({root})
 [sources.mail]
 module = "_hookspool_bobbins.digest.source"
 span = "mail"
@@ -533,7 +533,7 @@ HOOKSPOOL_SETTINGS = "{{\\"hooks\\":\\"\\",\\"labels\\":[\\"inbox\\"],\\"limit\\
 HOOKSPOOL_DELTA_ROUTES = "{{\\"alert\\":\\"hermes:mail-alert\\",\\"summary\\":\\"hermes:mail-summary\\"}}"
 HOOKSPOOL_SECRET_REFS = "<references of: cred>"
 
-# [bobbins.ci]: package fanout ({root})
+# [bobbins.ci]: bobbin fanout ({root})
 [sources.ci]
 module = "hookspool.sources.template"
 scheme = "hmac-sha256-hex"
@@ -568,7 +568,7 @@ def run_cli(args, capsys):
     return rc, out.out, out.err
 
 
-def test_service_expand_golden_output_and_it_parses_back(tmp_path, pkgroot, no_builtins, secrets, capsys):
+def test_bobbin_expand_golden_output_and_it_parses_back(tmp_path, pkgroot, no_builtins, secrets, capsys):
     p = tmp_path / "config.toml"
     p.write_text(cfg_text(tmp_path, pkgroot, digest_body(secrets) + CI.format(sig=secrets["sig"])))
     rc, out, err = run_cli(["--config", str(p), "bobbin", "expand"], capsys)
@@ -583,7 +583,7 @@ def test_service_expand_golden_output_and_it_parses_back(tmp_path, pkgroot, no_b
     assert run_cli(["--config", str(p), "bobbin", "expand", "nope"], capsys)[0] == 1
 
 
-def test_service_expand_never_prints_a_secret_value(tmp_path, pkgroot, no_builtins, secrets, capsys):
+def test_bobbin_expand_never_prints_a_secret_value(tmp_path, pkgroot, no_builtins, secrets, capsys):
     envf = tmp_path / "cred.env"
     envf.write_text(f"CRED={SENTINEL}-envfile\n")
     os.chmod(envf, 0o600)
@@ -600,7 +600,7 @@ def test_service_expand_never_prints_a_secret_value(tmp_path, pkgroot, no_builti
     assert rc == 0 and SENTINEL not in out + err
 
 
-def test_service_expand_reports_every_error(tmp_path, pkgroot, no_builtins, secrets, capsys):
+def test_bobbin_expand_reports_every_error(tmp_path, pkgroot, no_builtins, secrets, capsys):
     p = tmp_path / "config.toml"
     p.write_text(cfg_text(tmp_path, pkgroot, digest_body(secrets, "bogus = 1\n").replace(
         'settings = { owner = "someone@example.com" }', "")))
@@ -612,7 +612,7 @@ def test_service_expand_reports_every_error(tmp_path, pkgroot, no_builtins, secr
 
 
 # ---- bobbin list / show / new ---------------------------------------------------------------------------
-def test_service_list_and_show(tmp_path, pkgroot, no_builtins, secrets, capsys):
+def test_bobbin_list_and_show(tmp_path, pkgroot, no_builtins, secrets, capsys):
     p = tmp_path / "config.toml"
     p.write_text(cfg_text(tmp_path, pkgroot, digest_body(secrets)))
     rc, out, _ = run_cli(["--config", str(p), "bobbin", "list"], capsys)
@@ -634,7 +634,7 @@ def test_service_list_and_show(tmp_path, pkgroot, no_builtins, secrets, capsys):
 
 
 @pytest.mark.parametrize("flags", [[], ["--template"], ["--processor"]])
-def test_service_new_scaffolds_a_package_that_loads_and_checks(tmp_path, no_builtins, capsys, flags, secrets):
+def test_bobbin_new_scaffolds_a_package_that_loads_and_checks(tmp_path, no_builtins, capsys, flags, secrets):
     root = tmp_path / "mine"
     root.mkdir(mode=0o755)
     os.chmod(tmp_path, 0o755)
@@ -701,7 +701,7 @@ def test_intake_reload_applies_an_expanded_config(tmp_path, pkgroot, no_builtins
     assert json.loads(r.body)["status"] == "queued"
     rows = st.list(None, source="relay")
     assert rows and rows[0]["destination"] == "script:sink" and rows[0]["key"] == "k1"
-    # an invalid package edit keeps the running config
+    # an invalid bobbin edit keeps the running config
     (pkgroot / "relay" / "bobbin.toml").write_text("name = \"relay\"\nbogus = 1\n")
     _bump(p, 3)
     assert intake.maybe_reload(force=True) is False
@@ -836,7 +836,7 @@ def test_secrets_and_outputs_must_be_tables(tmp_path, pkgroot, no_builtins, secr
     assert has(expand_errors(tmp_path, pkgroot, text), want)
 
 
-def test_service_list_marks_an_invalid_package_and_warns(tmp_path, pkgroot, no_builtins, secrets, capsys):
+def test_bobbin_list_marks_an_invalid_package_and_warns(tmp_path, pkgroot, no_builtins, secrets, capsys):
     make_pkg(pkgroot, "broken", "bogus = 1\n" + MINIMAL.format(name="broken"))
     p = tmp_path / "config.toml"
     p.write_text(cfg_text(tmp_path, pkgroot, ""))
@@ -897,3 +897,38 @@ outputs = {{ build = "hermes:ci-build", "*" = "hermes:ci-other" }}
     toml.write_text(toml.read_text().replace(', attrs = { event_type = "kind" }', ""))
     rep = C.check(load(tmp_path, pkgroot, body), check_secrets=False)
     assert has(rep.warnings, "bobbins.ci", "does not expose event_type in attrs"), rep.warnings
+
+
+# ---- the retired names are refused, not silently accepted (14.3.5 rename) --------------------------------
+
+RETIRED_CONFIG = [
+    ('[services.mail]\nbobbin = "digest"\n', "services"),
+    ('[packages]\npath = ["/somewhere"]\n', "packages"),
+]
+
+
+@pytest.mark.parametrize("body, retired", RETIRED_CONFIG, ids=["services-table", "packages-table"])
+def test_retired_config_tables_are_refused(tmp_path, pkgroot, no_builtins, body, retired):
+    rep = C.check(load(tmp_path, pkgroot, body), check_secrets=False)
+    assert has(rep.errors, retired, "unknown key"), rep.errors
+
+
+def test_retired_instance_key_package_is_refused(tmp_path, pkgroot, no_builtins, secrets):
+    body = digest_body(secrets).replace('bobbin = "digest"', 'package = "digest"')
+    errs = expand_errors(tmp_path, pkgroot, body)
+    assert has(errs, "bobbins.mail.package", "unknown key")
+
+
+def test_retired_env_names_are_gone_from_the_code():
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hookspool")
+    hits = []
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            if f.endswith(".py"):
+                path = os.path.join(dirpath, f)
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+                for old in ("HOOKSPOOL_SERVICE_", "servicekit", "service.toml"):
+                    if old in text:
+                        hits.append(f"{path}: {old}")
+    assert hits == []
