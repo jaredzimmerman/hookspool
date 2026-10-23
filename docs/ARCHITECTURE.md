@@ -785,7 +785,35 @@ A deployment never edits a built-in package. Two ways to change behaviour:
    parent's merged with its own (tables deep-merged, its keys win), and a missing `source.py` /
    `processor.py` falls back to the parent's. A private package is never published with the repo.
 
-#### 14.3.7 Compatibility
+#### 14.3.7 Packages call core; they never re-implement it
+
+A package contains only what is specific to its service: which header is the signature, which fields
+are the key and the dedup id, which API calls answer "what changed", and how a change becomes an output.
+Everything that is the same for two services is core, and a package calls it:
+
+| need | core API (the only allowed way) |
+|---|---|
+| signature / token / timestamp checks | `hookspool.verify` (via `hookspool.plugin.verify`), or the `template` source |
+| JSON paths, headers, dedup ids | `hookspool.plugin` (`get_path`, `Request`, `dedup`) |
+| durable state, journal, replay, atomic writes, locking | `ctx.load_state` / `ctx.save_state` (the runtime holds the state lock for the batch) |
+| results to the agent or another destination | return items from `process`; the runtime emits them |
+| retries, backoff, timeouts, dead-letter | the dispatcher: raise `Retryable`/`Permanent` (or `ctx.fail_permanent`), never loop or sleep |
+| HTTP to the provider's API | `ctx.http` (`hookspool.net`): timeouts, JSON, status → `Retryable`/`Permanent` classification, no bodies in errors or logs |
+| OAuth 2 refresh-token flows | `ctx.oauth(<secret name>)` (`hookspool.net.oauth`): reads the credential through the secret resolver, caches the access token in the runtime's state, refreshes on expiry or 401 |
+| secrets in a processor | `[secrets.*]` in the manifest may be marked `processor = true`; the expansion passes the **reference** (never the value) to the processor and `ctx.secret(name)` resolves it through `hookspool.config`'s resolver |
+| settings | `ctx.settings` (typed, defaults applied); a package never reads `os.environ` |
+| logging | `ctx.log` (processor) / the intake's logger (source); a package never opens log files |
+| time | `ctx.now()` / `req.now` |
+| provider helpers shared by several packages (e.g. Google free/busy, Gmail history paging) | a module under `hookspool/providers/<provider>.py`, written once, built on `ctx.http`/`ctx.oauth` |
+
+Enforcement: the conformance kit (14.3.5) parses every package module and fails on imports of `hmac`,
+`hashlib`, `urllib`, `http.client`, `requests`, `socket`, `subprocess`, `sqlite3`, `threading`,
+`fcntl`, `tempfile`, `logging`, on `open(` for writing, on `os.environ`, `os.replace`, `os.fsync`,
+`time.sleep`, and on `print(`. A package that needs something core lacks gets it added to core (a PR to
+`hookspool/net.py`, `hookspool/providers/`, the runtime or the plugin API), not a private copy.
+`.github/scripts/plugin_ci.py` runs the same check on every changed package.
+
+#### 14.3.8 Compatibility
 
 `[sources.*]` tables keep working exactly as now (they are what an expansion produces). The built-in
 code sources move into their packages; `hookspool.sources.<name>` remains importable as a re-export so
