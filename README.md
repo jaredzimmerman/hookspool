@@ -222,6 +222,7 @@ references (`{ file = ... }`, `{ env_file = ..., key = ... }` or `{ env = ... }`
 | `plaid` | code plugin | ES256 JWT with key fetching that cannot be abused to amplify requests (needs the `plaid` extra) |
 | `gmail` | bobbin | Cloud Pub/Sub push with a token; one batch per mailbox; a processor reports scheduling requests, the assistant's mail and mailbox changes |
 | `gcal` | bobbin | Google Calendar push; a processor reports conflicts, brief requests and changed events |
+| `webhook` | bobbin | any signed or tokened JSON POST, set up from the sender's documentation by settings alone (five schemes); `hookspool bobbin new` copies it into a dedicated bobbin |
 | any other | **your own** | a config table or a short module: [docs/ADDING_A_SOURCE.md](docs/ADDING_A_SOURCE.md) |
 
 | destination | what it does |

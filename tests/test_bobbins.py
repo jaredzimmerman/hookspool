@@ -666,7 +666,7 @@ def test_bobbin_list_and_show(tmp_path, pkgroot, no_builtins, secrets, capsys):
     assert run_cli(["--config", str(p), "bobbin", "show", "nope"], capsys)[0] == 1
 
 
-@pytest.mark.parametrize("flags", [[], ["--template"], ["--processor"]])
+@pytest.mark.parametrize("flags", [[], ["--code"], ["--processor"], ["--set", "scheme=url-token"]])
 def test_bobbin_new_scaffolds_a_package_that_loads_and_checks(tmp_path, no_builtins, capsys, flags, secrets):
     root = tmp_path / "mine"
     root.mkdir(mode=0o755)
@@ -675,7 +675,7 @@ def test_bobbin_new_scaffolds_a_package_that_loads_and_checks(tmp_path, no_built
     assert rc == 0, err
     d = root / "acme-hooks"
     assert (d / "bobbin.toml").is_file() and (d / "README.md").is_file() and (d / "captures" / "example.http").is_file()
-    assert (d / "source.py").exists() is ("--template" not in flags)
+    assert (d / "source.py").exists() is ("--code" in flags)
     assert (d / "processor.py").exists() is ("--processor" in flags)
     pkg = PK.load_package(str(d), str(root), C.DEFAULTS["spans"])
     assert pkg.errors == []
@@ -693,7 +693,7 @@ def test_bobbin_new_scaffolds_a_package_that_loads_and_checks(tmp_path, no_built
 
 def test_scaffolded_capture_verifies_against_the_scaffolded_source(tmp_path, no_builtins):
     from hookspool import plugin as P
-    d = PK.scaffold("acme", str(tmp_path))
+    d = PK.scaffold("acme", str(tmp_path), code=True)
     os.chmod(tmp_path, 0o755)
     PK.register_path_module("_hookspool_bobbins.acme.source", os.path.join(d, "source.py"), d)
     src = P.load_source("acme", {"module": "_hookspool_bobbins.acme.source",

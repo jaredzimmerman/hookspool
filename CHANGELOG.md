@@ -10,6 +10,11 @@ The changes below will ship as 0.2.0.
 
 ### Added
 
+- The `webhook` bobbin: any web service that sends a signed or tokened JSON POST, configured entirely by settings
+  (`[source] template = "settings"`; five schemes). One rule now maps a bobbin setting named after a template key to that
+  key's value, for a fixed template (Trello's `callback_url`) and for `"settings"` alike; settings may be a `table`, and an
+  instance of a `"settings"` bobbin may map any event type next to `"*"`. `hookspool bobbin new <name>` now copies the
+  `webhook` shape and freezes its settings into a fixed template (`--set NAME=VALUE`, `--code` for a `source.py`).
 - `hookspool bobbin check <dir>`: the bobbin conformance kit (`hookspool.testing.bobbinkit`) on one directory, printed as a
   scorecard (`--report text|md|json`, `--strict`, `--base`): manifest and one service per bobbin, files, TODOs, the 14.3.7
   core-only rules, SETUP.md / AGENTS.md, captures (including a scan for secrets and personal data), the source kit per

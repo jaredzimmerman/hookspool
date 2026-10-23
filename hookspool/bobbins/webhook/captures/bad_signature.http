@@ -1,0 +1,10 @@
+# capture: signed with another secret
+# now: 1800000000
+# expect: unverified
+POST /hooks/webhook HTTP/1.1
+Content-Type: application/json
+X-Delivery-Id: d-3
+X-Signature: sha256=3cd7ca31d95983ac57c094231aa92447e400fdef3d90067bfff76fcec1ad9849
+Content-Length: 89
+
+{"id":"evt_1","type":"order.created","note":"made-up test payload PAYLOAD-SENTINEL-7f3a"}

@@ -972,12 +972,11 @@ def _source_kit_base(b: Bobbin) -> tuple[_KitSource | None, str]:
     src = copy.deepcopy(cfg["sources"][b.name])
     src.pop("secrets", None)
     src["action"] = f"hermes:{b.name}"
-    tpl = b.pkg.source.get("template")
     try:
-        if isinstance(tpl, dict):
+        if "template" in b.pkg.source:
             from ..sources import template as T
             module = T.bind(b.name, src)
-            body_signed = tpl.get("scheme") not in ("shared-secret-header", "url-token")
+            body_signed = src.get("scheme") not in ("shared-secret-header", "url-token")
         else:
             mod = b.pkg.source["module"]
             module = _load_module(b, mod) if BL._is_local_module(mod) else importlib.import_module(mod)

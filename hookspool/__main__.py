@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import time
+import tomllib
 
 from . import config as _config
 from .store import STATES, InvalidEvent, LockHeld, SchemaError, SpoolError, Store, acquire_lock
@@ -94,7 +95,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("name", nargs="?", help="the bobbin (show), the instance (expand), the new bobbin's name (new) or"
                                            " the bobbin directory (check)")
     p.add_argument("--dir", default=".", help="new: the parent directory (default: the current directory)")
-    p.add_argument("--template", action="store_true", help="new: a template source instead of source.py")
+    p.add_argument("--code", action="store_true", help="new: a source.py bobbin instead of a copy of the webhook bobbin")
+    p.add_argument("--template", action="store_true", help=argparse.SUPPRESS)       # the default now; kept for old scripts
+    p.add_argument("--set", dest="set_", action="append", default=[], metavar="NAME=VALUE",
+                   help="new: freeze a webhook setting (scheme, header, prefix, key, ...) into the template;"
+                        " the value is TOML (--set 'key=[\"id\"]') or a bare string")
     p.add_argument("--processor", action="store_true", help="new: include a processor.py")
     p.add_argument("--report", choices=("text", "md", "json"), default="text",
                    help="check: the scorecard format (default text)")
@@ -214,6 +219,20 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CONFIG
 
 
+def _set_args(items: list[str]) -> dict | None:
+    """``--set NAME=VALUE`` pairs: the value is a TOML value, else the bare string."""
+    out: dict = {}
+    for item in items:
+        k, eq, raw = item.partition("=")
+        if not eq or not k.strip():
+            raise ValueError(f"--set {item!r}: expected NAME=VALUE")
+        try:
+            out[k.strip()] = tomllib.loads("v = " + raw)["v"]
+        except tomllib.TOMLDecodeError:
+            out[k.strip()] = raw
+    return out or None
+
+
 def _bobbin(a, cfg: dict) -> int:
     """``hookspool bobbin list | show | expand | new`` (ARCHITECTURE §14.3.5). ``cfg`` is the
     file as written (not expanded)."""
@@ -223,7 +242,8 @@ def _bobbin(a, cfg: dict) -> int:
         return EXIT_NOTHING
     if a.subcmd == "new":
         try:
-            d = bobbin_loader.scaffold(a.name, a.dir, template=a.template, processor=a.processor)
+            d = bobbin_loader.scaffold(a.name, a.dir, code=a.code, processor=a.processor,
+                                       settings=_set_args(a.set_))
         except ValueError as e:
             _err(str(e))
             return EXIT_CONFIG
