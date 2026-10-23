@@ -620,11 +620,11 @@ Action strings keep the C0 shorthand: `hermes:<route>` and `script:<name>` resol
 
 ---
 
-### 14.3 Service packages
+### 14.3 Bobbins (service plugins)
 
-A **service package** is the standard, installable unit for one outside service: everything hookspool
+A **bobbin** is the standard, installable plugin for one outside service: everything hookspool
 needs to take that service's webhooks and turn them into work, in one directory. Sources (14.1) and
-script destinations (14.2, 6.6) stay the building blocks; a package bundles them with a manifest so that
+script destinations (14.2, 6.6) stay the building blocks; a bobbin bundles them with a manifest so that
 a deployment enables a service with one config table instead of hand-wiring a source, a script, its
 environment, its state directory and its routes. (Prior art: Hookdeck's source types, Svix's connectors,
 Prefect's blocks: a typed, versioned unit with declared secrets and settings.)
@@ -632,20 +632,30 @@ Prefect's blocks: a typed, versioned unit with declared secrets and settings.)
 #### 14.3.1 Layout
 
 ```
-hookspool/services/<package>/          built in; or <dir>/<package>/ under a configured packages.path
-    service.toml                        the manifest (required)
+hookspool/bobbins/<bobbin>/          built in; or <dir>/<bobbin>/ under a configured spool.bobbin_path
+    bobbin.toml                        the manifest (required)
     source.py                           a code source plugin (14.1), optional
     processor.py                        post-commit work, optional (14.3.4)
     captures/*.http                     conformance captures (ADDING_A_SOURCE.md "Capture files"), required
-    README.md                           what it does, setup at the provider, settings, outputs; required
+    README.md                           what it does, how it works, settings, outputs, limits; required
+    SETUP.md                            human setup: provider-side steps, secrets to create, config table, verify, rollback; required
+    AGENTS.md                           agent setup: the same procedure as numbered, executable steps (14.3.8); required
 ```
 
-Package names match `^[a-z][a-z0-9-]{0,39}$`; `-` maps to `_` for the module name, so two packages whose
-names differ only by `-`/`_` are refused. Built-in packages import as
-`hookspool.services.<package_with_underscores>`. A package under `packages.path` is loaded by file path
+**One bobbin per service.** A bobbin covers exactly one outside service and contains everything needed to
+run that service on top of hookspool: its functional code (source, processor), its settings and secrets,
+its outputs, its captures, and its documentation and setup instructions. Bobbins are never combined (no
+"google" bobbin for Gmail and Calendar: `gmail`, `gcal` and `drive` are three bobbins), and a bobbin never
+imports or reads another bobbin. Code that two bobbins would both need is not shared between them; it
+moves into hookspool core (14.3.7) and both call it. Several instances of one bobbin (e.g. `github-ci` and
+`github-prs`) are configuration, not separate bobbins.
+
+Bobbin names match `^[a-z][a-z0-9-]{0,39}$`; `-` maps to `_` for the module name, so two bobbins whose
+names differ only by `-`/`_` are refused. Built-in bobbins import as
+`hookspool.bobbins.<bobbin_with_underscores>`. A bobbin under `spool.bobbin_path` is loaded by file path
 under a private module name (never added to `sys.path`), and may not share a name with a built-in.
 
-#### 14.3.2 Manifest (`service.toml`)
+#### 14.3.2 Manifest (`bobbin.toml`)
 
 ```toml
 name = "gmail"                                   # must equal the directory name
@@ -653,7 +663,7 @@ version = "1"                                    # free text, shown by `service 
 summary = "Gmail push (Cloud Pub/Sub): new mail in watched mailboxes"
 
 [source]                                         # exactly one of `module` or `template`
-module = "source"                                # source.py in this package, or a dotted module
+module = "source"                                # source.py in this bobbin, or a dotted module
 # template = { scheme = "hmac-sha256-hex", header = "X-Hub-Signature-256", prefix = "sha256=", key = "repository.full_name", ... }
 span = "mail"                                    # default span preset name
 sender_retries = true
@@ -671,11 +681,11 @@ required = true                                  # default false; a non-required
 default = ""                                     # must match `type`
 
 [processor]                                      # optional; absent = events go straight to outputs
-module = "processor"                             # processor.py in this package
+module = "processor"                             # processor.py in this bobbin
 timeout_s = 300
 state = true                                     # keeps state: gets a state_dir; max_inflight is 1
 
-[outputs.scheduling]                             # one table per event_type the package can produce
+[outputs.scheduling]                             # one table per event_type the bobbin can produce
 description = "a message asks the owner for their availability; carries free windows"
 [outputs.agent-mail]
 description = "new mail in the assistant's own mailbox"
@@ -690,11 +700,11 @@ and an output key that is not an event-type token or `"*"` are errors.
 #### 14.3.3 Instances in config
 
 ```toml
-[packages]
-path = ["/etc/hookspool/services"]               # extra package directories, searched after the built-ins
+[spool]
+bobbin_path = ["/etc/hookspool/bobbins"]        # extra bobbin directories, searched after the built-ins
 
-[services.gmail]                                 # instance name = table key; the URL is /hooks/<instance>
-package = "gmail"                                # default: the instance name
+[bobbins.gmail]                                 # instance name = table key; the URL is /hooks/<instance>
+bobbin = "gmail"                                 # default: the instance name
 secrets.push_token = { file = "/etc/hookspool/secrets/gmail_push_token" }
 secrets.cred_owner = { file = "/etc/hookspool/google/owner.json" }
 settings = { owner = "owner@example.com", tz = "America/New_York" }
@@ -705,24 +715,24 @@ expect = true                                    # apply the manifest's expect_e
 #                     across a migration; it must be in the dispatcher unit's ReadWritePaths)
 ```
 
-Two instances of one package are two tables with different keys and the same `package` (e.g.
+Two instances of one bobbin are two tables with different keys and the same `bobbin` (e.g.
 `github-ci` and `github-prs`, each with its own secret).
 
 **Expansion.** Expansion happens inside `load_config`, on every path that builds a config from a file
 (startup, `check`, the intake's and the dispatcher's reload), so every other part of hookspool sees only
 ordinary tables:
 
-1. `sources.<i>`: the package source (the package's `source.py` or the template keys), `secrets` from the
+1. `sources.<i>`: the bobbin source (the bobbin's `source.py` or the template keys), `secrets` from the
    instance, window/expect/dedup/body overrides from the instance, and `action` = `script:<i>` when the
-   package has a processor, else the mapped destination of the single output (or of `"*"`).
+   bobbin has a processor, else the mapped destination of the single output (or of `"*"`).
 2. With a processor, `destinations."script:<i>"` with `processor = "<i>"` (a new script key that replaces
    `argv`: the **dispatcher** builds `[sys.executable, "-I", "-m", "hookspool.processor", "<i>"]` at spawn,
    so the interpreter is always the dispatcher's own and `-I` keeps the working directory off
    `sys.path`), `timeout_s`, `state_dir` (instance override, else `<spool.home>/services/<i>`, when
    `state = true`), `max_inflight = 1`, and an `env` table (a new script key: string values only, names
    `^[A-Z][A-Z0-9_]*$`, never `HOOKSPOOL_*` from config, merged over `env_file`) holding:
-   - `HOOKSPOOL_SERVICE_PACKAGE`, `HOOKSPOOL_SERVICE_INSTANCE`, the package's resolved directory as
-     `HOOKSPOOL_SERVICE_DIR`;
+   - `HOOKSPOOL_BOBBIN`, `HOOKSPOOL_BOBBIN_INSTANCE`, the bobbin's resolved directory as
+     `HOOKSPOOL_BOBBIN_DIR`;
    - `HOOKSPOOL_SETTINGS`: one JSON object, setting name → typed value, defaults applied;
    - `HOOKSPOOL_DELTA_ROUTES`: the JSON of `outputs`;
    - `HOOKSPOOL_SECRET_REFS`: JSON, secret name → its **reference** (never a value) for each secret the
@@ -735,26 +745,26 @@ ordinary tables:
    `attrs`), inserted before the file's own routes; the source's `action` is the `"*"` output, and `check`
    refuses a multi-output instance without `"*"` mapped, so no event can reach a route with no action.
 4. An explicit `[sources.<i>]` or `[destinations."script:<i>"]` that collides with an expansion is an
-   error (no silent override). Unknown instance keys, an unknown package, a missing required setting or
+   error (no silent override). Unknown instance keys, an unknown bobbin, a missing required setting or
    secret, a setting value that does not match its `type`, a setting or output not in the manifest, and a
-   processor package's output mapped to a destination that does not exist are errors. An output the
+   processor bobbin's output mapped to a destination that does not exist are errors. An output the
    instance leaves out is dropped by the processor with one log line per batch (the deployment does not
    want it).
 
-**Reload.** Manifests and package directories are re-read on every config load. Editing a `service.toml`
-or a `packages.path` directory does not touch `config.toml`'s mtime, so it takes effect at the next
+**Reload.** Manifests and bobbin directories are re-read on every config load. Editing a `bobbin.toml`
+or a `spool.bobbin_path` directory does not touch `config.toml`'s mtime, so it takes effect at the next
 `hookspool reload` (or service restart). Processor code is loaded fresh by each processor subprocess, so a
 change to `processor.py` or a hooks module applies to the next batch; source code is loaded by the intake
 at start and on reload.
 
-`hookspool service expand [<i>]` prints the expanded TOML with secret references as references and
+`hookspool bobbin expand [<i>]` prints the expanded TOML with secret references as references and
 `HOOKSPOOL_SECRET_REFS` shown by name only; no value is ever printed.
 
 #### 14.3.4 Processors
 
 `hookspool.processor` is the runtime. `deploy/scripts/hookspool_batch.py` becomes a re-export of it and
-the stand-alone "copy three files" mode is retired; the delta scripts move into their packages. 
-`python -m hookspool.processor <instance>` loads the processor module from `HOOKSPOOL_SERVICE_DIR` and calls
+the stand-alone "copy three files" mode is retired; the delta scripts move into their bobbins. 
+`python -m hookspool.processor <instance>` loads the processor module from `HOOKSPOOL_BOBBIN_DIR` and calls
 
 ```python
 def process(batch: Batch, ctx: Context) -> list[dict]:
@@ -775,46 +785,46 @@ dedup id derived from the batch id and item index), journals emits and staged st
 the journal without calling `process`. `Retryable` or any other exception → exit 75 (retry), with the
 exception class only in the log; `Permanent` → exit 65 (the dispatcher's permanent class); its reason is
 logged (300 characters) and kept with the attempt by the script destination, so it must be a short fixed phrase,
-never a body or a secret. A package without state has no journal: a retry calls `process` again and the
+never a body or a secret. A bobbin without state has no journal: a retry calls `process` again and the
 stable dedup id is the only duplicate guard. Nothing but
 emit lines ever reaches stdout. Unmapped event types are dropped with one log line.
 
 #### 14.3.5 Tooling
 
-- `hookspool service list` — packages found (built-in, then each `packages.path` dir): name, version,
+- `hookspool bobbin list` — bobbins found (built-in, then each `spool.bobbin_path` dir): name, version,
   origin, summary, and which instances use them.
-- `hookspool service show <package>` — secrets, settings (type/required/default), outputs, span,
+- `hookspool bobbin show <bobbin>` — secrets, settings (type/required/default), outputs, span,
   sender_retries, proxy note.
-- `hookspool service expand [<instance>]` — 14.3.3.
-- `hookspool service new <name> [--dir D]` — scaffold (manifest, `source.py` or template, optional
+- `hookspool bobbin expand [<instance>]` — 14.3.3.
+- `hookspool bobbin new <name> [--dir D]` — scaffold (manifest, `source.py` or template, optional
   `processor.py`, one capture, README) that passes the conformance kit once filled in.
-- **Conformance** (`hookspool.testing.servicekit`, run by CI for every package in the repo and by
-  `.github/scripts/plugin_ci.py` for every changed package): manifest valid; the 14.3.7 rules; the source
+- **Conformance** (`hookspool.testing.bobbinkit`, run by CI for every bobbin in the repo and by
+  `.github/scripts/plugin_ci.py` for every changed bobbin): manifest valid; the 14.3.7 rules; the source
   passes the source kit with each capture; the processor (if any) runs each capture's payload through
   `process` with a fake `Context` (stub HTTP), its items' event types are declared outputs, a second run
   of the same batch id replays the journal, and nothing but emits reaches stdout.
 
 #### 14.3.6 Private customisation
 
-A deployment never edits a built-in package. Behaviour changes through:
+A deployment never edits a built-in bobbin. Behaviour changes through:
 
 1. **Settings** (14.3.2).
-2. **A hooks module**: a package that supports hooks declares `[settings.hooks]` with `type = "path"` and
+2. **A hooks module**: a bobbin that supports hooks declares `[settings.hooks]` with `type = "path"` and
    documents the functions it calls (e.g. gmail calls `hooks.classify(message, account) -> dict | None`
    before its own rules; gcal calls `hooks.travel(event, ctx) -> dict | None` for travel blocks). The
    runtime loads it by file path and passes it as `ctx.hooks`. Hooks are deployment code: the 14.3.7
-   rules apply to packages, not to hooks.
-3. **A private package** in a `packages.path` directory, when the service is not in the repo at all.
+   rules apply to bobbins, not to hooks.
+3. **A private bobbin** in a `spool.bobbin_path` directory, when the service is not in the repo at all.
 
-Code loaded by path (a `packages.path` directory, a hooks module) must be an absolute path to a regular
+Code loaded by path (a `spool.bobbin_path` directory, a hooks module) must be an absolute path to a regular
 file or directory that is not group- or other-writable and is owned by root or the user hookspool runs
 as; `check` verifies this as it does for secret files.
 
-#### 14.3.7 Packages call core; they never re-implement it
+#### 14.3.7 Bobbins call core; they never re-implement it, and never each other
 
-A package contains only what is specific to its service: which header is the signature, which fields
+A bobbin contains only what is specific to its service: which header is the signature, which fields
 are the key and the dedup id, which API calls answer "what changed", and how a change becomes an output.
-Everything that is the same for two services is core, and a package calls it:
+Everything that is the same for two services is core, and a bobbin calls it:
 
 | need | core API (the only allowed way) |
 |---|---|
@@ -827,25 +837,45 @@ Everything that is the same for two services is core, and a package calls it:
 | HTTP to the provider's API | `ctx.http` (`hookspool/net.py`): timeouts, JSON, status → `Retryable`/`Permanent`, no bodies or query strings in errors or logs |
 | OAuth 2 refresh-token flows | `ctx.oauth(<secret name>)` (`hookspool/net.py`): reads the credential through `ctx.secret`, caches access tokens in runtime state, refreshes on expiry or one 401, and **never rewrites the credential file** (a rotated refresh token is kept in runtime state and used from then on) |
 | secrets | `ctx.secret(name)` (processor) / the source's `Secrets` (source) |
-| settings | `ctx.settings`; a package never reads the environment |
-| logging | `ctx.log` (processor) / the intake's logger (source); a package never opens log files |
+| settings | `ctx.settings`; a bobbin never reads the environment |
+| logging | `ctx.log` (processor) / the intake's logger (source); a bobbin never opens log files |
 | time | `ctx.now()` / `req.now` |
-| helpers shared by several packages of one provider (Google free/busy, Gmail history paging) | `hookspool/providers/<provider>.py`, written once on `ctx.http` / `ctx.oauth` |
+| helpers shared by several bobbins of one provider (Google free/busy, Gmail history paging) | `hookspool/providers/<provider>.py`, written once on `ctx.http` / `ctx.oauth` |
 
-Enforcement: the conformance kit walks the AST of every package module and fails on imports of `hmac`,
+Enforcement: the conformance kit walks the AST of every bobbin module and fails on imports of `hmac`,
 `urllib`, `http`, `requests`, `httpx`, `aiohttp`, `socket`, `ssl`, `subprocess`, `asyncio`, `threading`,
 `multiprocessing`, `signal`, `sqlite3`, `fcntl`, `tempfile`, `shutil`, `pickle`, `logging`, `importlib`;
 on calls to `open`, `print`, `exec`, `eval`, `compile`, `__import__`, `os.*` other than `os.path.*`,
 `time.sleep`, any `.write_text`/`.write_bytes`/`.open`/`.unlink` method, and on any use of `sys.path` or
-`os.environ`. A package that needs something core lacks gets it added to core (a PR to `hookspool/net.py`,
+`os.environ`, and on any import of `hookspool.bobbins` (a bobbin never imports another bobbin, or itself by
+package path; its own files are siblings loaded by the runtime). A bobbin that needs something core lacks gets it added to core (a PR to `hookspool/net.py`,
 `hookspool/verify.py`, `hookspool/providers/`, the runtime or the plugin API), never a private copy.
-`.github/scripts/plugin_ci.py` runs the same check on every changed package.
+`.github/scripts/plugin_ci.py` runs the same check on every changed bobbin.
 
-#### 14.3.8 Compatibility
+#### 14.3.8 Setup instructions (SETUP.md, AGENTS.md)
+
+Every bobbin ships two setup documents describing the same procedure:
+
+- `SETUP.md` is for a person: what to create at the provider (app, webhook, push subscription, watch
+  channel), which secrets to save where, the `[bobbins.<instance>]` table to add, the reverse-proxy line,
+  how to verify (a test delivery, `hookspool list --source <instance>`), the sweep to install if the
+  sender does not retry, and how to roll back.
+- `AGENTS.md` is for an agent doing the same setup, following the agents.md convention: numbered steps,
+  each with its goal, the exact command or API call (with placeholders in `<ANGLE_CASE>`), what to check
+  afterwards and what to do if the check fails. It opens with a **Needs from the human** list (accounts,
+  consents, values only a person can provide, any step that spends money or changes a shared account),
+  and it never asks the agent to handle a secret's value beyond writing it to the referenced file.
+  Steps that change something at the provider are marked `outward` so an agent asks before running them.
+
+The conformance kit checks that both files exist, that every declared secret and required setting
+appears in both, that `AGENTS.md` has the **Needs from the human** list and numbered steps, and that the
+config table shown in both expands without errors.
+
+#### 14.3.9 Compatibility
 
 `[sources.*]` tables keep working exactly as now (they are what an expansion produces). The built-in code
-sources move into their packages; `hookspool.sources.<name>` stays importable as a re-export so existing
-configs with `[sources.gmail]` (implicit module) still load. `examples/sources/*.toml` become packages on
+sources move into their bobbins; `hookspool.sources.<name>` stays importable as a re-export so existing
+configs with `[sources.gmail]` (implicit module) still load. `examples/sources/*.toml` become bobbins on
 the `template` source.
 
 ## 15. Configuration
