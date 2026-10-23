@@ -266,6 +266,9 @@ def validate_manifest(m: Any, dirname: str, spans: dict) -> list[str]:
                 errs.append(f"outputs.{k}: not an event-type token ({EVENT_TYPE_RE.pattern}) or \"*\"")
             if unknown(f"outputs.{k}", o, OUTPUT_KEYS) and "description" in o and not isinstance(o["description"], str):
                 errs.append(f"outputs.{k}.description: must be a string")
+        if proc is None and len(outputs) >= 2 and ALL_OUTPUTS not in outputs:
+            errs.append('outputs: a package with several outputs and no processor must declare "*"'
+                        " (the source's action; an instance cannot be expanded without it)")
     return errs
 
 
@@ -750,6 +753,10 @@ def check(cfg: dict, rep) -> None:
             if problem:
                 rep.err(f"services.{inst}.settings.{HOOKS_SETTING}: {problem}")
 
+    for inst, meta in metas.items():
+        if meta.get("routes"):
+            _warn_no_event_type_attr(cfg, inst, rep)
+
     routes = cfg.get("routes") if isinstance(cfg.get("routes"), list) else []
     for inst, meta in metas.items():
         if not meta.get("processor"):
@@ -775,6 +782,25 @@ def check(cfg: dict, rep) -> None:
             if isinstance(ref, dict) and "env" in ref:
                 rep.err(f"services.{inst}.secrets.{name}: the processor needs this secret and does not inherit the"
                         " dispatcher's environment; use a file or env_file reference")
+
+
+def _warn_no_event_type_attr(cfg: dict, inst: str, rep) -> None:
+    """The routes generated for a multi-output package match ``event_type`` in ``attrs`` (§14.3.3 step 3);
+    a source that does not expose it sends every event to the ``"*"`` output. Warn, since the plugin's
+    ``attrs`` can only be judged by running it."""
+    s = (cfg.get("sources") or {}).get(inst) or {}
+    if s.get("module") == TEMPLATE_MODULE:
+        attrs = s.get("attrs")
+        ok = isinstance(attrs, dict) and "event_type" in attrs
+    else:
+        try:
+            plugin = _config.default_plugin_loader(inst, s.get("module"))
+        except Exception:  # noqa: BLE001 - check reports an unloadable plugin itself
+            return
+        ok = getattr(getattr(plugin, "module", plugin), "attrs", None) is not None
+    if not ok:
+        rep.warn(f"services.{inst}: its source does not expose event_type in attrs, so the generated routes"
+                 " (one per output) never match and every event reaches the \"*\" output")
 
 
 def is_expanded_destination(cfg: dict, name: str) -> bool:

@@ -167,6 +167,8 @@ def test_a_valid_manifest_has_no_errors():
     (lambda m: m + '\n[processor]\nstate = "yes"\n', "processor.state"),
     (lambda m: m + '\n[processor]\nretries = 3\n', "processor.retries: unknown key"),
     (lambda m: m.replace("[source]", "[source]\nsender_retries = 1"), "source.sender_retries"),
+    (lambda m: m.replace('[outputs."*"]\ndescription = "all"', "[outputs.a]\n[outputs.b]"),
+     'several outputs and no processor must declare "*"'),
 ])
 def test_every_manifest_error_rule(edit, expect):
     errs = manifest_errors(edit(MINIMAL.format(name="pkg")))
@@ -768,3 +770,132 @@ def test_script_processor_builds_its_argv_at_spawn(tmp_path, monkeypatch):
     assert o.kind == "retry" and seen["argv"] == [sys.executable, "-I", "-m", "hookspool.processor", "mail"]
     assert seen["env"]["HOOKSPOOL_SERVICE_INSTANCE"] == "mail"
     assert d.check() == []
+
+
+# ---- round 1: reload keeps --home, more negative cases ---------------------------------------------------
+def _homeless_config(tmp_path, pkgroot, body: str) -> str:
+    """A config with no [spool] home, so --home is the only thing that places the processor's state."""
+    home = tmp_path / "home"
+    return cfg_text(tmp_path, pkgroot, body).replace(f'[spool]\nhome = "{home}"\n', "")
+
+
+def test_intake_reload_keeps_the_cli_home_and_so_the_processor_state_dir(tmp_path, pkgroot, no_builtins, secrets,
+                                                                          monkeypatch, make_store):
+    from hookspool import intake as I
+    monkeypatch.delenv("HOOKSPOOL_HOME", raising=False)
+    cli_home = str(tmp_path / "cli-home")
+    subs = tmp_path / "subs.json"
+    write_subs(subs, ["mail-summary", "mail-alert"])
+    p = tmp_path / "config.toml"
+    body = digest_body(secrets) + f'[hermes]\nsubscriptions_path = "{subs}"\n'
+    p.write_text(_homeless_config(tmp_path, pkgroot, body))
+    cfg = C.load_config(str(p), cli_home=cli_home)
+    want = os.path.join(cli_home, "services", "mail")
+    assert cfg["destinations"]["script:mail"]["state_dir"] == want
+    intake = I.Intake(cfg, make_store(cfg), config_path=str(p), cli_home=cli_home)
+    p.write_text(_homeless_config(tmp_path, pkgroot, body + "\n# edited\n"))
+    _bump(p, 5)
+    assert intake.maybe_reload(force=True) is True
+    assert intake.cfg["destinations"]["script:mail"]["state_dir"] == want
+
+
+def test_dispatcher_reload_keeps_the_cli_home_and_so_the_processor_state_dir(rig, tmp_path, pkgroot, no_builtins,
+                                                                              secrets, monkeypatch):
+    monkeypatch.delenv("HOOKSPOOL_HOME", raising=False)
+    cli_home = str(tmp_path / "cli-home")
+    subs = tmp_path / "subs.json"
+    write_subs(subs, ["mail-summary", "mail-alert"])
+    p = tmp_path / "config.toml"
+    body = digest_body(secrets) + f'[hermes]\nsubscriptions_path = "{subs}"\n'
+    r = rig(config_path=str(p), cli_home=cli_home)
+    p.write_text(_homeless_config(tmp_path, pkgroot, body))
+    _bump(p, 1)
+    r.d.tick()
+    want = os.path.join(cli_home, "services", "mail")
+    assert r.d.config["destinations"]["script:mail"]["state_dir"] == want
+    p.write_text(_homeless_config(tmp_path, pkgroot, body + "\n# edited\n"))
+    _bump(p, 2)
+    r.d.tick()
+    assert r.d.config["destinations"]["script:mail"]["state_dir"] == want
+
+
+def test_check_refuses_argv_and_processor_on_an_expanded_table(tmp_path, pkgroot, no_builtins, secrets):
+    cfg = load(tmp_path, pkgroot, digest_body(secrets))
+    cfg["destinations"]["script:mail"]["argv"] = ["/bin/true"]
+    rep = C.check(cfg, check_secrets=False)
+    assert has(rep.errors, "script:mail", "argv and processor are exclusive"), rep.errors
+
+
+@pytest.mark.parametrize("secrets_line,outputs_line,want", [
+    ("secrets = 5", 'outputs = { "*" = "script:sink" }', "services.relay.secrets: must be a table"),
+    ("secrets = []", 'outputs = { "*" = "script:sink" }', "services.relay.secrets: must be a table"),
+    ("secrets.secret = { file = \"{sig}\" }", 'outputs = "script:sink"', "services.relay.outputs: must be a table"),
+    ("secrets.secret = { file = \"{sig}\" }", 'outputs = ["script:sink"]', "services.relay.outputs: must be a table"),
+])
+def test_secrets_and_outputs_must_be_tables(tmp_path, pkgroot, no_builtins, secrets, secrets_line, outputs_line, want):
+    text = (f"\n[services.relay]\n{secrets_line.replace('{sig}', secrets['sig'])}\n{outputs_line}\n"
+            '[destinations."script:sink"]\nargv = ["/bin/true"]\n')
+    assert has(expand_errors(tmp_path, pkgroot, text), want)
+
+
+def test_service_list_marks_an_invalid_package_and_warns(tmp_path, pkgroot, no_builtins, secrets, capsys):
+    make_pkg(pkgroot, "broken", "bogus = 1\n" + MINIMAL.format(name="broken"))
+    p = tmp_path / "config.toml"
+    p.write_text(cfg_text(tmp_path, pkgroot, ""))
+    rc, out, err = run_cli(["--config", str(p), "service", "list"], capsys)
+    assert rc == 0
+    line = next(ln for ln in out.splitlines() if ln.startswith("broken"))
+    assert line.endswith("(invalid)")
+    assert not any(ln.endswith("(invalid)") for ln in out.splitlines() if not ln.startswith("broken"))
+    assert "warning: service broken: bogus: unknown key" in err
+    rc, out, _ = run_cli(["--config", str(p), "--json", "service", "list"], capsys)
+    assert {r["name"]: r["valid"] for r in json.loads(out)}["broken"] is False
+
+
+MULTI_CODE = MINIMAL.format(name="multi").replace('template = { scheme = "url-token", key = "id" }',
+                                                   'module = "source"').replace(
+    '[outputs."*"]\ndescription = "all"', '[outputs.a]\n[outputs.b]\n[outputs."*"]\ndescription = "all"')
+SOURCE_PY = (
+    "from hookspool.plugin import Request, Secrets\n"
+    "name = 'multi'\nsecrets = ('secret',)\n\n\n"
+    "def verify(req: Request, secrets: Secrets) -> bool:\n    return True\n\n\n"
+    "def key(payload, req):\n    return str(payload['id'])\n\n\n"
+    "def event_type(payload, req):\n    return str(payload.get('type'))\n")
+MULTI_BODY = """
+[services.multi]
+secrets.secret = {{ file = "{sig}" }}
+outputs = {{ a = "script:sink", "*" = "script:sink" }}
+[destinations."script:sink"]
+argv = ["/bin/true"]
+"""
+
+
+def test_check_warns_when_a_multi_output_code_source_has_no_attrs(tmp_path, pkgroot, no_builtins, secrets):
+    assert manifest_errors(MULTI_CODE, "multi") == []
+    make_pkg(pkgroot, "multi", MULTI_CODE, {"source.py": SOURCE_PY})
+    body = MULTI_BODY.format(sig=secrets["sig"])
+    rep = C.check(load(tmp_path, pkgroot, body), check_secrets=False)
+    assert rep.errors == [], rep.errors
+    assert has(rep.warnings, "services.multi", "does not expose event_type in attrs"), rep.warnings
+    # with attrs exposing event_type there is no warning
+    (pkgroot / "multi" / "source.py").write_text(
+        SOURCE_PY + "\n\ndef attrs(payload, req):\n    return {'event_type': str(payload.get('type'))}\n")
+    rep = C.check(load(tmp_path, pkgroot, body), check_secrets=False)
+    assert not has(rep.warnings, "event_type in attrs"), rep.warnings
+    # a single-output instance routes nothing by event_type, so it never warns
+    rep = C.check(load(tmp_path, pkgroot, body.replace('a = "script:sink", ', "")), check_secrets=False)
+    assert not has(rep.warnings, "event_type in attrs"), rep.warnings
+
+
+def test_check_warns_when_a_multi_output_template_has_no_event_type_attr(tmp_path, pkgroot, no_builtins, secrets):
+    body = f"""
+[services.ci]
+package = "fanout"
+secrets.secret = {{ file = "{secrets['sig']}" }}
+outputs = {{ build = "hermes:ci-build", "*" = "hermes:ci-other" }}
+"""
+    assert not has(C.check(load(tmp_path, pkgroot, body), check_secrets=False).warnings, "event_type in attrs")
+    toml = (pkgroot / "fanout" / "service.toml")
+    toml.write_text(toml.read_text().replace(', attrs = { event_type = "kind" }', ""))
+    rep = C.check(load(tmp_path, pkgroot, body), check_secrets=False)
+    assert has(rep.warnings, "services.ci", "does not expose event_type in attrs"), rep.warnings
