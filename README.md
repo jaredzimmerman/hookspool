@@ -44,13 +44,14 @@ endpoint or an agent gateway receives it. The design and every failure mode are 
 ```sh
 git clone https://github.com/jaredzimmerman/hookspool && cd hookspool
 python3 -m venv .venv && . .venv/bin/activate && pip install .
+export HOOKSPOOL_HOME="$PWD/demo"   # config.toml lives here (written in the full quick start)
 hookspool check          # validate config.toml
 hookspool migrate        # create the spool
 hookspool dispatch &     # the deliverer
 hookspool intake &       # listens on 127.0.0.1:8650
 ```
 
-The [full quick start](docs/getting-started/quick-start.md) writes the config, sends signed events and shows three of them
+This block is an outline: it needs a `config.toml` in that directory. The [full quick start](docs/getting-started/quick-start.md) writes it, sends signed events and shows three of them
 arriving as one delivery. Other first steps are in [docs/getting-started/](docs/getting-started/README.md).
 
 ## Bobbins

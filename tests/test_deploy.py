@@ -352,7 +352,7 @@ def test_config_example_check_catches_a_hermes_events_filter(placed, capsys, mon
 
 def test_config_example_every_source_is_covered_by_the_readme_sweep_table():
     readme = read_ops("sweeps.md")
-    table = readme.split("## Sweeps: which senders retry")[1].split("### Known limits")[0]
+    table = readme.split("# Sweeps\n")[1].split("### Known limits")[0]
     rows = {ln.split("|")[1].strip().lower(): ln for ln in table.splitlines() if ln.startswith("| ") and "---" not in ln}
     for src in [*CONFIG["sources"], *CONFIG["bobbins"]]:
         key = {"gmail": "gmail (pub/sub)", "gcal": "calendar"}.get(src, src)
@@ -381,7 +381,7 @@ def test_operations_pages_have_the_required_sections_and_rows():
     sweeps, upgrading = read_ops("sweeps.md"), read_ops("upgrading.md")
     r = "\n".join((running, drills, sweeps, upgrading, read_ops("day-two.md")))
     for page_text, h in ((running, "## Install"), (running, "## Rollout order and rollback"),
-                         (drills, "## Gateway-down drill"), (sweeps, "## Sweeps: which senders retry"),
+                         (drills, "## Gateway-down drill"), (sweeps, "# Sweeps"),
                          (sweeps, "### Known limits"), (upgrading, "# Upgrading")):
         assert h in page_text, h
     # rollout: GitHub first, every step names its rollback

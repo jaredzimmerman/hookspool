@@ -2,8 +2,6 @@
 
 The commands you reach for once it is running.
 
-## Day-two commands
-
 ```
 hookspool status                     # the one-screen health view (same JSON as /healthz)
 hookspool issues                     # open issues; ack / resolve / ignore <id>

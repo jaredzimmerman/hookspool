@@ -2,8 +2,6 @@
 
 How to move a running install to a new version.
 
-## Upgrading
-
 A schema change ships with a migration ([Architecture](../architecture/ARCHITECTURE.md), section 17). Only the dispatcher at startup and
 `hookspool migrate` apply one, and both services run `hookspool check` first, which exits 2 on an older schema. So
 after a package upgrade the dispatcher does **not** fix the schema by restarting: it fails its `ExecStartPre` and

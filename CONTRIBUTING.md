@@ -27,8 +27,6 @@ hookspool bobbin check hookspool/bobbins/<name> --base origin/main              
 Anything outside a bobbin directory is a core change and is reviewed as one. These rules are enforced by tests and reviewed
 by hand.
 
-These are enforced by tests and reviewed by hand.
-
 - **The core has no per-source code.** Behaviour specific to one sender lives in that sender's plugin or table, never in
   `store.py`, `intake.py`, `dispatch.py`, `config.py` or the destinations. If you find yourself adding an `if source ==`
   anywhere else, the plugin API is missing something; open an issue instead.

@@ -2,8 +2,6 @@
 
 A webhook replaces a poll but never completely. This page says which senders retry and what keeps the rest honest.
 
-## Sweeps: which senders retry, and what keeps the rest honest
-
 A webhook replaces a poll but never fully ([Architecture](../architecture/ARCHITECTURE.md), section 13). Every migrated job keeps a sweep
 that is cheap (at most two runs a day), idempotent with the push path, and replaced by `expect_every_s` where the
 push covers it completely. If a source's `expect_every_s` passes with no event, a `source_silent` issue opens: that

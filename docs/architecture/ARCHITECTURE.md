@@ -353,7 +353,7 @@ The counter exists for one case: a destination that is **responsive but fails on
 
 A `script:<name>` destination runs `argv` with the batch document on stdin and `HOOKSPOOL_BATCH_ID`, `HOOKSPOOL_DELIVERY_ID` in the environment, in its own session (so a timeout kills the whole process group). Exit 0 is success; exit 65 (a processor's `Permanent`) dead-letters the batch at once and every other non-zero exit is retried. Stdout lines of the form `{"enqueue": {...}}` are validated (same rules as the intake) and inserted **in the same fenced transaction** that marks the batch delivered: either the script's effects are recorded and the batch is done, or neither. A script that emits nothing and exits 0 is a successful no-op. Emits may target any route (the usual case: a bobbin's processor or a delta-style script emits a `hermes:` route event when something needs the agent).
 
-Scripts therefore never talk to the gateway themselves; they report facts to the spool and the spool delivers them. Scripts that keep their own state (history ids, sync tokens) write it under a directory the deployment lists in the unit's `ReadWritePaths` (section 13 and `deploy/README.md`).
+Scripts therefore never talk to the gateway themselves; they report facts to the spool and the spool delivers them. Scripts that keep their own state (history ids, sync tokens) write it under a directory the deployment lists in the unit's `ReadWritePaths` (section 13 and [Running it](../operations/running.md)).
 
 A script that advances its own state while it reads has one more hazard: killed between "state advanced" and "emits committed" (or losing its lease after exiting 0), it would lose its report, because the retry finds nothing new. The processor runtime (14.3.4) and any script that imports `deploy/scripts/hookspool_batch.py` therefore stage their state writes, write the emits and the staged writes to a journal in `state_dir` keyed by `HOOKSPOOL_BATCH_ID` (stable across attempts for a `script`), apply the state, then print the emits; a retry of the same batch replays the journal and does not read the outside system again (`deploy/scripts/README.md`). Any script with that shape should do the same.
 
@@ -870,7 +870,7 @@ emit lines ever reaches stdout. Unmapped event types are dropped with one log li
   documentation is linked and matches the declared scheme; the captures came from a real delivery and were redacted; the
   author can maintain the bobbin or accepts its removal if it breaks) is the expected merge. What the maintainer still
   checks by hand is the provider's documentation against the declared scheme and the capture bodies; a `touches-core`
-  diff is reviewed as a core change. [the review page](../bobbins/review.md) is the reviewer's page.
+  diff is reviewed as a core change. [Reviewing a bobbin](../bobbins/review.md) is the reviewer's page.
 
 #### 14.3.6 Private customisation
 

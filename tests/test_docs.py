@@ -35,6 +35,7 @@ import sourcekit  # noqa: E402
 from test_deploy import deny_regex, local_deny_terms  # noqa: E402
 
 from hookspool import __main__ as cli  # noqa: E402
+from hookspool import bobbin_loader  # noqa: E402
 from hookspool import config as hs_config  # noqa: E402
 from hookspool import verify as hs_verify  # noqa: E402
 from hookspool.sources import template  # noqa: E402
@@ -231,6 +232,15 @@ def test_config_page_breaker_section():
     assert set(rows) == hs_config._BREAKER_KEYS
     for k, r in rows.items():
         assert norm(r[1]) == float(hs_config.DEFAULTS["dispatch"]["breaker"][k]), k
+
+
+def test_config_page_bobbin_instance_keys():
+    sec = section(page("docs/configuration/README.md"), "`[bobbins.<instance>]`")
+    got = first_cell_keys(sec)
+    assert got == set(bobbin_loader.INSTANCE_KEYS), sorted(got ^ set(bobbin_loader.INSTANCE_KEYS))
+    # an undocumented key (or a documented key the loader does not know) must fail the comparison
+    assert got | {"not_a_key"} != set(bobbin_loader.INSTANCE_KEYS)
+    assert got - {"expect"} != set(bobbin_loader.INSTANCE_KEYS)
 
 
 def test_config_page_spans_match_the_presets():
