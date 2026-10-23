@@ -6,7 +6,7 @@ summary = "Google Drive push (watch channel): file changes, new files and files 
 module = "source"
 span = "calendar"
 sender_retries = true
-expect_every_s = 172800
+expect_every_s = 604800
 proxy = "nothing to keep: the authentication is the X-Goog-Channel-Token header, which Google sends"
 
 [secrets.channel_token]

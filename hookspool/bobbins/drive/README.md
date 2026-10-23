@@ -73,9 +73,10 @@ dispatcher's use of the instance, delete that file and let the next push bootstr
 
 ## Limits
 
-* A pass reads at most 50 pages of 1000 changes.
+* A pass reads at most 50 pages of 1000 changes. If the cap is hit, the rest waits for the next push (logged
+  "more pending"); on a quiet Drive that can be days.
 * A watch channel expires; Google does not warn. Renew it daily (SETUP.md) and set `expect = true` so silence
-  opens an issue.
+  opens an issue (default: a week without a push; a quiet Drive can be silent for days).
 * Drive reports a change per file save, so a file being edited produces many pushes; the `calendar` span (45 s
   quiet, 180 s max) turns them into few passes, and one item per file per pass.
 * Errors map as everywhere: 408, 425, 429 and 5xx retry the batch (exit 75); another 4xx is permanent (exit 65,

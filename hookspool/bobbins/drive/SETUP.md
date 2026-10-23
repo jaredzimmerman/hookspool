@@ -38,9 +38,12 @@ private (mode 0700).
 
 ## 3. Create the watch channel
 
-First get a start page token (`GET https://www.googleapis.com/drive/v3/changes/startPageToken`, with the same
-`driveId`, `supportsAllDrives=true` parameters if you watch a shared drive). Then call `changes.watch`:
-`POST https://www.googleapis.com/drive/v3/changes/watch?pageToken=<that token>` with a JSON body
+First get a start page token (`GET https://www.googleapis.com/drive/v3/changes/startPageToken`). If you set
+`drive_id` (a shared drive), add `driveId=<DRIVE_ID>&supportsAllDrives=true&includeItemsFromAllDrives=true` to
+that call and to the watch call below; without them the channel watches the account's own feed and changes in the
+shared drive send no push. Then call `changes.watch`:
+`POST https://www.googleapis.com/drive/v3/changes/watch?pageToken=<that token>` (plus the same three parameters
+for a shared drive) with a JSON body
 `{"id": "<a channel id you make up>", "type": "web_hook", "address": "https://<HOST>/hooks/drive", "token": "<the content of drive_channel_token>", "expiration": <milliseconds since the epoch, at most a week ahead>}`.
 The response carries `resourceId` and `expiration`; keep both, they are needed to stop the channel. Google first
 sends a `sync` ping; the bobbin acknowledges it without queuing anything. A channel cannot be edited: to change
@@ -58,7 +61,9 @@ the address, create a new channel and stop the old one after the first push arri
 
 A channel lasts at most a week. Run a daily job that creates a new channel (step 3: same address and token, new
 `id`) and stops the old one (`POST https://www.googleapis.com/drive/v3/channels/stop` with
-`{"id": "<old id>", "resourceId": "<old resourceId>"}`), and keep `expect = true` (2 days of silence opens a
-`source_silent` issue). Google retries a failed push with backoff for a limited time, so a long outage is
+`{"id": "<old id>", "resourceId": "<old resourceId>"}`), and keep `expect = true` (a week without any push opens a
+`source_silent` issue; a very quiet Drive can be silent that long, in which case leave `expect` out or raise
+`expect_every_s`). A pass reads at most 50 pages of 1000 changes; if a burst is larger, the rest waits for the
+next push, which on a quiet Drive can be days. Google retries a failed push with backoff for a limited time, so a long outage is
 reconciled by the next push, which reads from the stored page token. To roll back, stop the channel and remove the
 `[bobbins.drive]` table; the spool keeps what it accepted.

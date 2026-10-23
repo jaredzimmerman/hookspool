@@ -1,10 +1,10 @@
 """Google Drive processor: a push for the change feed -> one report item per changed file.
 
 Runs for one batch of watch-channel pushes; a push only says that the feed moved, so one pass reads every change
-since the stored page token (``changes.list``) whatever the batch holds (a ``sync`` ping only bootstraps).
+since the stored page token (``changes.list``) whatever the batch holds (a stored token is never thrown away, a ``sync`` ping included).
 No model is involved and no file content is ever read: an item carries identity, not contents. A pass:
 
-1. Reads the feed from the stored page token, pages included. The first push, a ``sync`` ping, or a token Drive
+1. Reads the feed from the stored page token, pages included. The first pass (no stored token) or a token Drive
    rejects (HTTP 404 or 410) only stores a fresh start page token and reports nothing.
 2. Keeps the last change per file, and drops: removals (nothing left to describe), files in the trash (unless
    ``include_trashed``), MIME types in ``skip_mime_types``, and changes whose actor is one of the ``own``
@@ -103,8 +103,8 @@ def _pass(ctx, cfg: Config, state_ev: str) -> list[dict]:
         ctx.save_state(STATE, {"pageToken": token, "high_water": now.isoformat(), "bootstrapped": now.isoformat()})
         ctx.log(f"bootstrap ({reason}) state={state_ev}")
 
-    if state_ev == "sync" or not state.get("pageToken"):
-        bootstrap("sync message" if state_ev == "sync" else "no page token")
+    if not state.get("pageToken"):
+        bootstrap("no page token")
         return []
     try:
         changes, token, finished = G.drive_changes(client, str(state["pageToken"]), base=cfg.api, drive_id=cfg.drive_id)

@@ -222,9 +222,18 @@ def test_first_push_bootstraps_a_start_token_and_says_nothing(make, google):
     assert google.count("GET", "/drive/changes/startPageToken") == 1 and google.count("GET", "/drive/changes") == 1
 
 
-def test_a_sync_ping_rebootstraps(make, google):
+def test_a_sync_ping_with_a_stored_token_keeps_it_and_reads_the_feed(make, google):
     rig = make()
-    seed(rig)
+    seed(rig, "p0")
+    google.drive_start = "start-fresh"
+    google.drive_pages = [feed(chg(fil("f1")), token="p1")]
+    assert kinds(rig.items(push("sync"))) == ["file-changed"], "changes since the stored token are not skipped"
+    assert rig.get_state(dp.STATE)["pageToken"] == "p1"
+    assert google.count("GET", "/drive/changes/startPageToken") == 0
+
+
+def test_a_sync_ping_without_a_token_bootstraps(make, google):
+    rig = make()
     google.drive_start = "start-fresh"
     assert rig.items(push("sync")) == []
     assert rig.get_state(dp.STATE)["pageToken"] == "start-fresh"
@@ -538,7 +547,7 @@ argv = ["/bin/true"]
     cfg = C.load_config(str(p))
     src, dst = cfg["sources"]["drive"], cfg["destinations"]["script:drive"]
     assert src["module"] == "hookspool.bobbins.drive.source" and src["action"] == "script:drive"
-    assert src["span"] == "calendar" and src["expect_every_s"] == 172800
+    assert src["span"] == "calendar" and src["expect_every_s"] == 604800
     assert dst["processor"] == "drive" and dst["max_inflight"] == 1
     env = dst["env"]
     assert json.loads(env["HOOKSPOOL_SECRET_REFS"]) == {"cred": {"file": s["cred"]}}
