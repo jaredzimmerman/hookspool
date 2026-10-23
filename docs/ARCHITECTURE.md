@@ -665,6 +665,8 @@ summary = "Gmail push (Cloud Pub/Sub): new mail in watched mailboxes"
 [source]                                         # exactly one of `module` or `template`
 module = "source"                                # source.py in this bobbin, or a dotted module
 # template = { scheme = "hmac-sha256-hex", header = "X-Hub-Signature-256", prefix = "sha256=", key = "repository.full_name", ... }
+# template = "settings"                          # the `webhook` bobbin only: the template keys come from the instance's
+#                                                # settings of the same names (14.3.2a)
 span = "mail"                                    # default span preset name
 sender_retries = true
 expect_every_s = 345600                          # recommended; applied only when the instance sets expect = true
@@ -696,6 +698,22 @@ event" (the only key that may stand for more than one event type). `check` valid
 loads: unknown keys, name/directory mismatch, both or neither of `module`/`template`, a span that is not a
 preset, a setting without `type`, a `default` of the wrong type, a non-required setting without `default`,
 and an output key that is not an event-type token or `"*"` are errors.
+
+#### 14.3.2a The `webhook` bobbin (general web services)
+
+`hookspool/bobbins/webhook/` is the bobbin for any web service that has no bobbin of its own and sends a
+signed or tokened JSON POST. Its manifest says `[source] template = "settings"` and declares one typed
+setting per template key (`scheme`, `header`, `prefix`, `param`, `callback_url`, `head_handshake`, `key`,
+`dedup`, `ignore` (list), `event_type`, `attrs` (a table), `sender_retries`), so the expansion builds the
+template source from the instance's settings and `check` validates them exactly as it validates a
+`template` source. It has one secret (`secret`), no processor, and the output `"*"` (plus per-event-type
+outputs routed by `event_type`, 14.3.3 step 3). Its `SETUP.md` and `AGENTS.md` are a procedure for reading
+a provider's webhook documentation into those settings (where the signature is, what is signed, which
+field identifies the object, which header carries a delivery id, whether the sender retries) and for
+testing with a captured delivery. It is also the scaffold: `hookspool bobbin new <name>` copies it and
+turns its settings into a fixed `[source] template` table, which is how a dedicated bobbin starts. When
+the same service is set up through `webhook` by several deployments, that is the signal to give it its own
+bobbin.
 
 #### 14.3.3 Instances in config
 

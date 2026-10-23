@@ -472,9 +472,10 @@ def load_hooks(settings: Settings, instance: str):
     return _load_file(_private_name("hooks", instance), path)
 
 
-def _default_extras(state: dict, secret_resolver: Callable[[str], str]) -> Mapping[str, Any]:
+def _default_extras(state: dict, secret_resolver: Callable[[str], str], **kw: Any) -> Mapping[str, Any]:
+    """The network layer's ``{"http", "oauth", "secret"}``; ``kw`` is its ``log`` / ``now`` / ``persist``."""
     from .net import make_context_extras            # imported only when a processor uses ctx.http / ctx.oauth
-    return make_context_extras(state, secret_resolver)
+    return make_context_extras(state, secret_resolver, **kw)
 
 
 class Context:
@@ -484,27 +485,44 @@ class Context:
     def __init__(self, *, instance: str, settings: Settings | None = None, secret_refs: Mapping[str, Any] | None = None,
                  state_dir: str = "", hooks: Any = None, runtime_state: dict | None = None, err=None,
                  clock: Callable[[], float] = time.time,
-                 extras_factory: Callable[[dict, Callable[[str], str]], Mapping[str, Any]] | None = None):
+                 extras_factory: Callable[[dict, Callable[[str], str]], Mapping[str, Any]] | None = None,
+                 persist: Callable[[], None] | None = None):
         from .plugin import Secrets
         self.instance = instance
         self.settings = settings if settings is not None else Settings({})
         self.hooks = hooks
-        self._secrets = Secrets(secret_refs or {}, source=instance)
+        self._refs = dict(secret_refs or {})
+        self._secrets = Secrets(self._refs, source=instance)
         self._sdir = state_dir
         self._runtime = runtime_state if runtime_state is not None else {}
         self._err = err
         self._clock = clock
-        self._factory = extras_factory or _default_extras
+        self._factory = extras_factory
+        self._persist = persist
         self._extras: Mapping[str, Any] | None = None
 
     # secrets and the network ------------------------------------------------------------------
-    def secret(self, name: str) -> str:
-        """The value of a ``processor = true`` secret, resolved now. Never log it."""
+    def _resolve(self, name: str) -> str:
+        """The resolver handed to the network layer: ``KeyError`` for a secret this processor was not
+        given (which it turns into ``Permanent``), ``SecretError`` for a reference that cannot be read
+        now (``Retryable``)."""
+        if name not in self._refs:
+            raise KeyError(name)
         return self._secrets[name]
+
+    def secret(self, name: str) -> str:
+        """The value of a ``processor = true`` secret, resolved now. Never log it. A name the processor
+        was not given is ``Permanent``; a reference that cannot be read now is ``Retryable``."""
+        access = self._x().get("secret")
+        return access(name) if access is not None else self._resolve(name)
 
     def _x(self) -> Mapping[str, Any]:
         if self._extras is None:
-            self._extras = self._factory(self._runtime, self.secret)
+            if self._factory is None:
+                self._extras = _default_extras(self._runtime, self._resolve, log=self.log, now=self._clock,
+                                               persist=self._persist)
+            else:
+                self._extras = self._factory(self._runtime, self._resolve)
         return self._extras
 
     @property
@@ -631,6 +649,10 @@ def run(instance: str, doc: dict | None = None, *, env: Mapping[str, str] | None
             else:
                 runtime = _load_runtime(sdir)
                 before = json.dumps(runtime, sort_keys=True, default=str)
+
+                def persist() -> None:                # a rotated refresh token is written at once
+                    if sdir:
+                        _atomic_write(os.path.join(sdir, RUNTIME_FILE), runtime)
                 try:
                     with redirect_stdout(err):
                         manifest = read_manifest(service_dir) if service_dir else {}
@@ -638,7 +660,7 @@ def run(instance: str, doc: dict | None = None, *, env: Mapping[str, str] | None
                         mod = load_processor(service_dir, instance, manifest)
                         ctx = Context(instance=instance, settings=settings, secret_refs=_secret_refs(env),
                                       state_dir=sdir, hooks=load_hooks(settings, instance), runtime_state=runtime,
-                                      err=err, clock=clock, extras_factory=extras_factory)
+                                      err=err, clock=clock, extras_factory=extras_factory, persist=persist)
                         with staging() as st:
                             emits = build_emits(mod.process(batch, ctx), batch, instance, routes, log)
                             j = _new_journal(batch.id, emits, st)

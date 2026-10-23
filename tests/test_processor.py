@@ -408,7 +408,52 @@ def test_secrets_resolve_through_the_config_resolver_and_are_never_logged(rig):
     """)
     rc, emits, err = rig.run(env={"HOOKSPOOL_SECRET_REFS": json.dumps({"api_token": {"file": str(sec)}})})
     assert rc == 0 and emits[0]["payload"]["ok"] is True
-    assert f"token length {len(SENTINEL)}" in err and "other: SecretError" in err and SENTINEL not in err
+    assert f"token length {len(SENTINEL)}" in err and "other: Permanent" in err and SENTINEL not in err
+
+
+def test_ctx_secret_goes_through_the_network_layer_unknown_is_permanent_unreadable_is_retryable(rig):
+    from hookspool import net
+    rig.processor("""\
+        from hookspool import net
+
+        def process(batch, ctx):
+            assert isinstance(ctx.http, net.Http)
+            ctx.secret(batch.events[0]["name"])
+            return []
+    """)
+    refs = {"HOOKSPOOL_SECRET_REFS": json.dumps({"gone": {"file": str(rig.tmp / "missing")}})}
+    rc, _, err = rig.run(doc({"name": "undeclared"}), env=refs)
+    assert rc == P.EX_PERMANENT and "not available to this processor" in err
+    rc, _, err = rig.run(doc({"name": "gone"}), env=dict(refs, HOOKSPOOL_BATCH_ID="8"))
+    assert rc == P.EX_RETRY
+    assert P.Permanent is net.Permanent and P.Retryable is net.Retryable
+
+
+def test_the_default_extras_get_the_runtime_log_clock_and_an_immediate_persist(rig, monkeypatch):
+    import types
+    name = P.__name__.rsplit(".", 1)[0] + ".net"
+    seen = {}
+    fake = types.ModuleType(name)
+
+    def make_context_extras(state, resolver, *, log=None, now=None, persist=None):
+        def oauth(n):
+            state["oauth"] = {n: {"refresh": "rotated"}}
+            persist()                                   # what OAuth does on a rotated refresh token
+            seen["on_disk"] = json.loads((rig.state / ".runtime.json").read_text())
+            log("refreshed " + n)
+            return "tok"
+        seen["now"] = now()
+        return {"http": object(), "oauth": oauth, "secret": resolver}
+    fake.make_context_extras = make_context_extras
+    monkeypatch.setitem(sys.modules, name, fake)
+    rig.processor("""\
+        def process(batch, ctx):
+            ctx.oauth("cred")
+            raise RuntimeError("killed after the rotation")
+    """)
+    rc, _, err = rig.run(clock=lambda: 123.0)
+    assert rc == P.EX_RETRY and seen["now"] == 123.0 and "refreshed cred" in err
+    assert seen["on_disk"] == {"oauth": {"cred": {"refresh": "rotated"}}}, "written before the batch ended"
 
 
 def test_http_and_oauth_come_from_the_extras_factory_lazily_and_runtime_state_persists(rig):
@@ -453,7 +498,7 @@ def test_the_default_extras_come_from_the_network_module(monkeypatch):
     import types
     name = P.__name__.rsplit(".", 1)[0] + ".net"            # the network module of the package
     fake = types.ModuleType(name)
-    fake.make_context_extras = lambda state, resolver: {"http": ("http", state), "oauth": lambda n: n}
+    fake.make_context_extras = lambda state, resolver, **kw: {"http": ("http", state), "oauth": lambda n: n}
     monkeypatch.setitem(sys.modules, name, fake)
     ctx = P.Context(instance="x", runtime_state={"a": 1})
     assert ctx.http == ("http", {"a": 1}) and ctx.oauth("c") == "c"
