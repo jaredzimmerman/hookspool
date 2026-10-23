@@ -35,7 +35,7 @@ Order matters only where noted. Nothing here touches the gateway.
    already has where the provider keeps one (a GitHub hook secret, a Zoom Secret Token): then rolling a sender back needs
    no secret change. `hookspool check` warns about files readable by group or other. Env refs (`{ env = "…" }`) do not rotate
    without a restart; prefer `file` or `env_file`.
-4. **Bobbins and scripts.** Gmail and Calendar are the built-in `gmail` and `gcal` bobbins: nothing to copy.
+4. **Bobbins and scripts.** Gmail, Calendar and Drive are the built-in `gmail`, `gcal` and `drive` bobbins: nothing to copy.
    Each instance (`[bobbins.gmail]`, `[bobbins.gcal]` in the config example) keeps its state in
    `<home>/services/<instance>`, which the unit already allows; a `state_dir` you set outside the home goes in
    `ReadWritePaths` and must be private (mode 0700: it holds OAuth tokens in the clear). Each bobbin's
@@ -171,6 +171,7 @@ is the signal that the push path broke and the sweep is carrying the load.
 | Plaid | the daily transaction sync | keep the daily sync as is (it reconciles by cursor); the webhook only tells the agent sooner | once a day | `0`: item activity is irregular | Yes, with backoff for hours | none (the sync's own paths stay as they are) |
 | Gmail (Pub/Sub) | the mail-arrival poll | renew the mailbox `users.watch` before its 7-day expiry (a cheap `users.watch` call) and let the `gmail` bobbin reconcile from its stored history id | once a day | `345600` (4 days) | Yes, for the subscription's retention (days) | `<home>/services/gmail` |
 | Calendar | the calendar poll plus an in-memory debounce | renew the watch channel before it expires (channels last at most a week; Google does not warn); the `gcal` bobbin reconciles from its sync token | once a day | `172800` (2 days) | Yes, with backoff for a limited time | `<home>/services/gcal` |
+| Drive | none (new) | renew the change-feed watch channel before it expires (channels last at most a week; Google does not warn); the `drive` bobbin reconciles from its stored page token | once a day | `172800` (2 days) | Yes, with backoff for a limited time | `<home>/services/drive` |
 | Trello | the board poll | list the app's webhooks; re-create any missing or `active: false` (Trello disables a webhook that keeps failing) | once a day | `0` (boards are quiet) | A few times, then may disable the webhook | none |
 | Zoom | the meeting poll | none for events; check the subscription still exists | on demand | `0` | Yes, a few times over minutes | none |
 | anything else | – | state it when the source is added (`docs/ADDING_A_SOURCE.md`) | – | – | assume **no** until shown | – |

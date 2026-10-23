@@ -1,5 +1,5 @@
-"""A scripted stand-in for the Google endpoints the Gmail and Calendar bobbins call (Calendar events, Gmail
-history/messages/profile, free/busy, the OAuth token endpoint), on 127.0.0.1. Test values only."""
+"""A scripted stand-in for the Google endpoints the Gmail, Calendar and Drive bobbins call (Calendar events, Gmail
+history/messages/profile, free/busy, the Drive change feed, the OAuth token endpoint), on 127.0.0.1. Test values only."""
 from __future__ import annotations
 
 import json
@@ -21,6 +21,8 @@ class GoogleStub:
         self.busy: list[dict] = []              # free/busy intervals {"start","end"}
         self.token_calls = 0
         self.fail_insert = False                # answer 500 to an event insert
+        self.drive_start = "start-1"            # the answer to changes.getStartPageToken
+        self.drive_pages: list = []             # popped per changes.list: dict body, or int status
         stub = self
 
         class H(BaseHTTPRequestHandler):
@@ -61,6 +63,13 @@ class GoogleStub:
                         if method == "DELETE":
                             stub.deleted.append(p.rsplit("/", 1)[-1])
                             return self._send(204)
+                    if p == "/drive/changes/startPageToken":
+                        return self._send(200, {"startPageToken": stub.drive_start}) if stub.drive_start \
+                            else self._send(200, {})
+                    if p == "/drive/changes":
+                        nxt = stub.drive_pages.pop(0) if stub.drive_pages else {
+                            "changes": [], "newStartPageToken": q.get("pageToken", "")}
+                        return self._send(nxt, {"error": "scripted"}) if isinstance(nxt, int) else self._send(200, nxt)
                     if p == "/gmail/profile":
                         return self._send(200, stub.profile)
                     if p == "/gmail/history":
@@ -102,6 +111,10 @@ class GoogleStub:
     def gcal_settings(self) -> dict[str, str]:
         """The gcal bobbin settings that point it at this stub."""
         return {"api_url": self.base + "/cal/events"}
+
+    def drive_settings(self) -> dict[str, str]:
+        """The drive bobbin settings that point it at this stub."""
+        return {"api_url": self.base + "/drive/"}
 
     def count(self, method: str, prefix: str) -> int:
         return sum(1 for r in self.requests if r["method"] == method and r["path"].startswith(prefix))

@@ -222,6 +222,7 @@ references (`{ file = ... }`, `{ env_file = ..., key = ... }` or `{ env = ... }`
 | `plaid` | code plugin | ES256 JWT with key fetching that cannot be abused to amplify requests (needs the `plaid` extra) |
 | `gmail` | bobbin | Cloud Pub/Sub push with a token; one batch per mailbox; a processor reports scheduling requests, the assistant's mail and mailbox changes |
 | `gcal` | bobbin | Google Calendar push; a processor reports conflicts, brief requests and changed events |
+| `drive` | bobbin | Google Drive push (change feed); a processor reports changed, created and shared files by id and metadata, never contents |
 | any other | **your own** | a config table or a short module: [docs/ADDING_A_SOURCE.md](docs/ADDING_A_SOURCE.md) |
 
 | destination | what it does |
