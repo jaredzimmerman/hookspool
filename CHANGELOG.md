@@ -17,6 +17,12 @@ The changes below will ship as 0.2.0.
   `webhook` shape and freezes its settings into a fixed template (`--set NAME=VALUE`, `--code` for a `source.py`). An
   empty setting value is unset; `check` reports an error when outputs are mapped per event type without
   `attrs.event_type`; a scaffolded `hmac-sha1-base64-url` bobbin keeps `callback_url` as a required setting.
+- The `drive` bobbin (`hookspool/bobbins/drive/`): Google Drive push (a watch channel on the change feed) with a processor
+  that reads `changes.list` from a stored page token and reports `file-changed`, `file-created` and `file-shared` items
+  (file id, name, MIME type, modified time, actor, link; never contents). It drops the configured accounts' own edits,
+  files in the trash and listed MIME types, re-bootstraps quietly when Drive rejects the page token, and replays a retried
+  batch from the journal. The Drive change-feed calls live in `hookspool.providers.google` next to the channel helpers the
+  `gcal` bobbin also uses.
 - `hookspool bobbin check <dir>`: the bobbin conformance kit (`hookspool.testing.bobbinkit`) on one directory, printed as a
   scorecard (`--report text|md|json`, `--strict`, `--base`): manifest and one service per bobbin, files, TODOs, the 14.3.7
   core-only rules, SETUP.md / AGENTS.md, captures (including a scan for secrets and personal data), the source kit per

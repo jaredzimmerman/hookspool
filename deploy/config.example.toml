@@ -114,6 +114,16 @@ settings = { tz = "America/New_York", own = ["owner@example.com", "assistant@exa
 outputs = { conflict = "hermes:calendar-conflict", brief = "hermes:calendar-brief", changed = "script:calendar-refresh" }
 expect = false                         # true: 2 days of silence opens a source_silent issue
 
+# Google Drive, as the `drive` bobbin (hookspool/bobbins/drive/README.md). Reports file ids and metadata, never
+# contents. Watch channels expire (at most a week): keep the renewal sweep running (SETUP.md).
+[bobbins.drive]
+bobbin = "drive"
+secrets.channel_token = { file = "/etc/hookspool/secrets/drive_channel_token" }
+secrets.cred = { file = "/etc/hookspool/google/owner.json" }
+settings = { own = ["owner@example.com"], skip_mime_types = ["application/vnd.google-apps.folder"] }
+outputs = { file-changed = "hermes:drive-changed", file-created = "hermes:drive-created", file-shared = "hermes:drive-shared" }
+expect = false                         # true: 2 days of silence opens a source_silent issue
+
 # Zoom event subscriptions, as the `zoom` bobbin (hookspool/bobbins/zoom/README.md). The URL-validation handshake is
 # answered only after the signature checks out.
 [bobbins.zoom]

@@ -11,10 +11,11 @@ calendar or file id inside ``X-Goog-Resource-URI``) and ``channel_dedup_id`` are
 **API calls (processor side).** Functions that take an ``OAuthClient`` (``ctx.oauth(secret)``): token
 refresh, bearer header, timeouts, retries and the ``Retryable`` / ``Permanent`` mapping are the client's
 (``hookspool/net.py``). What is added here is only what Google's APIs mean: Gmail history paging and message
-parsing, Calendar sync-token listing, event insert and delete, and free/busy. Two answers are not failures
-and become exceptions the caller handles: ``HistoryGone`` (Gmail answered 404 to a stale history id) and
-``SyncGone`` (Calendar answered 410 to an expired sync token); both mean "start again from a fresh
-bootstrap". Everything else that is not 2xx is raised by the client as ``Retryable`` or ``Permanent``.
+parsing, Calendar sync-token listing, event insert and delete, free/busy, and the Drive change feed (a start
+page token, then changes from a stored page token). Three answers are not failures and become exceptions the
+caller handles: ``HistoryGone`` (Gmail answered 404 to a stale history id), ``SyncGone`` (Calendar answered 410
+to an expired sync token) and ``PageTokenGone`` (Drive answered 404 or 410 to a stored page token); each means
+"start again from a fresh bootstrap". Everything else that is not 2xx is raised by the client as ``Retryable`` or ``Permanent``.
 
 Base URLs are parameters, so a deployment (or a test) can point a processor elsewhere.
 """
@@ -31,9 +32,9 @@ from ..plugin import Request, verify as v
 
 __all__ = ["CHANNEL_TOKEN_HEADER", "CHANNEL_AUTH_HEADERS", "verify_channel", "resource_state", "ignore_handshake",
            "channel_payload", "resource_segment", "channel_dedup_id", "GMAIL_API", "CALENDAR_EVENTS_API",
-           "FREEBUSY_API", "HistoryGone", "SyncGone", "gmail_profile", "gmail_history", "gmail_message",
+           "FREEBUSY_API", "DRIVE_API", "HistoryGone", "SyncGone", "PageTokenGone", "gmail_profile", "gmail_history", "gmail_message",
            "parse_message", "body_text", "address", "calendar_events", "calendar_insert", "calendar_delete",
-           "freebusy"]
+           "freebusy", "drive_start_page_token", "drive_changes", "CHANGE_FIELDS"]
 
 # ---- push channels (source side) ----------------------------------------------------------------------
 CHANNEL_TOKEN_HEADER = "X-Goog-Channel-Token"
@@ -88,8 +89,15 @@ def channel_dedup_id(payload: dict) -> str | None:
 GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me/"
 CALENDAR_EVENTS_API = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 FREEBUSY_API = "https://www.googleapis.com/calendar/v3/freeBusy"
+DRIVE_API = "https://www.googleapis.com/drive/v3/"
 HISTORY_PAGES = 20
 EVENT_PAGES = 40
+CHANGE_PAGES = 50
+CHANGE_PAGE_SIZE = 1000
+# What a change entry carries, and no more: the file's identity and who touched it, never its contents.
+CHANGE_FIELDS = ("nextPageToken,newStartPageToken,changes(fileId,removed,time,"
+                 "file(id,name,mimeType,createdTime,modifiedTime,sharedWithMeTime,trashed,webViewLink,"
+                 "lastModifyingUser(emailAddress,displayName),sharingUser(emailAddress,displayName)))")
 
 
 class HistoryGone(Exception):
@@ -98,6 +106,10 @@ class HistoryGone(Exception):
 
 class SyncGone(Exception):
     """Calendar no longer accepts the stored sync token (HTTP 410): bootstrap again."""
+
+
+class PageTokenGone(Exception):
+    """Drive no longer accepts the stored page token (HTTP 404 or 410): bootstrap again."""
 
 
 def _status_of(call) -> tuple[Any, int | None]:
@@ -251,3 +263,47 @@ def freebusy(client, time_min: datetime, time_max: datetime, tz_name: str, *, ur
             busy.append((datetime.fromisoformat(b["start"]), datetime.fromisoformat(b["end"])))
     busy.sort()
     return busy
+
+
+def _drive_url(base: str, path: str) -> str:
+    return base.rstrip("/") + "/" + path
+
+
+def _drive_scope(drive_id: str) -> dict:
+    """The query parameters that make a change feed cover one shared drive instead of the user's own."""
+    if not drive_id:
+        return {}
+    return {"driveId": drive_id, "includeItemsFromAllDrives": "true", "supportsAllDrives": "true"}
+
+
+def drive_start_page_token(client, *, base: str = DRIVE_API, drive_id: str = "") -> str:
+    """The page token that stands for "now" in the change feed (``changes.getStartPageToken``)."""
+    params = _drive_scope(drive_id)
+    d = client.get(_drive_url(base, "changes/startPageToken"), params=params, label="drive.start_token")
+    token = d.get("startPageToken") if isinstance(d, dict) else None
+    return str(token) if token else ""
+
+
+def drive_changes(client, page_token: str, *, base: str = DRIVE_API, drive_id: str = "",
+                  max_pages: int = CHANGE_PAGES) -> tuple[list[dict], str, bool]:
+    """(the changes since ``page_token`` in order, the token to store next, whether the feed was read to its end).
+
+    The token to store is the feed's ``newStartPageToken`` when the last page was read; when ``max_pages``
+    ran out first it is the ``nextPageToken`` the read stopped at, so the next pass carries on from there
+    (the third value is then False). Raises ``PageTokenGone`` when Drive rejects the stored token."""
+    changes: list[dict] = []
+    token = page_token
+    for _ in range(max_pages):
+        params = {"pageToken": token, "pageSize": CHANGE_PAGE_SIZE, "includeRemoved": "true",
+                  "fields": CHANGE_FIELDS, **_drive_scope(drive_id)}
+        d, status = _status_of(lambda: client.get(_drive_url(base, "changes"), params=params, label="drive.changes"))
+        if status in (404, 410):
+            raise PageTokenGone()
+        if status is not None:
+            raise d
+        changes.extend(d.get("changes") or [])
+        nxt = d.get("nextPageToken")
+        if not nxt:
+            return changes, str(d.get("newStartPageToken") or token), True
+        token = str(nxt)
+    return changes, token, False

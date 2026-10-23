@@ -11,7 +11,7 @@ import _bobbinrules as R
 BOBBINS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "hookspool", "bobbins")
 
 
-@pytest.mark.parametrize("bobbin", ["gmail", "gcal"])
+@pytest.mark.parametrize("bobbin", ["gmail", "gcal", "drive"])
 def test_the_bobbin_calls_core_and_never_re_implements_it(bobbin):
     assert R.violations(os.path.join(BOBBINS, bobbin)) == []
 
