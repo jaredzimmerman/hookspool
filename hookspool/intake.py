@@ -7,8 +7,8 @@ one path per source, ``/hooks/<name>``. Each request runs, in this order and no 
     → challenge, only for a ``challenge_unauthenticated`` source (secret-free, constant)
     → verify (401, empty body)
     → challenge (verified handshakes)
-    → ignore → payload → key, dedup_id, event_type, attrs → route resolution
-    → enqueue (COMMIT) → 200 {"status": "queued" | "duplicate" | "replayed" | "ignored"}
+    → ignore → payload → key, dedup_id, event_type, attrs → route resolution (and tee routes)
+    → enqueue every copy (one COMMIT) → 200 {"status": "queued" | "duplicate" | "replayed" | "ignored"}
 
 Anything that raises after ``verify`` (plugin code, an event the store refuses, route
 resolution) quarantines the request: the raw body and its headers minus the source's
@@ -95,10 +95,11 @@ def classify(src: Source, req: Request, cfg: dict) -> Staged:
         route, dest = _config.resolve_route(cfg, src.name, attrs, default_action)
         if not dest:
             raise NoDestination(src.name)
+        tees = _config.resolve_tees(cfg, src.name, attrs, dest)
     except Exception as e:  # noqa: BLE001 - every plugin failure quarantines
         return Staged("error", stage=stage, error=e.__class__.__name__)
     return Staged("ready", fields={"payload": payload, "key": key, "dedup_id": dd, "event_type": et,
-                                   "attrs": attrs, "route": route, "destination": dest})
+                                   "attrs": attrs, "route": route, "destination": dest, "tees": tees})
 
 
 def run_stages(src: Source, req: Request, cfg: dict) -> Staged:
@@ -155,7 +156,7 @@ def reclassifier(cfg: dict, loader: Callable[[str, str | None], Any] = _config.d
         f = st.fields
         return {"source": source, "key": f["key"], "action": f["destination"], "payload": f["payload"],
                 "route": f["route"], "event_type": f["event_type"], "dedup_id": f["dedup_id"],
-                "headers": src.kept_headers(req)}
+                "headers": src.kept_headers(req), "tees": f["tees"]}
     return fn
 
 
@@ -394,7 +395,7 @@ class Intake:
         try:
             r = self.store.enqueue(name, f["key"], f["destination"], f["payload"], route=f["route"],
                                    event_type=f["event_type"], dedup_id=f["dedup_id"], raw=req.body,
-                                   headers=src.kept_headers(req))
+                                   headers=src.kept_headers(req), tees=f["tees"])
         except InvalidEvent as e:
             return self._quarantine(src, req, f"plugin error: {e.__class__.__name__} in enqueue")
         except SpoolError as e:
@@ -408,6 +409,9 @@ class Intake:
             self.counters.inc("duplicate", name)
         log.info(status, extra=_logs.fields(source=name, route=f["route"], destination=f["destination"],
                                             batch=r.batch_id, event=r.event_id, bytes=len(req.body)))
+        for (route, dest), t in zip(f["tees"], r.tees):         # empty for a duplicate or a replay
+            log.info(status, extra=_logs.fields(source=name, route=route, destination=dest, batch=t.batch_id,
+                                                event=t.event_id, bytes=len(req.body), tee=True))
         return Response.json(200, {"status": status})
 
     def _unavailable(self, name: str, reason: str, msg: str) -> Response:
@@ -712,6 +716,7 @@ def source_test(cfg: dict, name: str, raw: RawRequest, *, now: float | None = No
         payload = f["payload"]
         out.update(result="queued", status=200, key=f["key"], dedup_id=f["dedup_id"], event_type=f["event_type"],
                    attrs=f["attrs"], route=f["route"], destination=f["destination"],
+                   tees=[{"route": r, "destination": d} for r, d in f["tees"]],
                    payload_bytes=len(json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")),
                    kept_headers=sorted((src.kept_headers(req) or {}).keys()))
     return out

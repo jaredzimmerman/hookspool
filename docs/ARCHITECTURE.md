@@ -224,6 +224,8 @@ Coalescing groups events per `(route, key)` into one batch and releases the batc
 
 **Group**: `route` (resolved from source + match) and `key` (from the plugin). Keys are opaque strings, max 512 bytes.
 
+**Tee copies.** A matching `tee = true` route (section 14.1) gets a copy of the event: an event row of its own, joined to the open batch of `(tee route, key)` by the same rule with that route's window values, so a copy counts against its own route's `max_bytes` and seals on its own route's quiet window. The primary copy and every tee copy of one request go through the join rule in the **same** enqueue transaction (primary first, then the tees in file order), so a crash leaves all of them or none, and the sender's 2xx follows that one COMMIT. Dedup runs once, before any copy is placed: the `dedup` row points at the primary copy, and a duplicate makes no copies. From there each copy is independent: its own lease, retries, breaker, dead state, `replay`, `exclude`, `split` and `drop`.
+
 **Join rule** (enqueue transaction, `BEGIN IMMEDIATE`):
 
 1. Find the batch for the group with `state = 'open'` (at most one).
@@ -327,7 +329,7 @@ Some receivers expect the sender's original payload, one request per event, not 
 - **Requests.** A batch is delivered as one POST per event, in `events.id` order. The body is the event's stored payload, byte for byte as the spool holds it (`events.payload`), never the document and never a re-encoding. The dispatcher reads those bytes with the document and hands them to the destination in `ctx.payloads`; the destination's `max_body_bytes` then applies to each event, not to the document.
 - **Headers.** The Standard Webhooks headers with a per-event `webhook-id` `hs_<instance_id>_<batch_id>_<event id>`, the same on every attempt; `X-Hub-Signature-256` over that body (the route secret for `hermes`, the current `secret` for `http`); `X-Hookspool-Batch` and `X-Hookspool-Attempt` as usual. `event_header` (a destination option; a `hermes` destination without it falls back to the source's `event_header`) carries the event's `event_type`, and `dedup_header` carries its `dedup_id` when it has one (the GitHub case: `X-GitHub-Event`, `X-GitHub-Delivery`). Both are refused by `check` when they name a header hookspool sets, and a value that cannot go on the wire is left out.
 - **Outcome.** The batch is `ok` only when every event's request was (2xx; for Hermes `delivered`, `accepted`, `duplicate`, and also `ignored` and `coalesced`). On the first failure the attempt stops and its outcome is classified exactly as a document's would be (transport, throttle, config, permanent; section 6.5), so the whole batch retries, trips the breaker or goes dead as usual. The retry starts again at the first event: events the receiver already accepted are re-sent with the same id and answered `duplicate` by a receiver that keeps ids, and no event is ever sent before an earlier one of its batch has been accepted. The attempt row records `events_delivered` and `failed_event_id`; reasons and details carry ids and counts, never a body.
-- **Idempotency trade-off.** A per-event id is stable, so the admit-vs-process gap described above for Hermes is the receiver's again: a gateway that admits an event, then crashes before running it, will answer `duplicate` to the retry. That is the price of letting the receiver's duplicate detection make a replay safe, which is what a route reading original events needs; use the document mode where a lost wake-up is worse than a double one.
+- **Idempotency trade-off.** A per-event id is stable, so the admit-vs-process gap described above for Hermes is the receiver's again: a gateway that admits an event, then crashes before running it, will answer `duplicate` to the retry. That is the price of letting the receiver's duplicate detection make a replay safe, which is what a route reading original events needs; use the document mode where a lost wake-up is worse than a double one. Hermes answers `duplicate` only within its one-hour window, so a `replay`, or a backoff that outlasts the hour, sends the already-accepted events again as new, and the route runs them again.
 - **Hermes answers.** `ignored` (the route's own `events` filter) and `coalesced` (its own `coalesce`) are expected when the gateway sees original events, so they are `ok` without a notice or an issue. `check` does not fail on a route's `events` or `coalesce` when its destination unwraps (section 5).
 - **Coalescing.** Unwrap is meant for routes with coalescing off (`quiet_s = max_s = 0`, the `immediate` span), so each event is its own batch. With a window, every event of the batch is still delivered, in order, and the receiver gets them as a burst; `check` warns but does not fail. All the requests of one attempt share the attempt's deadline (section 6.2); a batch that runs out of time resumes on the next attempt, its accepted events answered `duplicate`.
 
@@ -388,7 +390,7 @@ After a pass: `PRAGMA wal_checkpoint(TRUNCATE)`, and `VACUUM` only when `hookspo
 
 ## 9. Intake, backpressure and quarantine
 
-**Request order** (section 10 for the reasoning): body cap → `verify` → `challenge` → `ignore` → `payload` → `key`, `dedup_id`, `event_type`, `attrs` → route resolution → `enqueue` → response.
+**Request order** (section 10 for the reasoning): body cap → `verify` → `challenge` → `ignore` → `payload` → `key`, `dedup_id`, `event_type`, `attrs` → route resolution (the primary route and any tee routes) → `enqueue` of every copy in one transaction → response.
 
 **Body cap**: `Content-Length` is required; `Transfer-Encoding: chunked` is answered 411 (the stdlib server does not decode it; the reverse proxy buffers requests, see `deploy/nginx.example.conf`). A body longer than `max_body_bytes` is 413 before any plugin code runs.
 
@@ -472,7 +474,7 @@ Both produce the same JSON:
 
 ### 11.3 Structured logs
 
-stdlib `logging` to stderr (journald captures it). `HOOKSPOOL_LOG=json` emits one JSON object per line with fixed fields: `ts, level, component, msg, source, route, batch, event, destination, attempt, status, bytes, duration_ms, reason`. `text` is the human form of the same fields. There is no debug level that prints bodies.
+stdlib `logging` to stderr (journald captures it). `HOOKSPOOL_LOG=json` emits one JSON object per line with fixed fields: `ts, level, component, msg, source, route, batch, event, destination, attempt, status, bytes, duration_ms, reason, tee`. The intake writes one `queued` line per copy of a request; a tee copy's line carries `tee: true`. `text` is the human form of the same fields. There is no debug level that prints bodies.
 
 ### 11.4 Issues
 
@@ -586,6 +588,8 @@ action = "hermes:github"                          # default destination; a calla
 The intake calls, in order: body cap → `verify` → `challenge` → `ignore` → `payload` → `key`, `dedup_id`, `event_type`, `attrs` → route resolution → `enqueue`; an exception anywhere after `verify` quarantines the request (section 9). The shared test kit (`tests/sourcekit.py`) exercises every plugin the same way (a static-token source such as Gmail or Calendar sets `Kit.body_signed = False`, which skips the tampered-body case because the token does not cover the body): signed, unsigned, tampered, future-dated and stale timestamps, oversized, chunked, duplicate, handshake with a good and a bad signature, constant-ness of an unauthenticated handshake, plugin exception → quarantine, spool-unwritable → 503, and the sentinel-in-logs check.
 
 Route resolution: config `[[routes]]` entries are evaluated in order; the first whose `source` matches and whose `match` table is a subset of `attrs` wins; its `destination` overrides the plugin's `action`. With no matching route, the implicit route `<source>` uses the plugin's `action` and the source's window.
+
+A route with `tee = true` is skipped by that first-match search: when it matches it receives a copy of the event and does not claim it, so the event still goes to the first matching non-tee route, or to the implicit route. Adding a tee route never changes where an event already went (one event to two places is the Svix and Convoy "several subscriptions on one event type", the Hookdeck "several connections on one source", as a flag on a route). Every matching tee route gets one copy, in file order, at most 8 per event. `check` refuses a tee route without a `destination`, a tee destination equal to the source's `action` or to any non-tee route's destination on the same source, one equal to an earlier tee route's destination whose `match` can overlap, and more than 8 tee routes on a source, so one event never reaches one destination twice; the intake also skips a tee whose destination already has a copy of the event. Copies are placed as section 5 describes. A quarantined request that `replay` reclassifies makes the same copies.
 
 ### 14.2 Destinations
 
@@ -735,7 +739,7 @@ max_body_bytes = 1048576
 
 Precedence for a window field: route → source → `span` preset → `[coalesce]`. Precedence for paths: CLI flag → env (`HOOKSPOOL_HOME`, `HOOKSPOOL_CONFIG`, `HOOKSPOOL_DB`) → config → default.
 
-`hookspool check` also: imports every plugin; resolves every secret ref (readable, mode; `env` refs noted as non-rotating); refuses `auth_headers` in `keep_headers`; validates routes and destinations; checks `quiet_s <= max_s`, `max_bytes <= 0.75 × destination.max_body_bytes`, `source.max_body_bytes <= route.max_bytes`, `dedup_window_s <= retention.delivered_days`; reads `hermes.subscriptions_path` and fails on `events` or `coalesce` set on any route a hookspool destination feeds; `quick_check`s the DB.
+`hookspool check` also: imports every plugin; resolves every secret ref (readable, mode; `env` refs noted as non-rotating); refuses `auth_headers` in `keep_headers`; validates routes and destinations (and the tee rules of section 14.1); checks `quiet_s <= max_s`, `max_bytes <= 0.75 × destination.max_body_bytes`, `source.max_body_bytes <= route.max_bytes`, `dedup_window_s <= retention.delivered_days`; reads `hermes.subscriptions_path` and fails on `events` or `coalesce` set on any route a hookspool destination feeds; `quick_check`s the DB.
 
 ---
 
