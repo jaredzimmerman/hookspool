@@ -23,7 +23,7 @@ spool unwritable → 503, low disk → 503, secrets never stored, and the sentin
 check (the conftest fixture checks messages; ``run`` also renders every record through
 the JSON formatter). A case that does not apply to a plugin is skipped.
 
-Captures (``tests/captures/<source>/*.http``) run through ``run_capture``: the file's
+Captures (``tests/captures/<source>/*.http``, or ``hookspool/bobbins/<source>/captures/*.http`` for a built-in bobbin) run through ``run_capture``: the file's
 ``# expect:`` line is the result ``hookspool source test`` must report.
 """
 from __future__ import annotations
@@ -49,6 +49,7 @@ from hookspool.store import SpoolError, Store
 SENTINEL = "PAYLOAD-SENTINEL-7f3a"   # same marker as conftest: no log line may carry it
 PLUGIN_FUNCS = ("verify", "challenge", "ignore", "payload", "key", "dedup_id", "event_type", "attrs", "action")
 CAPTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures")
+BOBBINS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hookspool", "bobbins")
 
 
 def request(method: str, target: str, headers: Mapping[str, str] | list[tuple[str, str]] | None = None,
@@ -433,8 +434,15 @@ def run(case: Callable[[Env], None], kit: Kit, tmp_path, clock) -> None:
 
 
 # ---- captures --------------------------------------------------------------------------------------------------
+def capture_dir(source: str) -> str:
+    """Where a source's captures live: its bobbin's ``captures/`` when it is a built-in bobbin (ARCHITECTURE 14.3.1),
+    else ``tests/captures/<source>``."""
+    own = os.path.join(BOBBINS, source, "captures")
+    return own if os.path.isdir(own) else os.path.join(CAPTURES, source)
+
+
 def captures(source: str) -> list[str]:
-    d = os.path.join(CAPTURES, source)
+    d = capture_dir(source)
     return sorted(os.path.join(d, f) for f in os.listdir(d) if f.endswith(".http")) if os.path.isdir(d) else []
 
 

@@ -43,7 +43,7 @@ DEFAULT_PROCESSOR_TIMEOUT_S = 300
 
 MANIFEST_KEYS = {"name", "version", "summary", "source", "secrets", "settings", "processor", "outputs"}
 SOURCE_KEYS = {"module", "template", "span", "sender_retries", "expect_every_s", "proxy"}
-SECRET_KEYS = {"description", "processor"}
+SECRET_KEYS = {"description", "processor", "required"}
 SETTING_KEYS = {"description", "type", "required", "default"}
 PROCESSOR_KEYS = {"module", "timeout_s", "state"}
 OUTPUT_KEYS = {"description"}
@@ -220,6 +220,8 @@ def validate_manifest(m: Any, dirname: str, spans: dict) -> list[str]:
                 errs.append(f"{where}.description: must be a string")
             if "processor" in s and not isinstance(s["processor"], bool):
                 errs.append(f"{where}.processor: must be true or false")
+            if "required" in s and not isinstance(s["required"], bool):
+                errs.append(f"{where}.required: must be true or false")
 
     settings = m.get("settings", {})
     if unknown("settings", settings, set(settings) if isinstance(settings, dict) else set()):
@@ -513,8 +515,8 @@ def _secrets_for(pkg: Package, given: Any, where: str, errs: list[str]) -> dict:
     for k in given:
         if k not in pkg.secrets:
             errs.append(f"{where}.secrets.{k}: bobbin {pkg.name!r} has no such secret")
-    for k in pkg.secrets:
-        if k not in given:
+    for k, spec in pkg.secrets.items():
+        if k not in given and not (isinstance(spec, dict) and spec.get("required") is False):
             errs.append(f"{where}.secrets.{k}: required by bobbin {pkg.name!r}")
     return {k: copy.deepcopy(v) for k, v in given.items() if k in pkg.secrets}
 

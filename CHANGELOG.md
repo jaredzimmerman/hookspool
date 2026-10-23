@@ -41,8 +41,21 @@ The changes below will ship as 0.2.0.
 - `hookspool.verify.KeyCache` and `jwks_fetcher`: a shared cache of a sender's verification keys (TTL, negative TTL, one
   fetch per cooldown, stale keys served while the sender is unreachable).
 
+- The `gmail` and `gcal` bobbins (`hookspool/bobbins/`): the Gmail and Calendar push sources with their delta
+  logic as processors, settings instead of environment variables, one credential secret per Google account, a
+  `hooks.classify` hook for private mail hand-offs, a `hooks.travel` hook for travel blocks, and the outputs
+  `scheduling`, `agent-mail`, `agent-schedule`, `mailbox-changed` and `conflict`, `brief`, `changed` (the last replaces the
+  script that was started on the side). `hookspool/providers/google.py` holds what the Google bobbins share: the push-channel
+  check (token, `sync` handshake, header payload) and the Gmail, Calendar and free/busy calls on `ctx.oauth`.
+- A bobbin secret may be marked `required = false`, so an instance can leave it out.
+
 ### Changed
 
+- A `script` exit 65 (a processor's `Permanent`) dead-letters the batch on the first attempt; every other non-zero exit is
+  still retried.
+- `deploy/scripts/gmail_delta.py` and `gcal_delta.py` are removed (they are the `gmail` and `gcal` bobbins; the README of each
+  lists the old variable for every setting). `hookspool.sources.gmail` and `.gcal` still import, but declare no `action`: an
+  instance's `outputs` choose it. Their captures moved to the bobbins' `captures/`.
 - Spool schema 2 (migration `0002_unwrap.sql` adds the two attempt columns). Stop the dispatcher and run `hookspool migrate`
   (deploy/README.md, Upgrading): both services run `hookspool check` before they start and refuse a schema 1 spool, so a
   restart alone does not migrate it.

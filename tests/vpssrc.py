@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import re
 
 import pytest
 
@@ -37,23 +36,3 @@ def load(name: str, module_name: str | None = None):
     spec.loader.exec_module(mod)
     return mod
 
-
-def names() -> dict:
-    """The deployment names the private originals use (scheduling module, event types, agent state file and address constant),
-    read from their source at run time so that this public repo does not spell them. Neutral placeholders
-    when vps-src is absent (the parity tests are skipped then)."""
-    out = {"sched_module": "orig_sched", "mail_type": "orig-mail", "schedule_type": "orig-schedule",
-           "agent_state": "orig_agent_state.json", "agent_attr": "AGENT"}
-    r = root()
-    p = os.path.join(r, "scripts", "gmail_delta.py") if r else None
-    if not p or not os.path.exists(p):
-        return out
-    with open(p, encoding="utf-8") as f:
-        src = f.read()
-    for key, pat in (("sched_module", r"^import (\w+_sched)\b"), ("schedule_type", r'"event_type": "([\w-]+-schedule)"'),
-                     ("mail_type", r'"([\w-]+-mail)"'), ("agent_state", r'"(gmail_push_state_\w+\.json)"'),
-                     ("agent_attr", r'if account == (\w+) and "INBOX"')):
-        m = re.search(pat, src, re.M)
-        if m:
-            out[key] = m.group(1)
-    return out

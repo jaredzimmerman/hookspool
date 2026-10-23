@@ -89,22 +89,30 @@ action = "hermes:plaid"
 secrets.client_id = { env_file = "/etc/hookspool/plaid.env", key = "PLAID_CLIENT_ID" }
 secrets.secret = { env_file = "/etc/hookspool/plaid.env", key = "PLAID_SECRET" }
 
-# Gmail through Cloud Pub/Sub push: the secret is the token in the push URL (?token=...). One batch
-# per mailbox; the delta script reads the mailbox once for all the pushes in it.
-[sources.gmail]
-span = "mail"
-action = "script:gmail_delta"
-expect_every_s = 0                     # 0 until the sender points here (deploy/README.md, section 2); then 345600
-                                       # (4 days): that much silence opens a source_silent issue (the watch lapsed?)
+# Gmail through Cloud Pub/Sub push, as the `gmail` bobbin (hookspool/bobbins/gmail/README.md). One batch per
+# mailbox; the processor reads the mailbox once for all the pushes in it. The URL is /hooks/gmail?token=...
+# Its credentials are read by the processor only (file references, never env). Leave out secrets.cred_agent and
+# `agent` when there is no assistant mailbox, and out of `outputs` what you do not want.
+[bobbins.gmail]
+bobbin = "gmail"
 secrets.push_token = { file = "/etc/hookspool/secrets/gmail_push_token" }
+secrets.cred_owner = { file = "/etc/hookspool/google/owner.json" }
+secrets.cred_agent = { file = "/etc/hookspool/google/assistant.json" }
+settings = { owner = "owner@example.com", agent = "assistant@example.com", tz = "America/New_York" }
+outputs = { scheduling = "hermes:mail-scheduling", agent-mail = "hermes:assistant-mail", mailbox-changed = "hermes:mail-changed" }
+# expect = true applies the bobbin's recommended expect_every_s (4 days of silence opens a source_silent issue:
+# the watch lapsed?). Leave it off until the sender points here (deploy/README.md, section 2).
+expect = false
 
-# Google Calendar push channels expire (at most a week): keep the renewal sweep running.
-[sources.gcal]
-span = "calendar"
-action = "script:gcal_delta"
-expect_every_s = 0                     # 0 until the sender points here (deploy/README.md, section 2); then 172800
-                                       # (2 days): that much silence opens a source_silent issue
+# Google Calendar, as the `gcal` bobbin (hookspool/bobbins/gcal/README.md). Watch channels expire (at most a
+# week): keep the renewal sweep running. `changed` goes to a script of your own, here a refresh script.
+[bobbins.gcal]
+bobbin = "gcal"
 secrets.channel_token = { file = "/etc/hookspool/secrets/gcal_channel_token" }
+secrets.cred = { file = "/etc/hookspool/google/owner.json" }
+settings = { tz = "America/New_York", own = ["owner@example.com", "assistant@example.com"] }
+outputs = { conflict = "hermes:calendar-conflict", brief = "hermes:calendar-brief", changed = "script:calendar-refresh" }
+expect = false                         # true: 2 days of silence opens a source_silent issue
 
 # Zoom event subscriptions. The URL-validation handshake is answered only after the signature checks out.
 [sources.zoom]
@@ -162,21 +170,10 @@ max_inflight = 2
 # event_header = "X-GitHub-Event"
 # dedup_header = "X-GitHub-Delivery"
 
-# The delta scripts (deploy/scripts/README.md). Keep max_inflight = 1: two passes over one state file
-# would both report the same changes. Every state_dir below must also be in the dispatch unit's
-# ReadWritePaths (deploy/hookspool-dispatch.service).
-[destinations."script:gcal_delta"]
-argv = ["/opt/hookspool/venv/bin/python", "/opt/hookspool/scripts/gcal_delta.py", "--batch"]
-cwd = "/opt/hookspool/scripts"
-env_file = "/etc/hookspool/gcal_delta.env"
-state_dir = "/var/lib/hookspool/scripts/gcal"
+# A follow-up of your own for the gcal bobbin's `changed` output (it receives the output item as its event
+# payload; the changed event ids and dates are in it). Delivered, retried and dead-lettered like any script.
+# Every state_dir must be in the dispatch unit's ReadWritePaths (deploy/hookspool-dispatch.service); the
+# bobbins' own state directories default to <home>/services/<instance>, below the home that is already there.
+[destinations."script:calendar-refresh"]
+argv = ["/opt/hookspool/venv/bin/python", "/opt/hookspool/scripts/refresh_events.py"]
 timeout_s = 300
-max_inflight = 1
-
-[destinations."script:gmail_delta"]
-argv = ["/opt/hookspool/venv/bin/python", "/opt/hookspool/scripts/gmail_delta.py", "--batch"]
-cwd = "/opt/hookspool/scripts"
-env_file = "/etc/hookspool/gmail_delta.env"
-state_dir = "/var/lib/hookspool/scripts/gmail"
-timeout_s = 300
-max_inflight = 1

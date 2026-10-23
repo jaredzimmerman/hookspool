@@ -146,7 +146,7 @@ def test_nginx_every_location_rate_limits_with_a_defined_zone_and_a_real_upstrea
         target = pp[0].partition("/hooks/")[2] or path.removeprefix("/hooks/")
         sources.append(target)
     # one location per source in the config example (github has two paths, one source)
-    assert set(sources) == set(CONFIG["sources"])
+    assert set(sources) == set(CONFIG["sources"]) | set(CONFIG.get("bobbins", {}))
 
 
 def test_nginx_route_hints_come_from_the_path_and_match_the_config_routes(nginx):
@@ -260,9 +260,10 @@ def rw(u):
 
 def test_dispatch_read_write_paths_cover_home_and_every_script_state_dir():
     home = CONFIG["spool"]["home"]
-    state_dirs = [d["state_dir"] for n, d in CONFIG["destinations"].items() if n.startswith("script:")]
-    assert len(state_dirs) == 2
+    state_dirs = [d["state_dir"] for n, d in CONFIG["destinations"].items() if n.startswith("script:") and "state_dir" in d]
     paths = rw(unit("hookspool-dispatch.service"))
+    # a bobbin's processor keeps its state in <home>/services/<instance>, below the home that is listed
+    assert CONFIG["bobbins"] and not any(b.get("state_dir") for b in CONFIG["bobbins"].values())
     assert home in paths
     for d in state_dirs:
         assert d in paths, f"{d} missing from ReadWritePaths"
@@ -300,7 +301,8 @@ def placed(tmp_path):
         .replace("~/.hermes/webhook_subscriptions.json", str(subs))
     cfg = tomllib.loads(text)
     (etc / "secrets").mkdir(parents=True)
-    for s in cfg["sources"].values():
+    (etc / "google").mkdir(parents=True)
+    for s in [*cfg["sources"].values(), *cfg["bobbins"].values()]:
         for ref in s.get("secrets", {}).values():
             if "file" in ref:
                 open(ref["file"], "w").write("test-secret\n")
@@ -309,7 +311,8 @@ def placed(tmp_path):
                 open(ref["env_file"], "w").write("PLAID_CLIENT_ID=a\nPLAID_SECRET=b\n")
                 os.chmod(ref["env_file"], 0o600)
     # the Hermes side, as an operator has it after step 5 of the README: no events, no coalesce
-    names = {r["destination"] for r in cfg["routes"]} | {s["action"] for s in cfg["sources"].values()}
+    names = {r["destination"] for r in cfg["routes"]} | {s["action"] for s in cfg["sources"].values()} \
+        | {d for b in cfg["bobbins"].values() for d in b["outputs"].values()}
     subs.write_text(json.dumps({n.split(":", 1)[1]: {"secret": "s", "prompt": "x"}
                                 for n in names if n.startswith("hermes:")}))
     path = tmp_path / "config.toml"
@@ -342,18 +345,20 @@ def test_config_example_every_source_is_covered_by_the_readme_sweep_table():
     readme = read("README.md")
     table = readme.split("## 4. Sweeps")[1].split("### Known limits")[0]
     rows = {ln.split("|")[1].strip().lower(): ln for ln in table.splitlines() if ln.startswith("| ") and "---" not in ln}
-    for src in CONFIG["sources"]:
+    for src in [*CONFIG["sources"], *CONFIG["bobbins"]]:
         key = {"gmail": "gmail (pub/sub)", "gcal": "calendar"}.get(src, src)
         assert key in rows, f"no sweep row for {src}"
         cells = [c.strip() for c in rows[key].split("|")[1:-1]]
         assert len(cells) == 7 and all(cells), rows[key]
         # the example ships 0 everywhere (README section 2: a source that was never moved would alert
-        # "silent" on day one); the value to set at cutover is named in the config comment and the README cell
-        assert CONFIG["sources"][src].get("expect_every_s", 0) == 0, src
-        if src in ("gmail", "gcal"):
-            text = re.search(rf"\[sources\.{src}\].*?(?=\n\[)", read("config.example.toml"), re.S).group(0)
-            (later,) = re.findall(r"then (\d+)", text)
-            assert f"`{later}`" in cells[4], f"{src}: README says {cells[4]!r}, config says {later}"
+        # "silent" on day one); the value to set at cutover is the bobbin's recommendation, named in the README cell
+        if src in CONFIG["bobbins"]:
+            assert CONFIG["bobbins"][src].get("expect") is False, src
+            with open(os.path.join(ROOT, "hookspool", "bobbins", src, "bobbin.toml"), "rb") as f:
+                later = tomllib.load(f)["source"]["expect_every_s"]
+            assert f"`{later}`" in cells[4], f"{src}: README says {cells[4]!r}, the bobbin recommends {later}"
+        else:
+            assert CONFIG["sources"][src].get("expect_every_s", 0) == 0, src
     assert "removed" in table.lower() or "none" in table.lower()
 
 

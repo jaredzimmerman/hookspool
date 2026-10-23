@@ -220,8 +220,8 @@ references (`{ file = ... }`, `{ env_file = ..., key = ... }` or `{ env = ... }`
 | `kaneo` | config only | HMAC-SHA256; deduplicated by body hash |
 | `zoom` | code plugin | signed timestamp; the URL-validation handshake is answered only after the signature verifies |
 | `plaid` | code plugin | ES256 JWT with key fetching that cannot be abused to amplify requests (needs the `plaid` extra) |
-| `gmail` | code plugin | Cloud Pub/Sub push with a token; one batch per mailbox |
-| `gcal` | code plugin | Google Calendar push; the payload is built from headers |
+| `gmail` | bobbin | Cloud Pub/Sub push with a token; one batch per mailbox; a processor reports scheduling requests, the assistant's mail and mailbox changes |
+| `gcal` | bobbin | Google Calendar push; a processor reports conflicts, brief requests and changed events |
 | any other | **your own** | a config table or a short module: [docs/ADDING_A_SOURCE.md](docs/ADDING_A_SOURCE.md) |
 
 | destination | what it does |

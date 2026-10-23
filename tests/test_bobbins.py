@@ -148,7 +148,7 @@ def test_a_valid_manifest_has_no_errors():
      "exactly one of module or template"),
     (lambda m: m.replace("[source]", "[source]\nspan = \"glacial\""), "not a span preset"),
     (lambda m: m.replace("[source]", "[source]\nweird = 1"), "source.weird: unknown key"),
-    (lambda m: m.replace('description = "x"', 'description = "x"\nrequired = true'), "secrets.secret.required"),
+    (lambda m: m.replace('description = "x"', 'description = "x"\nrequired = "no"'), "secrets.secret.required: must be"),
     (lambda m: m + '\n[settings.a]\ndefault = "x"\n', "settings.a.type: required"),
     (lambda m: m + '\n[settings.a]\ntype = "float"\ndefault = 1.0\n', "is not one of"),
     (lambda m: m + '\n[settings.a]\ntype = "string"\n', "settings.a.default: required"),
@@ -258,6 +258,18 @@ def test_processor_instance_expands_to_a_source_and_a_processor_destination(tmp_
     assert json.loads(env["HOOKSPOOL_SECRET_REFS"]) == {"cred": {"file": secrets["cred"]}}
     assert cfg["routes"] == []
     assert cfg["_bobbins"]["mail"]["processor"] is True
+
+
+def test_an_optional_secret_may_be_left_out_and_is_then_not_passed_to_the_processor(tmp_path, pkgroot, no_builtins, secrets):
+    m = (pkgroot / "digest" / "bobbin.toml")
+    m.write_text(m.read_text().replace('[secrets.cred]\n', '[secrets.cred]\nrequired = false\n'))
+    body = digest_body(secrets).replace(f'secrets.cred = {{ file = "{secrets["cred"]}" }}\n', "")
+    cfg = load(tmp_path, pkgroot, body)
+    assert "cred" not in cfg["sources"]["mail"]["secrets"]
+    assert json.loads(cfg["destinations"]["script:mail"]["env"]["HOOKSPOOL_SECRET_REFS"]) == {}
+    # the token is still required, and so is any secret not marked optional
+    body = digest_body(secrets).replace(f'secrets.token = {{ file = "{secrets["tok"]}" }}\n', "")
+    assert has(expand_errors(tmp_path, pkgroot, body), "secrets.token: required")
 
 
 def test_settings_are_typed_with_defaults_applied(tmp_path, pkgroot, no_builtins, secrets):
