@@ -821,8 +821,8 @@ Everything that is the same for two services is core, and a package calls it:
 | durable state, journal, replay, atomic writes, locking | `ctx.load_state` / `ctx.save_state` (the runtime holds the lock for the batch) |
 | results to the agent or another destination | return items from `process`; the runtime emits them |
 | retries, backoff, timeouts, dead-letter | the dispatcher: raise `Retryable` / `Permanent` (or `ctx.fail_permanent`); never loop or sleep |
-| HTTP to the provider's API | `ctx.http` (`hookspool.net`): timeouts, JSON, status → `Retryable`/`Permanent`, no bodies or query strings in errors or logs |
-| OAuth 2 refresh-token flows | `ctx.oauth(<secret name>)` (`hookspool.net`): reads the credential through `ctx.secret`, caches access tokens in runtime state, refreshes on expiry or one 401, and **never rewrites the credential file** (a rotated refresh token is kept in runtime state and used from then on) |
+| HTTP to the provider's API | `ctx.http` (`hookspool/net.py`): timeouts, JSON, status → `Retryable`/`Permanent`, no bodies or query strings in errors or logs |
+| OAuth 2 refresh-token flows | `ctx.oauth(<secret name>)` (`hookspool/net.py`): reads the credential through `ctx.secret`, caches access tokens in runtime state, refreshes on expiry or one 401, and **never rewrites the credential file** (a rotated refresh token is kept in runtime state and used from then on) |
 | secrets | `ctx.secret(name)` (processor) / the source's `Secrets` (source) |
 | settings | `ctx.settings`; a package never reads the environment |
 | logging | `ctx.log` (processor) / the intake's logger (source); a package never opens log files |

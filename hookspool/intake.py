@@ -215,11 +215,13 @@ class Intake:
 
     def __init__(self, cfg: dict, store: Store | None = None, *, now: Callable[[], float] = time.time,
                  loader: Callable[[str, str | None], Any] = _config.default_plugin_loader,
-                 statvfs: Callable[[str], Any] = os.statvfs, config_path: str | None = None):
+                 statvfs: Callable[[str], Any] = os.statvfs, config_path: str | None = None,
+                 cli_home: str | None = None):
         self.now = now
         self.loader = loader
         self.statvfs = statvfs
         self.config_path = config_path
+        self.cli_home = cli_home      # --home: reloads must expand with the same home as startup
         self._snap = _build(cfg, loader)
         if store is None:
             store = Store(_config.db_path(cfg), cfg, now=now,
@@ -267,7 +269,7 @@ class Intake:
                 return False
             self._mtime = m
             try:
-                cfg = _config.load_config(self.config_path)
+                cfg = _config.load_config(self.config_path, cli_home=self.cli_home)
                 rep = _config.check(cfg, load_plugin=self.loader, check_secrets=False)
                 if not rep.ok:
                     raise _config.ConfigError(f"{len(rep.errors)} error(s)")
@@ -747,7 +749,7 @@ def cli(a, cfg: dict) -> int:
         print(f"hookspool: {e}", file=sys.stderr)
         return 2
     try:
-        ik = Intake(cfg, store, config_path=cfg.get("_path"))
+        ik = Intake(cfg, store, config_path=cfg.get("_path"), cli_home=getattr(a, "home", None))
     except (PluginError, ImportError) as e:
         print(f"hookspool: cannot load source plugins: {e.__class__.__name__}: {e}", file=sys.stderr)
         return 2

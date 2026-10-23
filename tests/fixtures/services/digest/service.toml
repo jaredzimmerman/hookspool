@@ -1,0 +1,43 @@
+name = "digest"
+version = "3"
+summary = "Test package: a code source and a processor that keeps state"
+
+[source]
+module = "source"
+span = "mail"
+sender_retries = true
+expect_every_s = 86400
+
+[secrets.token]
+description = "the push token"
+[secrets.cred]
+description = "the API credential the processor uses"
+processor = true
+
+[settings.owner]
+description = "whose account"
+type = "string"
+required = true
+[settings.limit]
+type = "int"
+default = 25
+[settings.verbose]
+type = "bool"
+default = false
+[settings.labels]
+type = "list"
+default = ["inbox"]
+[settings.hooks]
+description = "optional hooks module"
+type = "path"
+default = ""
+
+[processor]
+module = "processor"
+timeout_s = 120
+state = true
+
+[outputs.summary]
+description = "a summary of new items"
+[outputs.alert]
+description = "something needs attention"
