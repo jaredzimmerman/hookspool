@@ -646,7 +646,7 @@ class _BanWalker(ast.NodeVisitor):
     def __init__(self, rel: str):
         self.rel = rel
         self.found: list[Finding] = []
-        self.alias: dict[str, str] = {}            # local name -> "os" | "time" | "sys" | "builtins"
+        self.alias: dict[str, str] = {}            # local name -> "os" | "os.path" | "time" | "sys" | "builtins"
 
     def hit(self, node: ast.AST, msg: str) -> None:
         self.found.append(Finding(self.rel, getattr(node, "lineno", 0), msg))
@@ -655,15 +655,17 @@ class _BanWalker(ast.NodeVisitor):
         top = mod.split(".")[0]
         if top in BANNED_MODULES:
             self.hit(node, f"imports {mod}: {BANNED_MODULES[top]}")
-        if mod == "hookspool.bobbins" or mod.startswith("hookspool.bobbins."):
+        if BL.names_a_bobbin(mod):
             self.hit(node, f"imports {mod}: a bobbin never imports another bobbin, or itself by package path")
 
     def visit_Import(self, node: ast.Import) -> None:
         for a in node.names:
             self._module(node, a.name)
             top = a.name.split(".")[0]
-            if top in ("os", "time", "sys", "builtins"):
-                self.alias[a.asname or top] = top
+            if a.name == "os.path" and a.asname:
+                self.alias[a.asname] = "os.path"        # the allowed module under its own name: nothing to check
+            elif top in ("os", "time", "sys", "builtins"):
+                self.alias[a.asname or top] = top       # ``import os.path`` binds ``os``, so it is ``os``
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -899,7 +901,7 @@ class _KitSource:
 
 
 def _private(b: Bobbin, module: str) -> str:
-    return f"_hookspool_bobbinkit.{b.name.replace('-', '_')}.{module}"
+    return f"{BL.KIT_MODULE_PREFIX}{b.name.replace('-', '_')}.{module}"
 
 
 def _load_module(b: Bobbin, module: str):

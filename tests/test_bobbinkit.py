@@ -123,6 +123,20 @@ def test_manifest_red_reading_another_bobbins_signature_header(tmp_path):
     assert "declare it in this bobbin's auth_headers" in f.message, "the fix for a shared generic header name"
 
 
+@pytest.mark.parametrize("module", ["hookspool.bobbins.other_bobbin.source", "hookspool.bobbins",
+                                    "_hookspool_bobbins.other_bobbin.source", "_hookspool_bobbinkit.other_bobbin.source"])
+def test_manifest_red_source_module_that_is_another_bobbins_code(tmp_path, module):
+    d = copy(tmp_path, "kitcode")
+    edit(d, "bobbin.toml", 'module = "source"', f'module = "{module}"')
+    c = run(d, "manifest")["manifest"]
+    assert c.result == "fail"
+    f, = c.findings
+    assert f.file == "bobbin.toml" and f.line == 6, f.where()          # the ``module =`` line
+    assert f"source.module: {module!r} is another bobbin's code" in f.message
+    assert "never imports or runs another bobbin" in f.message
+    assert any("another bobbin" in e for e in BL.load_package(d, "test", {}).errors), "the loader refuses it too"
+
+
 def test_manifest_red_another_bobbins_api_host_unless_they_share_a_provider_module(tmp_path):
     a = copy(tmp_path, "kitcode")
     b = copy(tmp_path, "kitcode", "kitother")
@@ -228,8 +242,10 @@ def test_core_only_red_for_every_banned_use(tmp_path, snippet, needle):
 def test_core_only_green_for_what_core_allows(tmp_path):
     d = copy(tmp_path, "kitproc")
     with open(os.path.join(d, "processor.py"), "a") as f:
-        f.write("\nimport os\nimport time\nimport json\nfrom hookspool.plugin import get_path\n"
-                "X = os.path.join('a', 'b')\nT = time.time\nJ = json.dumps\n")
+        f.write("\nimport os\nimport os.path\nimport os.path as osp\nfrom os import path as p\nimport time\n"
+                "import json\nfrom hookspool.plugin import get_path\n"
+                "X = os.path.join('a', 'b')\nY = osp.join('a', 'b')\nZ = p.basename(osp.dirname('a'))\n"
+                "T = time.time\nJ = json.dumps\n")
     write(d, "tests/test_own.py", "import hmac\nimport socket\n")         # the bobbin's own tests are not bobbin code
     c = run(d, "core-only")["core-only"]
     assert c.result == "pass", messages(c)

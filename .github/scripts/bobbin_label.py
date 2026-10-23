@@ -61,8 +61,8 @@ def safe(text: Any, limit: int = MAX_TEXT) -> str:
     return s
 
 
-def read_reports(report_dir: str) -> tuple[int | None, list[dict]]:
-    """(pr number from meta.json, validated scorecards)."""
+def read_reports(report_dir: str) -> tuple[int | None, list[dict], list[str]]:
+    """(pr number from meta.json, validated scorecards, the valid bobbin names meta.json says were checked)."""
     try:
         with open(os.path.join(report_dir, "meta.json"), encoding="utf-8") as f:
             meta = json.load(f)
@@ -71,6 +71,9 @@ def read_reports(report_dir: str) -> tuple[int | None, list[dict]]:
     pr = meta.get("pr") if isinstance(meta, dict) else None
     if pr is not None and (not isinstance(pr, int) or isinstance(pr, bool) or not 0 < pr < 10 ** 9):
         raise Refused("meta.json: pr is not a pull request number")
+    listed = meta.get("bobbins") if isinstance(meta, dict) else None
+    names = [n for n in (listed if isinstance(listed, list) else [])[:MAX_BOBBINS]
+             if isinstance(n, str) and NAME_RE.match(n)]
     cards = []
     for p in sorted(glob.glob(os.path.join(report_dir, "*.json")))[:MAX_BOBBINS + 1]:
         if os.path.basename(p) == "meta.json":
@@ -81,7 +84,7 @@ def read_reports(report_dir: str) -> tuple[int | None, list[dict]]:
         except (OSError, ValueError):
             raise Refused(f"{os.path.basename(p)} is not JSON") from None
         cards.append(validate(doc))
-    return pr, cards[:MAX_BOBBINS]
+    return pr, cards[:MAX_BOBBINS], names
 
 
 def validate(doc: Any) -> dict:
@@ -162,8 +165,10 @@ def find_comment(api: Api, repo: str, pr: int) -> dict | None:
     return None
 
 
-def clear(api: Api, repo: str, pr: int, head_sha: str, *, dry_run: bool = False) -> dict:
-    """The latest push touches no bobbin: drop the labels an earlier push set and refresh the comment, if any."""
+def clear(api: Api, repo: str, pr: int, head_sha: str, *, missing: list[str] = (), dry_run: bool = False) -> dict:
+    """No scorecard arrived: drop the labels an earlier push set and refresh the comment, if any. ``missing``
+    names the bobbins meta.json says were checked; with any, the check job died before writing a card (the
+    required job is red), and the comment says so instead of "no bobbin"."""
     info = api("GET", f"/repos/{repo}/pulls/{pr}", None)
     if not isinstance(info, dict) or (info.get("head") or {}).get("sha") != head_sha:
         raise Refused("the artifact names a pull request whose head is not this run's commit")
@@ -175,8 +180,11 @@ def clear(api: Api, repo: str, pr: int, head_sha: str, *, dry_run: bool = False)
         api("DELETE", f"/repos/{repo}/issues/{pr}/labels/{x}", None)
     existing = find_comment(api, repo, pr)
     if existing is not None:
+        text = ("The latest push changes no bobbin." if not missing else
+                f"The latest push changes {', '.join(f'`{n}`' for n in missing)} but no scorecard was produced:"
+                " the check job stopped before writing one (see its log).")
         api("PATCH", f"/repos/{repo}/issues/comments/{int(existing['id'])}",
-            {"body": f"{MARKER}\n## Bobbin scorecards\n\nThe latest push changes no bobbin.\n"})
+            {"body": f"{MARKER}\n## Bobbin scorecards\n\n{text}\n"})
         done["comment"] = "updated"
     return done
 
@@ -219,7 +227,7 @@ def main(argv: list[str] | None = None, api: Api | None = None) -> int:
         if not os.path.isdir(a.reports):
             print("bobbin_label: no scorecards (no artifact); nothing to do")
             return 0
-        pr, cards = read_reports(a.reports)
+        pr, cards, names = read_reports(a.reports)
         if pr is None:
             print("bobbin_label: no pull request in the artifact; nothing to do")
             return 0
@@ -229,7 +237,7 @@ def main(argv: list[str] | None = None, api: Api | None = None) -> int:
                 raise Refused("GH_TOKEN is not set")
             api = github_api(token, os.environ.get("GITHUB_API_URL") or "https://api.github.com")
         done = (apply(api, a.repo, pr, a.head_sha, cards, dry_run=a.dry_run) if cards
-                else clear(api, a.repo, pr, a.head_sha, dry_run=a.dry_run))
+                else clear(api, a.repo, pr, a.head_sha, missing=names, dry_run=a.dry_run))
     except Refused as e:
         print(f"bobbin_label: refused: {e}")
         return 1

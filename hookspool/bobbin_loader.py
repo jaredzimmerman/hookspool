@@ -37,6 +37,7 @@ BUILTIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bobbins"
 BUILTIN = "built-in"
 BUILTIN_MODULE = "hookspool.bobbins"
 PATH_MODULE_PREFIX = "_hookspool_bobbins."       # private names for code loaded by file path
+KIT_MODULE_PREFIX = "_hookspool_bobbinkit."      # private names for code the conformance kit loads
 TEMPLATE_MODULE = "hookspool.sources.template"
 PROCESSOR_MODULE = "hookspool.processor"
 DEFAULT_PROCESSOR_TIMEOUT_S = 300
@@ -138,6 +139,12 @@ def _is_local_module(v: str) -> bool:
     return "." not in v
 
 
+def names_a_bobbin(module: str) -> bool:
+    """True when a dotted module name is a bobbin's code: the built-in package, or the private names the
+    runtime and the conformance kit give code loaded by file path (§14.3.1: a bobbin never imports another)."""
+    return module == BUILTIN_MODULE or module.startswith((BUILTIN_MODULE + ".", PATH_MODULE_PREFIX, KIT_MODULE_PREFIX))
+
+
 def setting_type_ok(t: str, v: Any) -> bool:
     if t == "string":
         return isinstance(v, str)
@@ -193,6 +200,9 @@ def validate_manifest(m: Any, dirname: str, spans: dict) -> list[str]:
             errs.append("source: exactly one of module or template is required")
         if has_mod and not (isinstance(src["module"], str) and src["module"]):
             errs.append("source.module: must be a module name")
+        elif has_mod and names_a_bobbin(src["module"]):
+            errs.append(f"source.module: {src['module']!r} is another bobbin's code; a bobbin never imports or"
+                        " runs another bobbin (name this bobbin's own source.py, or a core module)")
         if has_tpl:
             t = src["template"]
             if not isinstance(t, dict):

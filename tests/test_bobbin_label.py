@@ -123,6 +123,21 @@ def test_a_push_that_touches_no_bobbin_removes_the_old_labels(tmp_path):
     assert not any(m == "POST" for m, _p in api.writes())      # no new label, no new comment
 
 
+def test_a_bobbin_without_a_scorecard_is_named_instead_of_no_bobbin(tmp_path):
+    mine = {"id": 99, "body": L.MARKER + "\nold", "user": {"type": "Bot"}}
+    api = FakeApi(comments=[mine])
+    d = tmp_path / "reports"
+    d.mkdir()
+    (d / "meta.json").write_text(json.dumps({"pr": 7, "bobbins": ["acme", "bad name", 3]}))   # the child died: no card
+    assert L.main(["--reports", str(d), "--repo", REPO, "--head-sha", SHA], api=api) == 0
+    body = next(b["body"] for m, p, b in api.calls if m == "PATCH" and p.endswith("/comments/99"))
+    assert "`acme`" in body and "no scorecard was produced" in body and "changes no bobbin" not in body
+    assert "bad name" not in body
+    deleted = {p.rsplit("/", 1)[1] for m, p in api.writes() if m == "DELETE"}
+    assert deleted == {"bobbin-only", "touches-core"}
+    assert not any(m == "POST" for m, _p in api.writes())
+
+
 def test_no_label_when_a_scorecard_has_no_scope(tmp_path):
     api = FakeApi()
     assert L.main(["--reports", artifact(tmp_path, [card(scope=None)]), "--repo", REPO, "--head-sha", SHA], api=api) == 0

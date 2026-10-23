@@ -24,10 +24,10 @@ changes. There is no check that only CI knows about.
 
 | check | it proves |
 |---|---|
-| `manifest` | `bobbin.toml` is valid, its name is its directory, and the bobbin covers one service: it reads no other bobbin's signature header and calls no other bobbin's API host |
+| `manifest` | `bobbin.toml` is valid, its name is its directory, its `source.module` is not another bobbin's code, and the bobbin covers one service: it reads no other bobbin's signature header and calls no other bobbin's API host |
 | `files` | `bobbin.toml`, `README.md`, `SETUP.md`, `AGENTS.md` and at least one capture are there |
 | `todos` | no `TODO` placeholder is left (a fresh `hookspool bobbin new` fails only this check) |
-| `core-only` | no module re-implements core: no `hmac`, `urllib`, `socket`, `subprocess`, `threading`, `logging`, files, environment, sleeping, `sys.path` or another bobbin (the full list is ARCHITECTURE.md 14.3.7) |
+| `core-only` | no module re-implements core: no `hmac`, `urllib`, `socket`, `subprocess`, `threading`, `logging`, files, environment, sleeping, `sys.path` or another bobbin (the full list is ARCHITECTURE.md 14.3.7). The bobbin's own `tests/` directory is not walked: tests are not modules the runtime loads, and they may open files and run a loopback stub server |
 | `docs` | SETUP.md and AGENTS.md name every secret and required setting, AGENTS.md opens with **Needs from the human** and has numbered steps, a step that changes something at the provider is marked `outward`, and the `[bobbins.<instance>]` table in each expands |
 | `captures` | at least one accepted and one rejected (bad signature) capture, every `# expect:` holds, and no capture carries a secret-looking value or real-looking personal data (an address outside example.com, a phone number, a public address) |
 | `source-kit` | with each accepted capture, the source passes the shared source kit: signed, unsigned, tampered, stale and future timestamps, oversized, chunked, duplicate, the handshakes, quarantine, spool failures, and nothing secret in the spool or the logs |
