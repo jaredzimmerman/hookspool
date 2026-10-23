@@ -480,6 +480,9 @@ _NOT_A_SERVICE_HOST = re.compile(r"(?i)(^|\.)(example\.(com|org|net)|[a-z0-9-]+\
                                  r"localhost)$|^127\.|^\[")
 
 
+_PROSE_KEYS = frozenset({"description", "summary", "docs", "doc", "documentation", "homepage", "help", "title"})
+
+
 @dataclass
 class _Identity:
     name: str
@@ -498,12 +501,37 @@ def _identity(pkg_dir: str, name: str, manifest: dict) -> _Identity:
     tpl = src.get("template")
     if isinstance(tpl, dict) and isinstance(tpl.get("header"), str):
         auth.add(tpl["header"].lower())
-    texts: list[tuple[str, str]] = []
+    # hosts come from string constants in code and from string values in the manifest, never from comments
+    # or docstrings: a documentation link in either is not a call to that host
+    manifest_text = ""
+    manifest_path = os.path.join(pkg_dir, BL.MANIFEST)
     try:
-        with open(os.path.join(pkg_dir, BL.MANIFEST), encoding="utf-8") as f:
-            texts.append((os.path.join(pkg_dir, BL.MANIFEST), f.read()))
+        with open(manifest_path, encoding="utf-8") as f:
+            manifest_text = f.read()
     except (OSError, UnicodeDecodeError):
         pass
+    manifest_lines = manifest_text.splitlines()
+
+    def note_host(text: str, path: str, line: int) -> None:
+        for m in _URL_HOST.finditer(text):
+            h = m.group(1).lower().rstrip(".")
+            if not _NOT_A_SERVICE_HOST.search(h):
+                hosts.setdefault(h, (path, line))
+
+    def manifest_strings(node: object, key: str = "") -> Iterator[str]:
+        if isinstance(node, str):
+            if key.lower() not in _PROSE_KEYS:
+                yield node
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                yield from manifest_strings(v, str(k))
+        elif isinstance(node, list):
+            for v in node:
+                yield from manifest_strings(v, key)
+
+    for value in manifest_strings(manifest):
+        line = next((i for i, ln in enumerate(manifest_lines, 1) if value in ln), 0)
+        note_host(value, manifest_path, line)
     for base, dirs, files in os.walk(pkg_dir):
         dirs[:] = [d for d in dirs if d not in ("__pycache__", "tests")]
         for fn in files:
@@ -516,8 +544,12 @@ def _identity(pkg_dir: str, name: str, manifest: dict) -> _Identity:
                 tree = ast.parse(text, p)
             except (OSError, UnicodeDecodeError, SyntaxError):
                 continue
-            texts.append((p, text))
+            docstrings = {id(n.body[0].value) for n in ast.walk(tree)
+                          if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                          and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
             for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+                    note_host(node.value, p, node.lineno)
                 if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "auth_headers"
                                                         for t in node.targets):
                     for c in ast.walk(node.value):
@@ -537,12 +569,6 @@ def _identity(pkg_dir: str, name: str, manifest: dict) -> _Identity:
                             providers.add(a.name.split(".")[2])
                 if mod and mod.startswith("hookspool.providers."):
                     providers.add(mod.split(".")[2])
-    for p, text in texts:
-        for i, ln in enumerate(text.splitlines(), 1):
-            for m in _URL_HOST.finditer(ln):
-                h = m.group(1).lower().rstrip(".")
-                if not _NOT_A_SERVICE_HOST.search(h):
-                    hosts.setdefault(h, (p, i))
     return _Identity(name, auth, reads, hosts, providers)
 
 

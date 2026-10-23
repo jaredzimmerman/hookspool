@@ -112,8 +112,15 @@ def test_refuses_a_bad_pr_number_and_bad_arguments(tmp_path):
 def test_nothing_to_do_without_an_artifact_or_a_bobbin(tmp_path):
     api = FakeApi()
     assert L.main(["--reports", str(tmp_path / "absent"), "--repo", REPO, "--head-sha", SHA], api=api) == 0
-    assert L.main(["--reports", artifact(tmp_path, []), "--repo", REPO, "--head-sha", SHA], api=api) == 0
     assert api.calls == []
+
+
+def test_a_push_that_touches_no_bobbin_removes_the_old_labels(tmp_path):
+    api = FakeApi()
+    assert L.main(["--reports", artifact(tmp_path, []), "--repo", REPO, "--head-sha", SHA], api=api) == 0
+    deleted = {p.rsplit("/", 1)[1] for m, p in api.writes() if m == "DELETE"}
+    assert deleted == {"bobbin-only", "touches-core"}
+    assert not any(m == "POST" for m, _p in api.writes())      # no new label, no new comment
 
 
 def test_no_label_when_a_scorecard_has_no_scope(tmp_path):

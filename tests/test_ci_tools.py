@@ -382,7 +382,7 @@ def test_plugins_workflow_runs_the_script_with_the_base_sha():
     text = workflow("plugins.yml")
     assert "fetch-depth: 0" in text
     assert "BASE_SHA: ${{ github.event.pull_request.base.sha }}" in text
-    assert 'plugin_ci.py all --base "$BASE_SHA"' in text
+    assert 'plugin_ci.py all --skip-bobbins --base "$BASE_SHA"' in text
 
 
 def test_workflow_files_parse_as_yaml():

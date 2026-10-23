@@ -139,6 +139,25 @@ def test_manifest_red_another_bobbins_api_host_unless_they_share_a_provider_modu
     assert run(b, "manifest")["manifest"].result == "pass"
 
 
+def test_manifest_green_shared_documentation_links_in_comments_and_docstrings(tmp_path):
+    a = copy(tmp_path, "kitcode")
+    b = copy(tmp_path, "kitcode", "kitother")
+    edit(b, "source.py", 'auth_headers = ("X-Kitcode-Signature",)', 'auth_headers = ("X-Other-Signature",)')
+    edit(b, "source.py", 'req.header("X-Kitcode-Signature")', 'req.header("X-Other-Signature")')
+    for d in (a, b):
+        with open(os.path.join(d, "source.py"), "a") as f:
+            f.write('\n# docs: https://docs.python.org/3/library/hmac.html\n\n\n'
+                    'def helper():\n    """See https://docs.python.org/3/library/hmac.html"""\n')
+        with open(os.path.join(d, "bobbin.toml"), "a") as f:
+            f.write('\n# docs: https://docs.python.org/3/library/hmac.html\n')
+    assert run(b, "manifest")["manifest"].result == "pass"
+    for d in (a, b):   # a host in a string constant is a call, wherever the link sits in the file
+        with open(os.path.join(d, "source.py"), "a") as f:
+            f.write('\nAPI = "https://docs.python.org/3/library/hmac.html"\n')
+    c = run(b, "manifest")["manifest"]
+    assert c.result == "fail" and any("calls docs.python.org" in m for m in messages(c))
+
+
 def test_manifest_green_is_static_and_needs_no_import(tmp_path):
     d = copy(tmp_path, "kitcode")
     edit(d, "source.py", '"""Kit fixture', 'raise SystemExit("never imported by the manifest check")\n"""Kit fixture')

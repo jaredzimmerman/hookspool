@@ -577,6 +577,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="merge-base ref to diff against (default: $BASE_SHA or origin/main)")
         p.add_argument("--json", action="store_true", help="discover: print the specs as JSON")
         if name == "all":
+            p.add_argument("--skip-bobbins", action="store_true",
+                           help="leave the bobbin scorecards to their own job (bobbin.yml)")
             p.add_argument("--all-files", action="store_true", help="scan every tracked file, not only changes")
             p.add_argument("--include-ladder", action="store_true", help="with --all-files: also the tracked .ladder/")
     b = sub.add_parser("bobbins")
@@ -629,8 +631,9 @@ def main(argv: list[str] | None = None) -> int:
         for spec in specs:
             run_kit(spec, report)
         files = changed_files(args.base)
-        bobbins = discover_bobbins(files)
-        report.add("discover", "changed bobbins", True, ", ".join(bobbins) if bobbins else "no bobbin touched")
+        bobbins = [] if args.skip_bobbins else discover_bobbins(files)
+        if not args.skip_bobbins:
+            report.add("discover", "changed bobbins", True, ", ".join(bobbins) if bobbins else "no bobbin touched")
         for d in bobbins:
             run_bobbin(d, report, base=args.base)
         run_guard(report)

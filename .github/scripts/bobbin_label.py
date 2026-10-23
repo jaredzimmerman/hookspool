@@ -149,6 +149,38 @@ def github_api(token: str, root: str = "https://api.github.com") -> Api:
     return call
 
 
+def find_comment(api: Api, repo: str, pr: int) -> dict | None:
+    """The one scorecard comment (by its hidden marker, written by a bot), if there is one."""
+    for page in range(1, 11):
+        rows = api("GET", f"/repos/{repo}/issues/{pr}/comments?per_page=100&page={page}", None) or []
+        for c in rows:
+            if isinstance(c, dict) and MARKER in str(c.get("body") or "") and \
+                    (c.get("user") or {}).get("type") == "Bot":
+                return c
+        if len(rows) < 100:
+            break
+    return None
+
+
+def clear(api: Api, repo: str, pr: int, head_sha: str, *, dry_run: bool = False) -> dict:
+    """The latest push touches no bobbin: drop the labels an earlier push set and refresh the comment, if any."""
+    info = api("GET", f"/repos/{repo}/pulls/{pr}", None)
+    if not isinstance(info, dict) or (info.get("head") or {}).get("sha") != head_sha:
+        raise Refused("the artifact names a pull request whose head is not this run's commit")
+    done: dict[str, Any] = {"pr": pr, "label": None, "comment": None}
+    if dry_run:
+        done["comment"] = "dry-run"
+        return done
+    for x in LABELS:
+        api("DELETE", f"/repos/{repo}/issues/{pr}/labels/{x}", None)
+    existing = find_comment(api, repo, pr)
+    if existing is not None:
+        api("PATCH", f"/repos/{repo}/issues/comments/{int(existing['id'])}",
+            {"body": f"{MARKER}\n## Bobbin scorecards\n\nThe latest push changes no bobbin.\n"})
+        done["comment"] = "updated"
+    return done
+
+
 def apply(api: Api, repo: str, pr: int, head_sha: str, cards: list[dict], *, dry_run: bool = False) -> dict:
     """Verify the pull request, then set the label and the one comment. Returns what was done."""
     info = api("GET", f"/repos/{repo}/pulls/{pr}", None)
@@ -164,16 +196,7 @@ def apply(api: Api, repo: str, pr: int, head_sha: str, cards: list[dict], *, dry
         api("POST", f"/repos/{repo}/issues/{pr}/labels", {"labels": [label]})
         other = next(x for x in LABELS if x != label)
         api("DELETE", f"/repos/{repo}/issues/{pr}/labels/{other}", None)
-    existing = None
-    for page in range(1, 11):
-        rows = api("GET", f"/repos/{repo}/issues/{pr}/comments?per_page=100&page={page}", None) or []
-        for c in rows:
-            if isinstance(c, dict) and MARKER in str(c.get("body") or "") and \
-                    (c.get("user") or {}).get("type") == "Bot":
-                existing = c
-                break
-        if existing is not None or len(rows) < 100:
-            break
+    existing = find_comment(api, repo, pr)
     if existing is not None:
         api("PATCH", f"/repos/{repo}/issues/comments/{int(existing['id'])}", {"body": body})
         done["comment"] = "updated"
@@ -197,15 +220,16 @@ def main(argv: list[str] | None = None, api: Api | None = None) -> int:
             print("bobbin_label: no scorecards (no artifact); nothing to do")
             return 0
         pr, cards = read_reports(a.reports)
-        if pr is None or not cards:
-            print("bobbin_label: no pull request or no bobbin in the artifact; nothing to do")
+        if pr is None:
+            print("bobbin_label: no pull request in the artifact; nothing to do")
             return 0
         if api is None:
             token = os.environ.get("GH_TOKEN", "")
             if not token:
                 raise Refused("GH_TOKEN is not set")
             api = github_api(token, os.environ.get("GITHUB_API_URL") or "https://api.github.com")
-        done = apply(api, a.repo, pr, a.head_sha, cards, dry_run=a.dry_run)
+        done = (apply(api, a.repo, pr, a.head_sha, cards, dry_run=a.dry_run) if cards
+                else clear(api, a.repo, pr, a.head_sha, dry_run=a.dry_run))
     except Refused as e:
         print(f"bobbin_label: refused: {e}")
         return 1
