@@ -36,6 +36,12 @@ The changes below will ship as 0.2.0.
 - The message for an old or missing spool now says to stop the dispatcher and run `hookspool migrate`, and points to
   deploy/README.md; a Hermes 413 under `unwrap` says to exclude the event or raise `max_body_bytes` (one event, not a batch).
 
+### Fixed
+
+- The dispatcher's hot reload validated the new file without loading source plugins, so any config
+  with a `template` source was refused ("unknown key") and the dispatcher kept running on the old
+  config while the intake had already reloaded. Reload now validates the way `check` and startup do.
+
 ## [0.1.0]
 
 ### Added

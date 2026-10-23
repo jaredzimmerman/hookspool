@@ -577,6 +577,34 @@ def test_reload_raising_parallel_grows_the_worker_pool(rig, tmp_path):
     assert len(s.calls) == 3 and all(r.batch(c["doc"]["batch_id"])["state"] == "delivered" for c in s.calls)
 
 
+TEMPLATE_SOURCE = """
+[sources.tpl]
+module = "hookspool.sources.template"
+scheme = "hmac-sha256-hex"
+header = "X-Signature"
+key = "repo"
+action = "script:one"
+secrets.secret = { file = "/nonexistent/secret" }
+
+[destinations."script:one"]
+argv = ["/bin/true"]
+"""
+
+
+def test_reload_accepts_template_sources(rig, tmp_path):
+    # the template plugin's own keys (scheme, header, key, ...) are known only to the plugin; a reload
+    # that validated without loading it refused every such config and silently kept the old one
+    cfgfile = tmp_path / "config.toml"
+    r = rig(config_path=str(cfgfile))                     # no file yet: the dict is the config
+    _write_cfg(cfgfile, '[alerts]\ndry = true\n' + TEMPLATE_SOURCE)
+    r.d.tick()
+    assert r.d.config["destinations"]["script:one"]["argv"] == ["/bin/true"]
+    _write_cfg(cfgfile, '[alerts]\ndry = true\n' + TEMPLATE_SOURCE + '\n[destinations."script:two"]\nargv = ["/bin/false"]\n')
+    r.d.tick()
+    assert r.d.config["destinations"]["script:two"]["argv"] == ["/bin/false"]
+    assert r.store.issue_get("config:file") is None or r.store.issue_get("config:file")["state"] != "open"
+
+
 def test_invalid_reload_keeps_the_old_config_and_opens_an_issue(rig, tmp_path):
     cfgfile = tmp_path / "config.toml"
     r = rig(config_path=str(cfgfile))                     # no file yet: the dict is the config

@@ -275,7 +275,7 @@ class Dispatcher:
             return False
         try:
             new = _config.load_config(self._config_path)
-            rep = _config.check(new, load_plugin=None, check_secrets=False)
+            rep = _config.check(new, load_plugin=_config.default_plugin_loader, check_secrets=False)
             if not rep.ok:
                 raise _config.ConfigError("; ".join(rep.errors[:5]))
         except (ValueError, OSError) as e:
@@ -307,7 +307,7 @@ class Dispatcher:
         log.info("worker pool resized parallel=%d", want)
 
     def _config_failed(self, now: float, text: str) -> None:
-        log.error("config reload failed; keeping the previous config")
+        log.error("config reload failed; keeping the previous config (the reason is in `hookspool issues`)")
         self.store.issue_open("config:file", "config", error=text, now=now)
 
     def destination(self, name: str) -> Destination:
