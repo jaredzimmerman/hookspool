@@ -220,16 +220,20 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _set_args(items: list[str]) -> dict | None:
-    """``--set NAME=VALUE`` pairs: the value is a TOML value, else the bare string."""
+    """``--set NAME=VALUE`` pairs: the value is a TOML value, else the bare string. A template key that takes
+    only a string keeps the text as written (``prefix=1`` is the string ``1``, not an integer)."""
+    from .bobbin_loader import TEMPLATE_KEYS
     out: dict = {}
     for item in items:
         k, eq, raw = item.partition("=")
-        if not eq or not k.strip():
+        k = k.strip()
+        if not eq or not k:
             raise ValueError(f"--set {item!r}: expected NAME=VALUE")
         try:
-            out[k.strip()] = tomllib.loads("v = " + raw)["v"]
+            v = tomllib.loads("v = " + raw)["v"]
         except tomllib.TOMLDecodeError:
-            out[k.strip()] = raw
+            v = raw
+        out[k] = raw if TEMPLATE_KEYS.get(k) == ("string",) and not isinstance(v, str) else v
     return out or None
 
 
@@ -241,6 +245,9 @@ def _bobbin(a, cfg: dict) -> int:
         _err(f"bobbin {a.subcmd}: give a {'bobbin' if a.subcmd == 'show' else 'name'}")
         return EXIT_NOTHING
     if a.subcmd == "new":
+        if a.template and a.code:
+            _err("--template is the default; it cannot be combined with --code")
+            return EXIT_CONFIG
         try:
             d = bobbin_loader.scaffold(a.name, a.dir, code=a.code, processor=a.processor,
                                        settings=_set_args(a.set_))

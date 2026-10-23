@@ -204,6 +204,44 @@ def test_an_output_per_event_type_becomes_a_route_on_event_type(tmp_path):
                               "match": {"event_type": "order.created"}, "destination": "hermes:orders"}]
 
 
+ROUTED = {"url-token": dict(SCHEME_SETTINGS["url-token"], event_type="type")}
+TWO_OUTPUTS = {"*": "hermes:all", "order.created": "hermes:orders"}
+
+
+def test_a_capture_is_routed_to_the_destination_of_its_event_type(tmp_path):
+    settings = dict(ROUTED["url-token"], attrs={"event_type": "type"})
+    out = expand({"webhook": instance(tmp_path, settings, outputs=TWO_OUTPUTS)})
+    got = I.source_test(out, "webhook", capture("url-token"))          # the capture's type is order.created
+    assert got["result"] == "queued" and got["event_type"] == "order.created"
+    assert got["destination"] == "hermes:orders" and got["route"] == "webhook-order.created"
+    other = dict(settings, event_type="literal:other", attrs={"event_type": "literal:other"})
+    out = expand({"webhook": instance(tmp_path, other, outputs=TWO_OUTPUTS)})
+    assert I.source_test(out, "webhook", capture("url-token"))["destination"] == "hermes:all"
+
+
+def test_check_refuses_per_type_outputs_without_attrs_event_type(tmp_path):
+    errs = check_errors(tmp_path, instance(tmp_path, ROUTED["url-token"], outputs=TWO_OUTPUTS))
+    assert any("settings.attrs does not copy event_type" in e and 'attrs = { event_type = "type" }' in e for e in errs), errs
+    no_selector = check_errors(tmp_path, instance(tmp_path, SCHEME_SETTINGS["url-token"], outputs=TWO_OUTPUTS))
+    assert any("event_type = " in e and "attrs = " in e for e in no_selector), no_selector
+    fixed = dict(ROUTED["url-token"], attrs={"event_type": "type"})
+    assert check_errors(tmp_path, instance(tmp_path, fixed, outputs=TWO_OUTPUTS)) == []
+    assert check_errors(tmp_path, instance(tmp_path, SCHEME_SETTINGS["url-token"])) == []      # only "*": no routes
+
+
+@pytest.mark.parametrize("name,empty", [("dedup", ""), ("ignore", []), ("header", ""), ("event_type", ""),
+                                        ("prefix", ""), ("param", ""), ("attrs", {})])
+def test_an_empty_instance_value_is_unset(name, empty, tmp_path):
+    base = dict(SCHEME_SETTINGS["hmac-sha256-hex"])
+    inst = instance(tmp_path, dict(base, **{name: empty}))
+    if name in ("header",):                       # the scheme needs it: unset means the template's own message
+        assert any("header: required by scheme hmac-sha256-hex" in e for e in check_errors(tmp_path, inst))
+        return
+    src = expand({"webhook": inst})["sources"]["webhook"]
+    assert name not in src
+    assert check_errors(tmp_path, inst) == []
+
+
 # ---- one rule for both template forms ----------------------------------------------------------------------
 def fixture_manifest(source: str, settings: str = "", extra: str = "") -> str:
     return ('name = "pkg"\nversion = "1"\n\n' + source + '\n[secrets.secret]\ndescription = "x"\n\n' + settings
@@ -290,6 +328,12 @@ def scaffolded(tmp_path, capsys, *flags):
     return root, root / "acme-hooks"
 
 
+def scaffold_settings(d) -> dict:
+    """The deployment-only settings a scaffolded bobbin declares, with the example the kit instance gives them."""
+    kit = d / "captures" / "kit.toml"
+    return tomllib.loads(kit.read_text()).get("settings", {}) if kit.is_file() else {}
+
+
 @pytest.mark.parametrize("scheme", sorted(SCHEME_SETTINGS))
 def test_bobbin_new_freezes_the_webhook_settings_into_a_fixed_template(scheme, tmp_path, capsys):
     flags = ["--set", f"scheme={scheme}"]
@@ -298,7 +342,7 @@ def test_bobbin_new_freezes_the_webhook_settings_into_a_fixed_template(scheme, t
     _root, d = scaffolded(tmp_path, capsys, *flags)
     m = tomllib.loads((d / "bobbin.toml").read_text())
     tpl = m["source"]["template"]
-    assert isinstance(tpl, dict) and tpl["scheme"] == scheme and "settings" not in m
+    assert isinstance(tpl, dict) and tpl["scheme"] == scheme and set(m.get("settings", {})) <= {"callback_url"}
     assert set(tpl) <= set(PK.TEMPLATE_KEYS) - {"sender_retries"}
     assert set(m["secrets"]) == {"secret"} and set(m["outputs"]) == {"*"}
     assert m["source"]["span"] == tomllib.loads(open(os.path.join(WEBHOOK, "bobbin.toml")).read())["source"]["span"]
@@ -314,6 +358,10 @@ def test_the_frozen_bobbin_expands_to_the_source_the_webhook_instance_gives(sche
     tpl = tomllib.loads((d / "bobbin.toml").read_text())["source"]["template"]
     sec = secret_file(tmp_path)
     spec = {"secrets": {"secret": {"file": sec}}, "outputs": {"*": "hermes:acme"}}
+    extra = scaffold_settings(d)                                       # the deployment-only values
+    if extra:
+        spec["settings"] = extra
+    tpl = dict(tpl, **extra)
     frozen = PK.expand(C.merge(C.DEFAULTS, {"spool": {"bobbin_path": [str(root)], "home": str(tmp_path / "h")},
                                             "alerts": {"argv": ["true"]},
                                             "bobbins": {"acme": dict(spec, bobbin="acme-hooks")}}))["sources"]["acme"]
@@ -337,10 +385,13 @@ def test_the_scaffold_capture_is_accepted_and_a_wrong_secret_refused(scheme, tmp
     root, d = scaffolded(tmp_path, capsys, *flags)
 
     def result(secret: str, name: str) -> str:
+        inst = {"bobbin": "acme-hooks", "secrets": {"secret": {"file": secret_file(tmp_path, secret)}},
+                "outputs": {"*": "hermes:acme"}}
+        if scaffold_settings(d):
+            inst["settings"] = scaffold_settings(d)
         cfg = PK.expand(C.merge(C.DEFAULTS, {
             "spool": {"bobbin_path": [str(root)], "home": str(tmp_path / "h")}, "alerts": {"argv": ["true"]},
-            "bobbins": {"acme": {"bobbin": "acme-hooks", "secrets": {"secret": {"file": secret_file(tmp_path, secret)}},
-                                 "outputs": {"*": "hermes:acme"}}}}))
+            "bobbins": {"acme": inst}}))
         with open(d / "captures" / name, "rb") as f:
             raw = parse_capture(f.read())
         return I.source_test(cfg, "acme", raw)["result"]
@@ -375,3 +426,34 @@ def test_the_default_scaffold_is_the_webhook_copy_and_code_is_the_old_shape(tmp_
 def test_the_old_template_flag_is_still_accepted(tmp_path, capsys):
     _root, d = scaffolded(tmp_path, capsys, "--template")
     assert not (d / "source.py").exists()
+
+
+def test_the_old_template_flag_with_code_is_refused(tmp_path, capsys):
+    rc, _out, err = run(["bobbin", "new", "acme-hooks", "--dir", str(tmp_path), "--template", "--code"], capsys)
+    assert rc == 2 and "cannot be combined with --code" in err and not (tmp_path / "acme-hooks").exists()
+
+
+def test_the_callback_url_stays_a_required_setting_of_a_scaffolded_sha1_bobbin(tmp_path, capsys):
+    _root, d = scaffolded(tmp_path, capsys, "--set", "scheme=hmac-sha1-base64-url")
+    m = tomllib.loads((d / "bobbin.toml").read_text())
+    assert "callback_url" not in m["source"]["template"]
+    assert m["settings"]["callback_url"]["required"] is True and m["settings"]["callback_url"]["type"] == "string"
+    assert scaffold_settings(d) == {"callback_url": "https://hooks.example.test/hooks/acme-hooks"}
+    assert 'settings = { callback_url = ' in (d / "SETUP.md").read_text()
+    inst = {"bobbin": "acme-hooks", "secrets": {"secret": {"file": secret_file(tmp_path)}}, "outputs": {"*": "hermes:acme"}}
+    doc = {"spool": {"bobbin_path": [str(_root)], "home": str(tmp_path / "h")}, "alerts": {"argv": ["true"]}}
+    with pytest.raises(PK.BobbinError) as ei:                           # no instance can omit it and go unverified
+        PK.expand(C.merge(C.DEFAULTS, dict(doc, bobbins={"acme": inst})))
+    assert any("settings.callback_url: required" in e for e in ei.value.errors), ei.value.errors
+    src = PK.expand(C.merge(C.DEFAULTS, dict(doc, bobbins={"acme": dict(inst, settings=scaffold_settings(d))})))["sources"]["acme"]
+    assert src["callback_url"] == scaffold_settings(d)["callback_url"]
+    other = tmp_path / "b"
+    other.mkdir()
+    _r, d2 = scaffolded(other, capsys)                                  # the default scheme needs no such setting
+    assert "settings" not in tomllib.loads((d2 / "bobbin.toml").read_text())
+
+
+@pytest.mark.parametrize("flag,field,value", [("prefix=1", "prefix", "1"), ("header=2024-01-01", "header", "2024-01-01")])
+def test_a_set_value_of_a_string_only_key_keeps_the_text_as_written(flag, field, value, tmp_path, capsys):
+    _root, d = scaffolded(tmp_path, capsys, "--set", flag)
+    assert tomllib.loads((d / "bobbin.toml").read_text())["source"]["template"][field] == value

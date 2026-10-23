@@ -710,8 +710,8 @@ and an output key that is not an event-type token or `"*"` are errors.
 - `[source] template = "settings"`, no fixed table: every key comes from settings.
 
 In both forms a `[settings.<name>]` whose name is a template key **is that key's value** in the expanded
-`[sources.<i>]`: the instance's value, else the setting's default unless that is empty (`""`, `[]`, `{}`),
-which means unset. A fixed table never has its own keys overridden (declaring a setting for a key the table
+`[sources.<i>]`: the instance's value, else the setting's default; an empty value (`""`, `[]`, `{}`), whether
+given or default, means unset and the key is left out. A fixed table never has its own keys overridden (declaring a setting for a key the table
 already sets is a manifest error), so a fixed template bobbin uses settings for the one or two values only
 the deployment knows (Trello's `callback_url`, the exact URL its signature covers) and `"settings"` uses them for
 all. Allowed setting types follow the key: `string` for `scheme`, `header`, `prefix`, `param`, `callback_url`,
@@ -727,16 +727,22 @@ its own and sends a signed or tokened JSON POST. Its manifest says `template = "
 setting per template key (`scheme` and `key` required; the rest default to unset). It has one secret
 (`secret`), no processor, and the output `"*"`. Because the sender's event types cannot be listed in a
 manifest, an instance of a `"settings"` bobbin may map any event-type token next to `"*"`; each becomes a route
-on `event_type` (14.3.3 step 3). Its `SETUP.md` and `AGENTS.md` are a procedure for reading a provider's webhook
+on `event_type` (14.3.3 step 3). The routes match the event's `attrs`, so such an instance must also set
+`attrs.event_type` (to the `event_type` selector); `hookspool check` reports an error when it does not. Its `SETUP.md` and `AGENTS.md` are a procedure for reading a provider's webhook
 documentation into those settings (where the signature is, what is signed, which field identifies the object,
-which header carries a delivery id, whether the sender retries) and for testing with a captured delivery. Its
+which header carries a delivery id, whether the sender retries), for testing with a captured delivery
+(`hookspool source test <instance> --request <capture>`) before anything is registered, and for the sweep that
+redelivers what a sender that does not retry loses (14.3.8). Its
 `captures/` hold the kit's captures for one example instance (`captures/kit.toml`) and `captures/schemes/`
 one accepted delivery per scheme.
 
 **The scaffold.** `hookspool bobbin new <name>` copies the `webhook` bobbin's shape and freezes its settings into
 a fixed `[source] template` table: the example values for the scheme, with `--set NAME=VALUE` over them (a value
 is TOML, or a bare string; an empty value removes the key), each checked by the template source before
-anything is written. The captures are signed for the chosen scheme. This is how a dedicated bobbin starts.
+anything is written. The captures are signed for the chosen scheme. A value only the deployment knows
+(`callback_url` of `hmac-sha1-base64-url`) is not frozen: the new bobbin declares it as a required
+`[settings.callback_url]` (a fixed template keeps it as a setting, as Trello does), and the example used for the
+captures is the kit instance's setting in `captures/kit.toml`. This is how a dedicated bobbin starts.
 When the same service is set up through `webhook` by several deployments, that is the signal to give it its
 own bobbin.
 

@@ -266,7 +266,7 @@ directory for `check`.
 | option | meaning |
 |---|---|
 | `--dir D` | `new`: the parent directory (default: the current directory) |
-| `--set NAME=VALUE` | `new`: freeze a webhook setting (`scheme`, `header`, `prefix`, `key`, `dedup`, ...) into the template; the value is TOML (`--set 'key=["id"]'`) or a bare string, an empty value removes the key; repeatable. A value the template refuses stops `new` with the template's message |
+| `--set NAME=VALUE` | `new`: freeze a webhook setting (`scheme`, `header`, `prefix`, `key`, `dedup`, ...) into the template; the value is TOML (`--set 'key=["id"]'`) or a bare string, an empty value removes the key, and a key that takes only a string keeps the text as written (`--set prefix=1` is the string `1`); repeatable. `callback_url` (hmac-sha1-base64-url) is used for the captures and the kit instance but stays a required setting of the new bobbin, not part of its template. A value the template refuses stops `new` with the template's message |
 | `--code` | `new`: a `source.py` instead of the template |
 | `--processor` | `new`: include a `processor.py` and a `[processor]` table |
 | `--report text\|md\|json` | `check`: the scorecard as aligned text (default), GitHub Markdown, or JSON (schema `hookspool.bobbin-check/1`) |

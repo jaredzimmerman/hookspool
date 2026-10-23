@@ -625,11 +625,11 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
         if "sender_retries" in msrc:
             src["sender_retries"] = msrc["sender_retries"]
         # the template-settings rule (14.3.2a): a setting that names a template key is that key's value, the
-        # instance's, else the setting's default unless that is empty (unset). The result goes through the
-        # template source's own checks, so a bad value fails `check` with the template's message.
-        given = spec.get("settings") if isinstance(spec.get("settings"), dict) else {}
+        # instance's, else the setting's default; an empty value (``""``, ``[]``, ``{}``), given or default,
+        # means unset. The result goes through the template source's own checks, so a bad value fails `check`
+        # with the template's message.
         for n in TEMPLATE_KEYS:
-            if n in settings and n not in fixed and (n in given or settings[n] not in ("", [], {}, None)):
+            if n in settings and n not in fixed and settings[n] not in ("", [], {}, None):
                 src[n] = copy.deepcopy(settings[n])
     else:
         mod = msrc["module"]
@@ -807,7 +807,8 @@ def check(cfg: dict, rep) -> None:
 
     for inst, meta in metas.items():
         if meta.get("routes"):
-            _warn_no_event_type_attr(cfg, inst, rep)
+            pkg = pkgs.get(meta["bobbin"])
+            _warn_no_event_type_attr(cfg, inst, rep, error=pkg is not None and _open_outputs(pkg))
 
     routes = cfg.get("routes") if isinstance(cfg.get("routes"), list) else []
     for inst, meta in metas.items():
@@ -836,10 +837,11 @@ def check(cfg: dict, rep) -> None:
                         " dispatcher's environment; use a file or env_file reference")
 
 
-def _warn_no_event_type_attr(cfg: dict, inst: str, rep) -> None:
+def _warn_no_event_type_attr(cfg: dict, inst: str, rep, *, error: bool = False) -> None:
     """The routes generated for a multi-output bobbin match ``event_type`` in ``attrs`` (§14.3.3 step 3);
     a source that does not expose it sends every event to the ``"*"`` output. Warn, since the plugin's
-    ``attrs`` can only be judged by running it."""
+    ``attrs`` can only be judged by running it. For a template source the attrs are in the table, so an
+    instance of a ``"settings"`` bobbin (``error``) that maps an event type without them is an error."""
     s = (cfg.get("sources") or {}).get(inst) or {}
     if s.get("module") == TEMPLATE_MODULE:
         attrs = s.get("attrs")
@@ -850,9 +852,17 @@ def _warn_no_event_type_attr(cfg: dict, inst: str, rep) -> None:
         except Exception:  # noqa: BLE001 - check reports an unloadable plugin itself
             return
         ok = getattr(getattr(plugin, "module", plugin), "attrs", None) is not None
-    if not ok:
-        rep.warn(f"bobbins.{inst}: its source does not expose event_type in attrs, so the generated routes"
-                 " (one per output) never match and every event reaches the \"*\" output")
+    if ok:
+        return
+    if error and s.get("module") == TEMPLATE_MODULE:
+        sel = s.get("event_type")
+        hint = (f'attrs = {{ event_type = "{sel}" }}' if isinstance(sel, str) and sel else
+                'event_type = "<where the type is>" and attrs = { event_type = "<the same>" }')
+        rep.err(f"bobbins.{inst}: outputs are mapped per event type, but settings.attrs does not copy event_type;"
+                f" set {hint}, or every event reaches the \"*\" output")
+        return
+    rep.warn(f"bobbins.{inst}: its source does not expose event_type in attrs, so the generated routes"
+             " (one per output) never match and every event reaches the \"*\" output")
 
 
 def is_expanded_destination(cfg: dict, name: str) -> bool:
@@ -1023,6 +1033,9 @@ def scaffold(name: str, parent: str, *, code: bool = False, processor: bool = Fa
     os.makedirs(d)
     os.makedirs(os.path.join(d, "captures"))
     good, bad = _scaffold_requests(name, frozen)
+    # a value only the deployment knows stays a setting, as a fixed template does for Trello (14.3.2a): the
+    # example is used for the captures and the kit instance (captures/kit.toml), never frozen into the template
+    callback = frozen.pop("callback_url", None) if not code else None
     # the manifest: the webhook's span, secret and output, the frozen template in place of `template = "settings"`
     src_lines = ['[source]']
     if code:
@@ -1040,14 +1053,21 @@ def scaffold(name: str, parent: str, *, code: bool = False, processor: bool = Fa
     manifest = (f'name = {_val(name)}\nversion = "1"\nsummary = "TODO: one line on what the outside service sends"\n\n'
                 + "\n".join(src_lines) + "\n\n"
                 f'[secrets.secret]\ndescription = "TODO: {secret_desc}"\n\n')
+    if callback:
+        manifest += ('[settings.callback_url]\ndescription = "TODO: the exact URL the sender was given for this webhook'
+                     ' (it is part of the signed input)"\ntype = "string"\nrequired = true\n\n')
     if processor:
         manifest += '[processor]\nmodule = "processor"\ntimeout_s = 300\nstate = true\n\n'
     manifest += outputs
     out_line = (f'outputs = {{ changed = "hermes:{name}-changed" }}' if processor else
                 f'outputs = {{ "*" = "hermes:{name}" }}')
     table = (f'[bobbins.{name}]\nsecrets.secret = {{ file = "/etc/hookspool/secrets/{name}_secret" }}\n{out_line}\n')
+    if callback:
+        table += f'settings = {{ callback_url = "https://<HOOKS_HOST>/hooks/{name}" }}\n'
     url_note = (f"Proxy: forward `/hooks/{name}` to the intake and keep the query string (the token is in it)"
                 if frozen["scheme"] == "url-token" else f"Proxy: forward `/hooks/{name}` to the intake")
+    callback_note = ("\nSet `callback_url` to the exact URL given to the sender (its signature covers it); a delivery"
+                     " signed over another URL is refused.\n" if callback else "")
     files = {MANIFEST: manifest,
              os.path.join("captures", "example.http"):
                  "# capture: TODO describe the request; signed with " + SCAFFOLD_SECRET + "\n# expect: queued\n"
@@ -1061,7 +1081,7 @@ def scaffold(name: str, parent: str, *, code: bool = False, processor: bool = Fa
                          f" `/etc/hookspool/secrets/{name}_secret`, mode 0600, owned by the hookspool user.\n\n"
                          "## Config\n\nAdd to `config.toml`, then run `hookspool check` and `hookspool reload`:\n\n"
                          f"```toml\n{table}```\n\n"
-                         f"{url_note} (see `deploy/nginx.example.conf`).\n\n"
+                         f"{url_note} (see `deploy/nginx.example.conf`).\n{callback_note}\n"
                          "## Verify\n\nSend a test delivery from the provider, then"
                          f" `hookspool list --source {name}` shows a batch.\n\n"
                          "## Roll back\n\nDelete the webhook at the provider, remove the table and run"
@@ -1087,8 +1107,13 @@ def scaffold(name: str, parent: str, *, code: bool = False, processor: bool = Fa
                           "   Check: a batch is listed. If not: run `hookspool status` and report it.\n",
              "README.md": f"# {name}\n\nTODO: what the outside service sends and what this bobbin does with it.\n\n"
                           "## Setup at the provider\n\nTODO\n\n## Secrets\n\n- `secret`: TODO\n\n"
-                          "## Settings\n\nNone yet.\n\n## Outputs\n\nTODO\n\n"
+                          + ("## Settings\n\n- `callback_url`: TODO the exact URL given to the sender (required)\n\n"
+                             if callback else "## Settings\n\nNone yet.\n\n") + "## Outputs\n\nTODO\n\n"
                           f"The capture in `captures/` is signed with the test secret `{SCAFFOLD_SECRET}`.\n"}
+    if callback:
+        files[os.path.join("captures", "kit.toml")] = (
+            "# test values for `hookspool bobbin check`: the URL the captures are signed over\n"
+            f"[settings]\ncallback_url = {_val(callback)}\n")
     if code:
         files["source.py"] = (
             f'"""{name} webhooks: verify the signature and choose the coalescing key."""\n'

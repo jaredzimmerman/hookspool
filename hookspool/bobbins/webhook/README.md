@@ -32,8 +32,10 @@ settings into a fixed `[source] template`. When several deployments set up the s
 - **Event type and attributes.** `event_type` reads the event type; `attrs` copies named values onto the
   event so a destination can route on them.
 - **Handshake.** `head_handshake = true` answers the sender's unsigned `HEAD` probe with 200.
-- **Retries.** `sender_retries` says the sender retries a failed delivery, which changes how long a gap is
-  tolerated before a missing delivery is worth a sweep.
+- **Retries.** `sender_retries = true` says the sender retries a failed delivery by itself. It changes nothing
+  in how deliveries are handled; it only decides whether `hookspool check` warns that the sender does not retry
+  (the default, `false`), in which case a sweep must redeliver what was lost while hookspool was down
+  (SETUP.md, "Sweep").
 
 ## Settings
 
@@ -51,7 +53,8 @@ lists them with their types).
 | `head_handshake`, `sender_retries` | bool | default false |
 
 A value the template refuses fails `hookspool check` with the template's own message, for example
-`header: required by scheme hmac-sha256-hex`. An empty string, list or table means unset.
+`header: required by scheme hmac-sha256-hex`. An empty string, list or table means unset, whether the
+instance gives it or it is the default (`dedup = ""` is the same as leaving `dedup` out).
 
 ## Secrets
 
@@ -62,7 +65,10 @@ A value the template refuses fails `hookspool check` with the template's own mes
 ## Outputs
 
 `"*"`: every accepted delivery goes to the one mapped destination. To route by event type, map further outputs
-named after the event types `event_type` produces; each becomes a route on `event_type`.
+named after the event types `event_type` produces; each becomes a route on `event_type`. The routes read the
+event's attributes, so the instance must also copy the type there: `attrs = { event_type = "<the same selector>" }`.
+`hookspool check` reports an error when outputs are mapped per event type and `attrs.event_type` is missing
+(otherwise every event would silently reach `"*"`).
 
 ## Limits
 

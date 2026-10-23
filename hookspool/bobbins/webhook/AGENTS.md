@@ -11,7 +11,8 @@ signing secret: the person writes the secret file and registers the webhook.
   not read it, print it or repeat it.
 - A name for the instance (`<INSTANCE>`, lowercase letters, digits and dashes) and the public HTTPS host
   (`<HOOKS_HOST>`).
-- Approval before the webhook is created at the sender (step 5) and before it is deleted (step 7).
+- Approval before the webhook is created at the sender (step 6), before a sweep job is installed (step 8) and
+  before the webhook is deleted (step 9).
 
 ## Steps
 
@@ -30,21 +31,37 @@ signing secret: the person writes the secret file and registers the webhook.
    ```toml
    [bobbins.acme-events]
    bobbin = "webhook"
-   settings = { scheme = "hmac-sha256-hex", header = "X-Signature", prefix = "sha256=", key = ["id"], event_type = "type" }
+   settings = { scheme = "hmac-sha256-hex", header = "X-Signature", prefix = "sha256=", key = ["id"], event_type = "type", attrs = { event_type = "type" } }
    secrets.secret = { file = "/etc/hookspool/secrets/acme-events" }
    outputs = { "*" = "hermes:acme-events" }
    ```
+   To route by event type, add `outputs` entries named after the event types; the settings must then keep
+   `attrs = { event_type = "<the same selector as event_type>" }`, or `hookspool check` reports an error.
    **Check:** `hookspool bobbin expand <INSTANCE>` succeeds and shows the secret as a reference only.
    **If it fails:** the message is the template's own (for example `header: required by scheme ...`); fix the
    setting it names.
 4. **Goal:** the config is valid and loaded. Run `hookspool check`, then `hookspool reload`.
    **Check:** no error mentions `<INSTANCE>`. **If it fails:** fix the table, do not change the bobbin.
-5. **Outward, human-performed:** the person creates the webhook at the sender with the URL
+5. **Goal:** the settings read a delivery correctly, before anything is registered. Save one example delivery
+   from the sender's documentation (or one the person captured) as `/tmp/<INSTANCE>.http` in the format of
+   `captures/event.http`, signed with the secret by the person if it needs one, then run
+   `hookspool source test <INSTANCE> --request /tmp/<INSTANCE>.http`.
+   **Check:** `result` is `queued` and `key`, `event_type` and `attrs` are the values the documentation example
+   implies (when `outputs` are mapped per event type, `destination` is the one for that type). **If it fails:**
+   `unverified` means the scheme, header, prefix or secret differs; `quarantined` means `key` cannot be read
+   from the payload; fix the setting and run steps 4 and 5 again.
+6. **Outward, human-performed:** the person creates the webhook at the sender with the URL
    `https://<HOOKS_HOST>/hooks/<INSTANCE>` and the secret from step 1. The agent does not run this. Ask the
    person to confirm when it is done.
-6. **Goal:** a real delivery is accepted. Ask the person to trigger an event at the sender, then run
+7. **Goal:** a real delivery is accepted. Ask the person to trigger an event at the sender, then run
    `hookspool list --source <INSTANCE>`.
-   **Check:** one queued event. **If it fails:** an `unverified` result means the scheme, header, prefix or
-   secret differs from the sender's; compare each with the documentation sentence from step 2.
-7. **Outward, rollback:** remove `[bobbins.<INSTANCE>]`, run `hookspool check` and `hookspool reload`. Then ask the
-   person to delete the webhook at the sender. The agent does not run the delete.
+   **Check:** a batch is listed for it. **If it fails:** an `unverified` result means the scheme, header,
+   prefix or secret differs from the sender's; compare each with the documentation sentence from step 2.
+8. **Goal:** lost deliveries are recovered. If the sender does not retry (`sender_retries = false`; `hookspool
+   check` warns about it), propose a periodic job that lists the sender's recent failed deliveries and
+   redelivers them, or enqueues what is missing with `hookspool enqueue --source <INSTANCE> ...`; redelivery is
+   harmless because `dedup` recognises a delivery already queued. **Check:** the person approves the job
+   before it is installed. **If it fails:** the sender has no way to list deliveries; ask the person how else
+   the objects can be listed.
+9. **Outward, rollback:** remove `[bobbins.<INSTANCE>]`, run `hookspool check` and `hookspool reload`. Then ask
+   the person to delete the webhook at the sender. The agent does not run the delete.
