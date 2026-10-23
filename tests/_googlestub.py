@@ -1,4 +1,4 @@
-"""A scripted stand-in for the Google endpoints the delta scripts call (Calendar events, Gmail
+"""A scripted stand-in for the Google endpoints the Gmail and Calendar bobbins call (Calendar events, Gmail
 history/messages/profile, free/busy, the OAuth token endpoint), on 127.0.0.1. Test values only."""
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ class GoogleStub:
         self.messages: dict[str, dict] = {}
         self.busy: list[dict] = []              # free/busy intervals {"start","end"}
         self.token_calls = 0
+        self.fail_insert = False                # answer 500 to an event insert
         stub = self
 
         class H(BaseHTTPRequestHandler):
@@ -51,6 +52,8 @@ class GoogleStub:
                             nxt = stub.calendar_lists.pop(0) if stub.calendar_lists else {"items": [], "nextSyncToken": "s-same"}
                             return self._send(nxt, {"error": "scripted"}) if isinstance(nxt, int) else self._send(200, nxt)
                         if method == "POST":
+                            if stub.fail_insert:
+                                return self._send(500, {"error": "scripted"})
                             ev = json.loads(body or b"{}")
                             ev["id"] = f"created-{len(stub.created) + 1}"
                             stub.created.append(ev)
@@ -92,10 +95,13 @@ class GoogleStub:
     def base(self) -> str:
         return f"http://127.0.0.1:{self.port}"
 
-    def env(self) -> dict[str, str]:
-        """The environment variables that point both scripts at this stub."""
-        return {"GCAL_DELTA_API": self.base + "/cal/events", "GMAIL_DELTA_API": self.base + "/gmail/",
-                "GMAIL_DELTA_FREEBUSY": self.base + "/freebusy"}
+    def gmail_settings(self) -> dict[str, str]:
+        """The gmail bobbin settings that point it at this stub."""
+        return {"api_url": self.base + "/gmail/", "freebusy_url": self.base + "/freebusy"}
+
+    def gcal_settings(self) -> dict[str, str]:
+        """The gcal bobbin settings that point it at this stub."""
+        return {"api_url": self.base + "/cal/events"}
 
     def count(self, method: str, prefix: str) -> int:
         return sum(1 for r in self.requests if r["method"] == method and r["path"].startswith(prefix))

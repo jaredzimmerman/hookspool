@@ -231,7 +231,7 @@ table with a `type`.
 | `env_file` | `script` | none | `KEY=value` file, re-read on every attempt, whose values become the script's environment (absolute path) |
 | `env` | `script` | none | `NAME = "value"` strings set over `env_file` in the script's environment. Names match `^[A-Z][A-Z0-9_]*$`; `HOOKSPOOL_*` names are set by hookspool only |
 | `processor` | `script` | none | set only by a `[bobbins.<instance>]` expansion, in place of `argv`: the dispatcher runs its own interpreter as `python -I -m hookspool.processor <instance>` |
-| `state_dir` | `script` | none | a directory the script may keep state in (absolute path). Created if missing; passed as `HOOKSPOOL_STATE_DIR`. List it in the service unit's `ReadWritePaths` |
+| `state_dir` | `script` | none | a directory the script may keep state in (absolute path). Created if missing (mode 0700); passed as `HOOKSPOOL_STATE_DIR`. List it in the service unit's `ReadWritePaths` unless it is below the home. A bobbin's processor keeps OAuth access tokens and rotated refresh tokens in clear text there, so a directory you choose yourself must be private (mode 0700, owned by the service user) |
 | `url` | `http` | required | where to POST. Must be `https://` unless `allow_insecure` |
 | `secret` | `http` | required | secret reference used to sign each delivery |
 | `secret_previous` | `http` | none | the old secret during a rotation; deliveries then carry both signatures |

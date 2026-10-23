@@ -11,8 +11,9 @@ Environment (ARCHITECTURE §10): minimal. ``PATH``, ``HOME`` and ``LANG`` from t
 directory is created). Nothing else of the dispatcher's environment reaches a script, so its
 secrets do not.
 
-Outcomes: exit 0 is ``ok``; any other exit is ``batch`` (the script ran and failed on this
-batch: counted); cannot start, timeout and the worker deadline are ``transport``; an unreadable
+Outcomes: exit 0 is ``ok``; exit 65 (``hookspool.processor``'s ``Permanent``: sysexits EX_DATAERR) is
+``permanent`` and dead-letters the batch at once, since no retry can change it; any other exit is ``batch``
+(the script ran and failed on this batch: counted, retried; the processor's retry code is 75); cannot start, timeout and the worker deadline are ``transport``; an unreadable
 or undecodable ``env_file`` or an unwritable ``state_dir`` is ``config``. Stdout is capped at 1 MiB: past it the attempt
 fails (``batch``) rather than truncating, because dropping the tail would drop emits while
 marking the batch delivered.
@@ -44,6 +45,7 @@ READER_GRACE_S = 2.0
 _REQUIRED_EMIT = ("source", "key", "payload")
 ENV_ALLOW = ("PATH", "HOME", "LANG")
 PROCESSOR_MODULE = "hookspool.processor"
+EXIT_PERMANENT = 65                     # hookspool.processor.EX_PERMANENT
 _ENQUEUE_LINE = re.compile(r"""^\{\s*["']enqueue["']""")
 _ENQUEUE_LINE_B = re.compile(rb"""^\{\s*["']enqueue["']""")
 
@@ -175,7 +177,7 @@ class ScriptDestination(Destination):
         env.update(self.env)
         if self.state_dir:
             try:
-                os.makedirs(self.state_dir, exist_ok=True)
+                os.makedirs(self.state_dir, mode=0o700, exist_ok=True)
             except OSError as e:
                 return Outcome.config("state_dir not writable",
                                       detail=f"state_dir not writable: {e.__class__.__name__}")
@@ -235,6 +237,8 @@ class ScriptDestination(Destination):
         if rc != 0:
             if rc < 0:
                 return Outcome.batch(f"killed by signal {-rc}", status=rc, detail=f"killed by signal {-rc}: {tail}")
+            if rc == EXIT_PERMANENT:
+                return Outcome.permanent(f"exit {rc}", status=rc, detail=f"exit {rc}: {tail}")
             return Outcome.batch(f"exit {rc}", status=rc, detail=f"exit {rc}: {tail}")
         if out.total > STDOUT_CAP:
             return Outcome.batch("stdout over 1 MiB", status=0,

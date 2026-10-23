@@ -44,6 +44,9 @@ TEMPLATE_TESTS = "tests/test_sources_template.py"
 SHARED = {"tests/sourcekit.py", "tests/conftest.py", "hookspool/plugin.py", "hookspool/verify.py",
           "hookspool/intake.py", "hookspool/sources/template.py", TEMPLATE_TESTS}
 NOT_A_SOURCE = {"__init__", "template"}
+# Per-service code that names its own vendor: a bobbin is one service (ARCHITECTURE 14.3.1), and
+# ``hookspool/providers/<provider>.py`` is the one place the calls of a provider's several bobbins are written.
+PER_VENDOR_TREES = ("hookspool/bobbins", "hookspool/providers")
 # Never scanned. ``.ladder/`` (the build ledger and task notes) is skipped for pull requests; it is tracked in
 # this repository, so ``scan --all`` skips it too unless ``--include-ladder`` is given. Run
 # ``scan --all --include-ladder`` as the pre-publish gate, not plain ``scan --all``.
@@ -260,12 +263,12 @@ def source_names() -> set[str]:
 
 def core_files() -> list[str]:
     """The files that must stay source-agnostic: everything under ``hookspool/`` except the per-source plugin
-    modules themselves. The shared machinery in ``hookspool/sources/`` (``__init__.py`` and the template
+    modules themselves and the per-vendor trees (``PER_VENDOR_TREES``). The shared machinery in ``hookspool/sources/`` (``__init__.py`` and the template
     engine ``template.py``) is core and is guarded."""
     out = []
     for base, _dirs, files in os.walk(os.path.join(ROOT, "hookspool")):
         rel = os.path.relpath(base, ROOT).replace(os.sep, "/")
-        if "__pycache__" in rel:
+        if "__pycache__" in rel or any(rel == t or rel.startswith(t + "/") for t in PER_VENDOR_TREES):
             continue
         for f in files:
             if not f.endswith(".py"):

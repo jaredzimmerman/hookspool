@@ -1,0 +1,56 @@
+name = "gcal"
+version = "1"
+summary = "Google Calendar push (watch channel): conflicts, meeting-brief requests and a change notice for one calendar"
+
+[source]
+module = "source"
+span = "calendar"
+sender_retries = true
+expect_every_s = 172800
+proxy = "nothing to keep: the authentication is the X-Goog-Channel-Token header, which Google sends"
+
+[secrets.channel_token]
+description = "the token given when the watch channel was created, which Google echoes in X-Goog-Channel-Token"
+
+[secrets.cred]
+description = "OAuth credential JSON (client_id, client_secret, refresh_token, token_uri) with access to the calendar"
+processor = true
+
+[settings.tz]
+description = "time zone for event times and report text, e.g. America/New_York"
+type = "string"
+default = "UTC"
+
+[settings.own]
+description = "addresses that are 'us' (the owner, the household, the agents), not external attendees"
+type = "list"
+default = []
+
+[settings.brief_dir]
+description = "directory (absolute path) where meeting briefs are to be written; empty turns brief requests off"
+type = "path"
+default = ""
+
+[settings.api_url]
+description = "Calendar events URL (default: the primary calendar; change only to use another calendar or a test server)"
+type = "string"
+default = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+
+[settings.hooks]
+description = "optional absolute path to a hooks module with travel(event, day_events, ctx); see README.md"
+type = "path"
+default = ""
+
+[processor]
+module = "processor"
+timeout_s = 300
+state = true
+
+[outputs.conflict]
+description = "a changed event overlaps another, or there is not enough time to get there; the agent should offer a choice"
+
+[outputs.brief]
+description = "a meeting with outside people (or a prep-style title) needs a brief; carries the meeting facts and the brief file path"
+
+[outputs.changed]
+description = "one per pass that saw real changes: the changed event ids and dates, for a deployment's own follow-up (an event-store refresh)"

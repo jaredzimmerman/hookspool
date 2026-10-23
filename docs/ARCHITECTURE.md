@@ -340,9 +340,9 @@ Some receivers expect the sender's original payload, one request per event, not 
 | `ok` | — | 2xx; exit 0; Hermes `status` delivered, accepted, duplicate; also `ignored`, `coalesced` (which open a `config` issue, section 11.4) | `delivered` | yes | success |
 | `retry` | `transport` | refused, reset, timeout, worker deadline, DNS, 5xx, cannot start script, script timeout | `retry`, backoff | **no** | failure |
 | `retry` | `throttle` | 429, 503 with `Retry-After` | `retry` at `Retry-After` (else backoff) | no | neutral |
-| `retry` | `batch` | non-zero script exit, bad emit | `retry`, backoff | **yes** | neutral |
+| `retry` | `batch` | non-zero script exit other than 65 (a processor's retry exit is 75), bad emit | `retry`, backoff | **yes** | neutral |
 | `retry` | `config` | 401, 403, 404, 405, 410 from a destination; unknown destination, script or route; `subscriptions_path`, secret or env file unreadable | `retry` at the backoff cap; due again at once after a successful config reload | no | neutral; `config` issue |
-| `dead` | `permanent` | 400, 413, 415, 422 (the document itself is rejected, which no config change alters); 3xx on `http`; emit validation failed twice | `dead` + issue + alert | — | neutral |
+| `dead` | `permanent` | 400, 413, 415, 422 (the document itself is rejected, which no config change alters); 3xx on `http`; script exit 65 (a processor's `Permanent`); emit validation failed twice | `dead` + issue + alert | — | neutral |
 | `dead` | `poison` | the repeated-strike rule of section 4.2 | `dead` + issue + alert | — | closes |
 
 The counter exists for one case: a destination that is **responsive but fails on this batch** (`batch` class). Backoff after the n-th counted failure: `min(cap, base * 2^(n-1)) + jitter`, base 15 s, cap 300 s, jitter uniform 0–25 %; uncounted retries use the same schedule keyed on `consecutive_failures` of the destination. `max_attempts` default 64 (a script failing on one batch for about five hours, with other batches flowing). `Retry-After` overrides backoff when larger, capped at 1 h. A dead batch opens an issue whose text includes the `hookspool replay <id>` command.
@@ -351,11 +351,11 @@ The counter exists for one case: a destination that is **responsive but fails on
 
 ### 6.6 Script destinations and durable emits
 
-A `script:<name>` destination runs `argv` with the batch document on stdin and `HOOKSPOOL_BATCH_ID`, `HOOKSPOOL_DELIVERY_ID` in the environment, in its own session (so a timeout kills the whole process group). Exit 0 is success. Stdout lines of the form `{"enqueue": {...}}` are validated (same rules as the intake) and inserted **in the same fenced transaction** that marks the batch delivered: either the script's effects are recorded and the batch is done, or neither. A script that emits nothing and exits 0 is a successful no-op. Emits may target any route (the usual case: a delta script emits a `hermes:` route event when something needs the agent).
+A `script:<name>` destination runs `argv` with the batch document on stdin and `HOOKSPOOL_BATCH_ID`, `HOOKSPOOL_DELIVERY_ID` in the environment, in its own session (so a timeout kills the whole process group). Exit 0 is success; exit 65 (a processor's `Permanent`) dead-letters the batch at once and every other non-zero exit is retried. Stdout lines of the form `{"enqueue": {...}}` are validated (same rules as the intake) and inserted **in the same fenced transaction** that marks the batch delivered: either the script's effects are recorded and the batch is done, or neither. A script that emits nothing and exits 0 is a successful no-op. Emits may target any route (the usual case: a bobbin's processor or a delta-style script emits a `hermes:` route event when something needs the agent).
 
 Scripts therefore never talk to the gateway themselves; they report facts to the spool and the spool delivers them. Scripts that keep their own state (history ids, sync tokens) write it under a directory the deployment lists in the unit's `ReadWritePaths` (section 13 and `deploy/README.md`).
 
-A script that advances its own state while it reads has one more hazard: killed between "state advanced" and "emits committed" (or losing its lease after exiting 0), it would lose its report, because the retry finds nothing new. The delta scripts in `deploy/scripts/` therefore stage their state writes, write the emits and the staged writes to a journal in `state_dir` keyed by `HOOKSPOOL_BATCH_ID` (stable across attempts for a `script`), apply the state, then print the emits; a retry of the same batch replays the journal and does not read the outside system again (`deploy/scripts/README.md`). Any script with that shape should do the same.
+A script that advances its own state while it reads has one more hazard: killed between "state advanced" and "emits committed" (or losing its lease after exiting 0), it would lose its report, because the retry finds nothing new. The processor runtime (14.3.4) and any script that imports `deploy/scripts/hookspool_batch.py` therefore stage their state writes, write the emits and the staged writes to a journal in `state_dir` keyed by `HOOKSPOOL_BATCH_ID` (stable across attempts for a `script`), apply the state, then print the emits; a retry of the same batch replays the journal and does not read the outside system again (`deploy/scripts/README.md`). Any script with that shape should do the same.
 
 ---
 
@@ -366,7 +366,7 @@ A script that advances its own state while it reads has one more hazard: killed 
 - Exception: if the original event's batch is `dead`, the hit is treated as the operator asking for a retry (a provider-dashboard redelivery inside the window): the batch is replayed and the response is `200 {"status":"replayed"}`. If the batch is `dropped`, the operator chose to discard it; the redelivery is enqueued as a new event and the dedup row is re-pointed (`200 queued`).
 - Window: `dedup_window_s` per source, default 86 400; the effective window is **at least** that (the hourly prune makes it up to an hour longer). Retention deletes `dedup` rows older than the window, which reopens the id. A redelivery from the provider's dashboard after the window is delivered again; that is the operator asking for it. `check` warns when a source's window exceeds `retention.delivered_days`.
 - Dedup is by id, never by content, unless the plugin chooses `body_sha256` (Plaid, whose payloads carry no id; its window is 600 s so a legitimately identical body a day later is a new event).
-- Which sources have a real id: GitHub `X-GitHub-Delivery`; Trello action id; Zoom `event_ts` + object id; Google Calendar `X-Goog-Message-Number` per channel; Kaneo its event id if present. Gmail's Pub/Sub `messageId` is per **push**, not per mailbox change: after "intake killed after COMMIT" a Pub/Sub retry carries a new `messageId` and becomes a second event in the batch, which the delta script reconciles.
+- Which sources have a real id: GitHub `X-GitHub-Delivery`; Trello action id; Zoom `event_ts` + object id; Google Calendar `X-Goog-Message-Number` per channel; Kaneo its event id if present. Gmail's Pub/Sub `messageId` is per **push**, not per mailbox change: after "intake killed after COMMIT" a Pub/Sub retry carries a new `messageId` and becomes a second event in the batch, which the processor reconciles.
 - Receivers must still be idempotent: dedup is a cost saver, not a guarantee (the Hookdeck caveat applies here too).
 
 ---
@@ -675,6 +675,7 @@ proxy = "keep the query string (?token=...)"     # one line for the reverse-prox
 [secrets.push_token]                             # one table per secret
 description = "the token in the Pub/Sub push endpoint URL"
 # processor = true                               # the processor needs it too (14.3.4); the source gets it regardless
+# required = false                              # default true; an instance may leave an optional secret out
 
 [settings.owner]                                 # non-secret, typed settings for the processor and hooks
 description = "the owner's mailbox"
@@ -730,7 +731,9 @@ outputs = { scheduling = "hermes:mail-scheduling", agent-mail = "hermes:assistan
 expect = true                                    # apply the manifest's expect_every_s
 # optional overrides: span, quiet_s, max_s, max_events, max_bytes, expect_every_s, dedup_window_s,
 #                     max_body_bytes, timeout_s (processor), state_dir (processor; keeps existing state
-#                     across a migration; it must be in the dispatcher unit's ReadWritePaths)
+#                     across a migration; it must be in the dispatcher unit's ReadWritePaths unless it is below
+#                     the home, and it must be private: the processor keeps OAuth access tokens and rotated
+#                     refresh tokens in it in clear text, so mode 0700, owned by the service user)
 ```
 
 Two instances of one bobbin are two tables with different keys and the same `bobbin` (e.g.
@@ -828,8 +831,8 @@ A deployment never edits a built-in bobbin. Behaviour changes through:
 
 1. **Settings** (14.3.2).
 2. **A hooks module**: a bobbin that supports hooks declares `[settings.hooks]` with `type = "path"` and
-   documents the functions it calls (e.g. gmail calls `hooks.classify(message, account) -> dict | None`
-   before its own rules; gcal calls `hooks.travel(event, ctx) -> dict | None` for travel blocks). The
+   documents the functions it calls (e.g. gmail calls `hooks.classify(message, account, ctx) -> dict | None`
+   before its own rules; gcal calls `hooks.travel(event, day_events, ctx) -> dict | None` for travel blocks). The
    runtime loads it by file path and passes it as `ctx.hooks`. Hooks are deployment code: the 14.3.7
    rules apply to bobbins, not to hooks.
 3. **A private bobbin** in a `spool.bobbin_path` directory, when the service is not in the repo at all.
@@ -979,7 +982,7 @@ secrets.webhook_secret = { file = "…" }
 module = "hookspool.sources.gcal"
 span = "calendar"
 secrets.channel_token = { file = "…" }
-action = "script:gcal_delta"
+action = "script:calendar-refresh"
 expect_every_s = 172800
 
 [[routes]]
@@ -998,10 +1001,10 @@ quiet_s = 60                           # route-level override of one field; the 
 [destinations."hermes:github-ci"]
 max_inflight = 2
 
-[destinations."script:gcal_delta"]
-argv = ["/usr/bin/python3", "/opt/scripts/gcal_delta.py", "--batch"]
+[destinations."script:calendar-refresh"]
+argv = ["/usr/bin/python3", "/opt/scripts/refresh_events.py"]
 cwd = "/opt/scripts"
-env_file = "/etc/hookspool/gcal.env"
+env_file = "/etc/hookspool/refresh.env"
 timeout_s = 300
 state_dir = "/var/lib/hookspool/scripts/gcal"   # listed in the unit's ReadWritePaths by deploy/README.md
 

@@ -43,6 +43,7 @@ def sign(raw, secrets, now):
 
 
 KIT = Kit(name="gcal", module=gcal, secrets={"channel_token": TOKEN}, sign=sign, body_signed=False,
+          source_cfg={"action": "script:gcal"},
           sample=request("POST", "/hooks/gcal", push_headers()))
 
 
@@ -133,7 +134,7 @@ def test_payload_is_what_the_bridge_forwarded():
                          "resource_state": "exists", "resource_uri": URI, "message_number": "7",
                          "source": "google-calendar"}
     assert c.event_type == "exists" and c.attrs == {"calendar": "primary", "state": "exists"}
-    assert c.default_action == "script:gcal_delta"
+    assert c.default_action is None
 
 
 def test_missing_state_is_unknown_like_the_bridge():
@@ -172,7 +173,7 @@ def test_channels_of_one_calendar_coalesce_into_one_batch_on_the_calendar_span(e
         assert status(post(env, channel=ch, number=str(i + 1))) == (200, "queued")
     b = env.batches()
     assert len(b) == 1 and b[0]["key"] == "primary" and b[0]["count"] == 3
-    assert b[0]["destination"] == "script:gcal_delta" and (b[0]["quiet_s"], b[0]["max_s"]) == (45.0, 180.0)
+    assert b[0]["destination"] == "script:gcal" and (b[0]["quiet_s"], b[0]["max_s"]) == (45.0, 180.0)
 
 
 def test_another_calendar_is_another_batch(env):
@@ -189,7 +190,8 @@ def test_nothing_is_stored_but_the_derived_payload(env):
 
 
 def test_declarations():
-    assert (gcal.span, gcal.sender_retries, gcal.action) == ("calendar", True, "script:gcal_delta")
+    assert (gcal.span, gcal.sender_retries) == ("calendar", True)
+    assert not hasattr(gcal, "action"), "an instance's outputs choose the action (ARCHITECTURE 14.3.3)"
     assert gcal.auth_headers == ("X-Goog-Channel-Token",) and gcal.keep_headers == ()
 
 
@@ -207,18 +209,19 @@ dry = true
 
 [sources.gcal]
 module = "hookspool.sources.gcal"
+action = "script:gcal"
 secrets.channel_token = {{ file = "{sec}" }}
 expect_every_s = 172800
 
-[destinations."script:gcal_delta"]
-argv = ["{sys.executable}", "gcal_delta.py", "--batch"]
+[destinations."script:gcal"]
+argv = ["{sys.executable}", "-c", "pass"]
 state_dir = "{tmp_path / "state"}"
 ''')
     return str(p)
 
 
 def test_source_test_cli_with_the_default_loader(tmp_path, capsys):
-    cap = os.path.join(sourcekit.CAPTURES, "gcal", "event.http")
+    cap = os.path.join(sourcekit.capture_dir("gcal"), "event.http")
     rc = main(["--config", _config(tmp_path), "source", "test", "gcal", "--request", cap])
     doc = json.loads(capsys.readouterr().out)
     assert rc == 0 and doc["result"] == "queued", doc
@@ -231,7 +234,7 @@ def test_config_check_accepts_the_example(tmp_path):
 
 # ---- capture generation (maintenance) -----------------------------------------------------------------------------
 def write_captures() -> None:
-    d = os.path.join(sourcekit.CAPTURES, "gcal")
+    d = sourcekit.capture_dir("gcal")
     os.makedirs(d, exist_ok=True)
 
     def put(name, meta, hdr, token):
