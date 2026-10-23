@@ -49,7 +49,7 @@ The contract:
 - A script is run once per attempt, and a crash between the script's exit and the mark means it runs again. **Make it
   idempotent**, keyed on `HOOKSPOOL_BATCH_ID` (stable across attempts) or on the events' own ids. A script that keeps
   its own cursor should write the cursor update and its emits to a journal keyed by the batch id before it applies either,
-  so a retry replays the journal instead of reading the outside world again; `deploy/scripts/README.md` describes the
+  so a retry replays the journal instead of reading the outside world again; [`deploy/scripts/README.md`](../../deploy/scripts/README.md) describes the
   pattern the Gmail and Calendar scripts use.
 - Scripts that write anywhere need that path in the service unit's `ReadWritePaths`. `state_dir` is the place.
 
@@ -85,7 +85,7 @@ every attempt), `X-Hub-Signature-256` over that body, and the optional `event_he
 (its dedup id). The batch succeeds only when every event's request did; the first failure stops the attempt with that
 request's outcome and the whole batch is retried, so events already accepted are sent again and should be answered
 `duplicate`. Configuration and the coalescing advice are in
-[CONFIGURATION.md](CONFIGURATION.md#unwrap-one-request-per-event).
+[the configuration reference](README.md#unwrap-one-request-per-event).
 
 ## A destination class
 

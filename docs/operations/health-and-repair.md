@@ -1,8 +1,8 @@
 # Operating hookspool
 
 This is the day-two guide: how to tell that it is healthy, what each alert means, and what to do about a batch that is
-stuck. Installing it is in [`deploy/README.md`](../deploy/README.md), every command is in [CLI.md](CLI.md), and the design
-reasons are in [ARCHITECTURE.md](ARCHITECTURE.md).
+stuck. Installing it is in [Running](running.md), every command is in the [CLI reference](cli.md), and the design
+reasons are in [Architecture](../architecture/ARCHITECTURE.md).
 
 ## The model in one paragraph
 
@@ -108,7 +108,7 @@ Start from the symptom.
 | a `dead` batch, `permanent` | the receiver rejected the document: too large (413) or malformed | `split` or `exclude` (below), then `replay` |
 | a `dead` batch, `poison` or `exhausted` | one batch keeps failing a destination that is otherwise fine | look at its events with `show --events`, `exclude` the bad one, `replay` |
 | `quarantined` batches | a plugin raised on a verified request, so it was kept instead of failing the sender | fix the plugin or the source table, then `replay` the quarantine batches: each stored request is classified again |
-| a source `silent` | nothing arrived within `expect_every_s`: the sender stopped, the URL changed, or a watch lapsed | check the sender's side; run the source's sweep (see `deploy/README.md`) |
+| a source `silent` | nothing arrived within `expect_every_s`: the sender stopped, the URL changed, or a watch lapsed | check the sender's side; run the source's sweep (see [Sweeps](sweeps.md)) |
 | `ok: false` | the spool cannot take writes: disk below `limits.min_free_bytes`, or the database is locked or unwritable | free disk space on the volume (retention alone does not shrink the file; see Retention), check permissions. The intake answers 503 meanwhile, and senders that retry will |
 | the dispatcher `alive: false` | not running, or wedged | `systemctl status hookspool-dispatch`. A second dispatcher started by hand exits with 3 because the first holds the lock |
 
@@ -272,12 +272,12 @@ from the readable parts (as above), then restore from backup.
 
 Install the new code, stop the dispatcher, run `hookspool migrate` (add `--dry-run` first to see what is pending), start
 the dispatcher, restart the intake. The sequence, and what to do about the senders during it, is in section 5 of
-[`deploy/README.md`](../deploy/README.md). Take a backup first when a release carries a migration. A schema newer than the
+[Upgrading](upgrading.md). Take a backup first when a release carries a migration. A schema newer than the
 code (a downgrade) is refused with exit 2.
 
 ## Rehearsing a failure
 
-Before relying on any of this, run the gateway-down drill in [`deploy/README.md`](../deploy/README.md) (section 3): it
+Before relying on any of this, run the gateway-down drill in [Drills](drills.md): it
 makes a destination unreachable, feeds events, confirms the breaker opens, nothing grows past its bounds, nothing is
 lost, and everything is delivered in order once the destination returns.
 

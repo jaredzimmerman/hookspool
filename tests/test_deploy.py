@@ -24,8 +24,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEPLOY = os.path.join(ROOT, "deploy")
 
 
+OPS = os.path.join(os.path.dirname(DEPLOY), "docs", "operations")
+
+
 def read(*p: str) -> str:
     with open(os.path.join(DEPLOY, *p), encoding="utf-8") as f:
+        return f.read()
+
+
+def read_ops(name: str) -> str:
+    """A page of the operations guide, which holds the instructions for the files in deploy/."""
+    with open(os.path.join(OPS, name), encoding="utf-8") as f:
         return f.read()
 
 
@@ -118,7 +127,7 @@ def test_effective_source_cap_is_768_kib_and_the_docs_say_so():
     caps = {hc.source_max_body_bytes(CONFIG, name) for name in CONFIG["sources"]
             if "max_body_bytes" not in CONFIG["sources"][name]}
     assert caps == {786432}, caps
-    row = [ln for ln in read("README.md").splitlines() if ln.startswith("| **GitHub payload over")][0]
+    row = [ln for ln in read_ops("sweeps.md").splitlines() if ln.startswith("| **GitHub payload over")][0]
     assert "768 KiB" in row and "1 MiB by default" not in row
     assert "768 KiB" in read("nginx.example.conf")
 
@@ -342,16 +351,16 @@ def test_config_example_check_catches_a_hermes_events_filter(placed, capsys, mon
 
 
 def test_config_example_every_source_is_covered_by_the_readme_sweep_table():
-    readme = read("README.md")
-    table = readme.split("## 4. Sweeps")[1].split("### Known limits")[0]
+    readme = read_ops("sweeps.md")
+    table = readme.split("## Sweeps: which senders retry")[1].split("### Known limits")[0]
     rows = {ln.split("|")[1].strip().lower(): ln for ln in table.splitlines() if ln.startswith("| ") and "---" not in ln}
     for src in [*CONFIG["sources"], *CONFIG["bobbins"]]:
         key = {"gmail": "gmail (pub/sub)", "gcal": "calendar"}.get(src, src)
         assert key in rows, f"no sweep row for {src}"
         cells = [c.strip() for c in rows[key].split("|")[1:-1]]
         assert len(cells) == 7 and all(cells), rows[key]
-        # the example ships 0 everywhere (README section 2: a source that was never moved would alert
-        # "silent" on day one); the value to set at cutover is the bobbin's recommendation, named in the README cell
+        # the example ships 0 everywhere (the rollout order in running.md: a source that was never moved would alert
+        # "silent" on day one); the value to set at cutover is the bobbin's recommendation, named in the sweeps cell
         if src in CONFIG["bobbins"]:
             with open(os.path.join(ROOT, "hookspool", "bobbins", src, "bobbin.toml"), "rb") as f:
                 later = tomllib.load(f)["source"].get("expect_every_s")
@@ -367,13 +376,16 @@ def test_config_example_every_source_is_covered_by_the_readme_sweep_table():
 
 
 # ---- README ---------------------------------------------------------------------------------
-def test_readme_has_the_required_sections_and_rows():
-    r = read("README.md")
-    for h in ("## 1. Install", "## 2. Rollout order and rollback", "## 3. Gateway-down drill", "## 4. Sweeps",
-              "### Known limits", "## 5. Upgrading"):
-        assert h in r, h
+def test_operations_pages_have_the_required_sections_and_rows():
+    running, drills = read_ops("running.md"), read_ops("drills.md")
+    sweeps, upgrading = read_ops("sweeps.md"), read_ops("upgrading.md")
+    r = "\n".join((running, drills, sweeps, upgrading, read_ops("day-two.md")))
+    for page_text, h in ((running, "## Install"), (running, "## Rollout order and rollback"),
+                         (drills, "## Gateway-down drill"), (sweeps, "## Sweeps: which senders retry"),
+                         (sweeps, "### Known limits"), (upgrading, "# Upgrading")):
+        assert h in page_text, h
     # rollout: GitHub first, every step names its rollback
-    steps = [ln for ln in r.split("## 2. Rollout")[1].split("Per-step notes")[0].splitlines() if re.match(r"\| \d\.", ln)]
+    steps = [ln for ln in running.split("## Rollout")[1].split("Per-step notes")[0].splitlines() if re.match(r"\| \d\.", ln)]
     assert [re.match(r"\| \d\. (\w+)", s).group(1) for s in steps] == \
         ["install", "GitHub", "Plaid", "Gmail", "Calendar", "Trello", "Zoom", "retire"]
     assert all(len(s.split("|")) == 6 and s.split("|")[4].strip() for s in steps)    # a rollback in every row
@@ -387,8 +399,8 @@ def test_readme_has_the_required_sections_and_rows():
     assert re.search(r"\| GitHub \|[^\n]*\*\*No\.\*\*", r)
 
 
-def test_readme_cli_commands_exist():
-    r = read("README.md")
+def test_operations_cli_commands_exist():
+    r = "\n".join(read_ops(n) for n in ("running.md", "drills.md", "sweeps.md", "upgrading.md", "day-two.md"))
     code = "\n".join(re.findall(r"```\w*\n(.*?)```", r, re.S) + re.findall(r"`([^`\n]+)`", r))
     cmds = set(re.findall(r"(?<![\w/.-])(?<!-[ugo] )hookspool[ \t]+(?:--?[\w-]+[ \t]+)*([a-z]+)\b", code))
     assert {"status", "list", "issues", "enqueue", "reload", "migrate", "check", "pause", "export", "replay", "drop",

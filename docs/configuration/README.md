@@ -1,5 +1,7 @@
 # Configuration reference
 
+<picture><source media="(prefers-color-scheme: dark)" srcset="../assets/banners/dials-dark.svg"><img alt="A panel of dials, each set to a different position, like the keys of a configuration file." src="../assets/banners/dials-light.svg" width="960"></picture>
+
 hookspool reads one TOML file, `config.toml`, from the state directory (or wherever `--config` / `HOOKSPOOL_CONFIG`
 points). Everything has a default; an absent file means "no sources". `hookspool check` is the judge of a file: unknown
 keys are errors there (and warnings at run time, so a typo cannot stop a running service). The service units run
@@ -10,7 +12,7 @@ previous configuration active and opens a `config:file` issue. `hookspool reload
 both processes reload together.
 
 This page is checked against the code's key tables by `tests/test_docs.py`: a key that exists in the code and is
-missing here fails the suite. A complete working file is [`deploy/config.example.toml`](../deploy/config.example.toml).
+missing here fails the suite. A complete working file is [`deploy/config.example.toml`](../../deploy/config.example.toml).
 
 Paths follow one rule: command-line option, then environment variable, then this file, then the default. Secrets are
 never written in this file; they are references (see [Secrets](#secrets)).
@@ -22,7 +24,7 @@ never written in this file; they are references (see [Secrets](#secrets)).
 | `home` | `/var/lib/hookspool` | state directory: `config.toml`, `spool.db` (and its `-wal`, `-shm`), `dispatch.lock`. `HOOKSPOOL_HOME` and `--home` override it |
 | `db` | `spool.db` | spool file name, relative to `home` (`HOOKSPOOL_DB` overrides) |
 | `store_raw` | `true` | keep each request's original body, so a quarantined request can be reclassified and a capture re-verified. A source can override it. Turn it off for sources whose bodies you must not keep |
-| `bobbin_path` | none | list of absolute directories searched for bobbins after the built-in ones (`hookspool/bobbins/`). See `docs/ARCHITECTURE.md` section 14.3 |
+| `bobbin_path` | none | list of absolute directories searched for bobbins after the built-in ones (`hookspool/bobbins/`). See [Architecture](../architecture/ARCHITECTURE.md#143-bobbins-service-plugins) section 14.3 |
 
 ## `[intake]`
 
@@ -129,6 +131,39 @@ nightly = { quiet_s = 300, max_s = 3600 }
 
 Both fields are required in a span.
 
+## `[bobbins.<instance>]`
+
+One table per instance of a [bobbin](../bobbins/README.md), the plugin for one outside service. `<instance>` is the table
+key and the URL path (`/hooks/<instance>`). Two instances of one bobbin are two tables with different keys and the same
+`bobbin`. Expansion happens while the file loads, so every other part of hookspool sees ordinary `[sources.*]`,
+`[destinations.*]` and `[[routes]]` tables; `hookspool bobbin expand <instance>` prints them, with secrets shown as
+references.
+
+```toml
+[bobbins.alerts-hook]
+bobbin = "webhook"
+secrets.secret = { file = "/etc/hookspool/secrets/alerts" }
+settings = { scheme = "hmac-sha256-hex", header = "X-Signature", prefix = "sha256=", key = ["project.id"], dedup = "id" }
+outputs = { "*" = "script:show_batch" }
+```
+
+| key | default | meaning |
+|---|---|---|
+| `bobbin` | the instance name | which bobbin this is an instance of |
+| `secrets` | none | a table of secret references, one per secret the bobbin declares (see [Secrets](#secrets)). A secret the bobbin marks `processor = true` cannot be an `{ env = ... }` reference, because the processor does not inherit the dispatcher's environment |
+| `settings` | the manifest's defaults | a table of the bobbin's settings; each is typed, and a missing required one is an error. `hookspool bobbin show <bobbin>` lists them |
+| `outputs` | none | maps each output event type to a destination. `"*"` maps every type the table does not name. An output the instance leaves out is dropped with one log line per batch |
+| `expect` | `false` | apply the manifest's `expect_every_s` to this instance |
+| `span`, `quiet_s`, `max_s`, `max_events`, `max_bytes` | the bobbin's own | window fields for this instance (see [Windows](#windows)) |
+| `expect_every_s`, `dedup_window_s`, `max_body_bytes` | the bobbin's own | the same keys as on a source |
+| `timeout_s` | the manifest's | for a bobbin with a processor: how long one batch may run |
+| `state_dir` | `<home>/services/<instance>` | for a bobbin with a processor: where its state lives. Outside the home it must be listed in the dispatch unit's `ReadWritePaths` and be private (mode 0700), because it holds OAuth tokens in the clear |
+
+An instance may not collide with an explicit `[sources.<instance>]` or `[destinations."script:<instance>"]`. An unknown
+key, an unknown bobbin, a setting or output the manifest does not declare, and an output mapped to a destination that does
+not exist are all errors in `hookspool check`. Bobbins outside the repository are found through
+[`bobbin_path`](#spool); see [Private bobbins and hooks](../bobbins/private-bobbins.md).
+
 ## `[sources.<name>]`
 
 One table per source. `<name>` is also the URL path: the intake serves `/hooks/<name>`.
@@ -148,7 +183,7 @@ One table per source. `<name>` is also the URL path: the intake serves `/hooks/<
 | `quiet_s`, `max_s`, `max_events`, `max_bytes` | inherited | window fields for this source (see [Windows](#windows)) |
 
 Further keys depend on the plugin: the Plaid source takes `env`, and the template source takes the keys listed in
-[ADDING_A_SOURCE.md](ADDING_A_SOURCE.md). `check` accepts exactly the keys the plugin declares.
+[Writing a bobbin](../bobbins/writing-a-bobbin.md). `check` accepts exactly the keys the plugin declares.
 
 ## `[[routes]]`
 
@@ -222,7 +257,7 @@ table with a `type`.
 | key | applies to | default | meaning |
 |---|---|---|---|
 | `type` | all | from the name | `hermes`, `script` or `http` (not needed for `hermes:` and `script:` names) |
-| `module` | all | none | `pkg.mod:ClassName` of a third-party destination (see [ADDING_A_DESTINATION.md](ADDING_A_DESTINATION.md)) |
+| `module` | all | none | `pkg.mod:ClassName` of a third-party destination (see [Adding a destination](destinations.md)) |
 | `timeout_s` | all | 30 | per-attempt timeout, kill deadline for a script |
 | `max_body_bytes` | all | 1 MiB for `hermes` and `http`, unbounded for `script` | the largest document the receiver accepts. `max_bytes` of the routes feeding it must fit in 0.75 of it |
 | `max_inflight` | all | 2 for `hermes`, 1 for `script`, 4 for `http` | batches in flight to this destination at once |
@@ -303,4 +338,4 @@ norm).
 Settings from earlier drafts are refused with a pointed message rather than ignored: `limits.max_pending_batches`,
 `limits.max_db_bytes`, `limits.plugin_error_streak`, `retention.archive_dir`, `dispatch.poison_after`,
 `dispatch.dead_after_s`, `delay_s`, `rate_per_min`, `idempotency` and `paused`. Rate limiting belongs to the reverse
-proxy, and there is no archive: `VACUUM INTO` and `hookspool export` are the backup (see [OPERATIONS.md](OPERATIONS.md)).
+proxy, and there is no archive: `VACUUM INTO` and `hookspool export` are the backup (see [Health and repair](../operations/health-and-repair.md)).

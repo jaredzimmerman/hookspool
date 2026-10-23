@@ -1404,7 +1404,7 @@ CHECKS: list[tuple[str, bool, str, Callable[[Bobbin], Result]]] = [
     ("captures", True, "add an accepted and a bad-signature capture whose `# expect:` holds; test secrets and"
                        " example.com addresses only", check_captures),
     ("source-kit", True, "make the source pass the shared source kit with each accepted capture"
-                         " (docs/ADDING_A_SOURCE.md, The conformance kit); test values go in captures/kit.toml",
+                         " (docs/bobbins/writing-a-bobbin.md, The conformance kit); test values go in captures/kit.toml",
      check_source_kit),
     ("processor", True, "return items of declared outputs only, go through ctx (no network, no stdout) and let"
                         " failures raise; stub API answers go in captures/kit.toml [[http]]", check_processor),

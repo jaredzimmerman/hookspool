@@ -3,15 +3,16 @@
 The reference pages are only worth reading if they cannot drift, so this module reads them back against the
 program:
 
-* docs/CLI.md has a section for every command, every option of every command and every exit code, and names
+* docs/operations/cli.md has a section for every command, every option of every command and every exit code, and names
   nothing the parser does not have; every ``hookspool <command> --flag`` written in any page is real
-* docs/CONFIGURATION.md has a row for every config key (section, source, route, destination, breaker), with the
+* docs/configuration/README.md has a row for every config key (section, source, route, destination, breaker), with the
   documented default equal to the code's, and no row for a key that does not exist; the span presets match
-* docs/ADDING_A_SOURCE.md lists every template key, scheme and plugin name, and every ``v.<helper>`` it shows exists
+* docs/bobbins/writing-a-bobbin.md lists every template key, scheme and plugin name, and every ``v.<helper>`` it shows exists
 * every ``toml`` block in the pages parses and passes the config checker's key validation
-* the worked examples in ADDING_A_SOURCE.md and ADDING_A_DESTINATION.md and the README's quick-start config run
+* the worked examples in writing-a-bobbin.md and destinations.md and the quick-start config run
 * relative links and anchors resolve; no page carries a hostname, an address or a deployment term
-* README and CONTRIBUTING have the sections the project promises
+* the README is short and has the sections the project promises, every docs folder has an index that links to each
+  of its pages, and the banners are well formed
 * pyproject.toml is complete and ``python -m build`` (or ``uv build``) produces a wheel with the migrations in it
 """
 from __future__ import annotations
@@ -41,7 +42,7 @@ from hookspool.sources import template  # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCS = os.path.join(ROOT, "docs")
 PAGES = [os.path.join(ROOT, "README.md"), os.path.join(ROOT, "CONTRIBUTING.md"), os.path.join(ROOT, "CHANGELOG.md")] \
-    + sorted(glob.glob(os.path.join(DOCS, "*.md")))
+    + sorted(glob.glob(os.path.join(DOCS, "**", "*.md"), recursive=True))
 # ARCHITECTURE.md is the design contract and uses pseudo-commands and elided examples; the checks that run a
 # page's examples cover the pages written to be followed.
 FOLLOWED = [p for p in PAGES if os.path.basename(p) not in ("ARCHITECTURE.md", "CHANGELOG.md")]
@@ -122,7 +123,7 @@ GLOBAL_OPTIONS = options_of(cli._parser())
 
 
 def cli_sections() -> dict[str, str]:
-    text = page("docs/CLI.md")
+    text = page("docs/operations/cli.md")
     return {m.group(1): s for m in re.finditer(r"^### hookspool (\w+)\s*$", text, re.M)
             for s in [section(text, f"hookspool {m.group(1)}", 3)]}
 
@@ -138,16 +139,16 @@ def test_cli_page_documents_every_option_and_positional(cmd):
     named = ticks(sec)
     documented = {t.split()[0].split("=")[0] for t in named if t.startswith("--")}
     missing = sorted(options_of(p) - documented)
-    assert not missing, f"docs/CLI.md hookspool {cmd}: undocumented options {missing}"
+    assert not missing, f"docs/operations/cli.md hookspool {cmd}: undocumented options {missing}"
     for pos in positionals_of(p):
-        assert pos in named, f"docs/CLI.md hookspool {cmd}: positional `{pos}` is not described"
+        assert pos in named, f"docs/operations/cli.md hookspool {cmd}: positional `{pos}` is not described"
     # and nothing documented that the command does not take
     extra = documented - options_of(p) - GLOBAL_OPTIONS
-    assert not extra, f"docs/CLI.md hookspool {cmd}: documents options the command lacks: {sorted(extra)}"
+    assert not extra, f"docs/operations/cli.md hookspool {cmd}: documents options the command lacks: {sorted(extra)}"
 
 
 def test_cli_page_global_options_environment_and_exit_codes():
-    text = page("docs/CLI.md")
+    text = page("docs/operations/cli.md")
     head = section(text, "Global options and environment")
     for o in GLOBAL_OPTIONS:
         assert f"`{o} " in head or f"`{o}`" in head, o
@@ -209,7 +210,7 @@ SECTIONS = ["spool", "intake", "dispatch", "coalesce", "limits", "retention", "a
 
 @pytest.mark.parametrize("name", SECTIONS)
 def test_config_page_section_matches_the_key_table_and_defaults(name):
-    sec = section(page("docs/CONFIGURATION.md"), f"`[{name}]`")
+    sec = section(page("docs/configuration/README.md"), f"`[{name}]`")
     # the [dispatch] section also holds [dispatch.breaker] as its own sub-section
     body = sec.split("### ")[0]
     rows = {k: r for r in table_rows(body)[1:] for k in re.findall(r"`([^`]+)`", r[0])}
@@ -225,7 +226,7 @@ def test_config_page_section_matches_the_key_table_and_defaults(name):
 
 
 def test_config_page_breaker_section():
-    sec = section(page("docs/CONFIGURATION.md"), "`[dispatch.breaker]`", 3)
+    sec = section(page("docs/configuration/README.md"), "`[dispatch.breaker]`", 3)
     rows = {k: r for r in table_rows(sec)[1:] for k in re.findall(r"`([^`]+)`", r[0])}
     assert set(rows) == hs_config._BREAKER_KEYS
     for k, r in rows.items():
@@ -233,7 +234,7 @@ def test_config_page_breaker_section():
 
 
 def test_config_page_spans_match_the_presets():
-    sec = section(page("docs/CONFIGURATION.md"), "`[spans]`")
+    sec = section(page("docs/configuration/README.md"), "`[spans]`")
     got = {re.findall(r"`([^`]+)`", r[0])[0]: (float(r[1]), float(r[2])) for r in table_rows(sec)[1:]}
     want = {k: (float(v["quiet_s"]), float(v["max_s"])) for k, v in hs_config.DEFAULTS["spans"].items()}
     assert got == want
@@ -246,16 +247,8 @@ def parse_duration(s: str) -> float:
     return float(m.group(1)) * (60 if m.group(2) == "min" else 1)
 
 
-def test_readme_spans_match_the_presets():
-    sec = section(page("README.md"), "Configuration")
-    rows = [r for r in table_rows(sec) if r and re.fullmatch(r"`\w+`", r[0])]
-    got = {r[0].strip("`"): (parse_duration(r[1]), parse_duration(r[2])) for r in rows}
-    want = {k: (float(v["quiet_s"]), float(v["max_s"])) for k, v in hs_config.DEFAULTS["spans"].items()}
-    assert got == want
-
-
 def test_config_page_source_route_and_destination_keys():
-    text = page("docs/CONFIGURATION.md")
+    text = page("docs/configuration/README.md")
     src = first_cell_keys(section(text, "`[sources.<name>]`"))
     assert hs_config.SOURCE_KEYS <= src, sorted(hs_config.SOURCE_KEYS - src)
     assert src <= hs_config.SOURCE_KEYS | set(template.config_keys) | {"env"}, sorted(src - hs_config.SOURCE_KEYS)
@@ -272,7 +265,7 @@ def test_config_page_source_route_and_destination_keys():
 
 
 def test_config_page_names_the_removed_keys_and_secret_forms():
-    text = page("docs/CONFIGURATION.md")
+    text = page("docs/configuration/README.md")
     for k in ("limits.max_pending_batches", "limits.max_db_bytes", "limits.plugin_error_streak",
               "retention.archive_dir", "dispatch.poison_after", "dispatch.dead_after_s", "delay_s", "rate_per_min",
               "idempotency", "paused"):
@@ -283,7 +276,7 @@ def test_config_page_names_the_removed_keys_and_secret_forms():
 
 # ---- sources ------------------------------------------------------------------------------------------------------
 def test_adding_a_source_lists_every_template_key_scheme_and_selector():
-    text = page("docs/ADDING_A_SOURCE.md")
+    text = page("docs/bobbins/writing-a-bobbin.md")
     ref = section(text, "A. A config template", 2)
     named = ticks(ref)
     for k in template.config_keys:
@@ -300,7 +293,7 @@ def test_adding_a_source_lists_every_template_key_scheme_and_selector():
 
 
 def test_adding_a_source_lists_every_plugin_name_and_only_real_helpers():
-    text = page("docs/ADDING_A_SOURCE.md")
+    text = page("docs/bobbins/writing-a-bobbin.md")
     plugin = section(text, "B. A code plugin", 2)
     names = {re.match(r"`?(\w+)", c).group(1) for r in table_rows(plugin) for c in r[:1] if re.match(r"`?\w+", c)}
     for n in (*sourcekit.PLUGIN_FUNCS, "auth_headers", "name", "secrets", "keep_headers", "span", "expect_every_s",
@@ -313,7 +306,7 @@ def test_adding_a_source_lists_every_plugin_name_and_only_real_helpers():
 
 
 def test_adding_a_source_conformance_table_matches_the_kit():
-    text = section(page("docs/ADDING_A_SOURCE.md"), "The conformance kit")
+    text = section(page("docs/bobbins/writing-a-bobbin.md"), "The conformance kit")
     rows = [r[0] for r in table_rows(text)[1:]]
     for case in sourcekit.CASE_IDS:
         words = case.replace("_", " ")
@@ -377,7 +370,7 @@ def run_pytest(tmp_path, *files, extra_path=(), conf: str = "") -> subprocess.Co
 
 
 def test_worked_source_example_passes_the_conformance_kit(tmp_path):
-    plugin, test = python_blocks(os.path.join(DOCS, "ADDING_A_SOURCE.md"))[:2]
+    plugin, test = python_blocks(os.path.join(DOCS, "bobbins", "writing-a-bobbin.md"))[:2]
     (tmp_path / "extra_sources").mkdir()
     (tmp_path / "extra_sources" / "acme.py").write_text(plugin)
     (tmp_path / "test_sources_acme.py").write_text(test)
@@ -389,7 +382,7 @@ def test_worked_source_example_passes_the_conformance_kit(tmp_path):
 
 
 def test_worked_destination_example_passes_its_tests(tmp_path):
-    blocks = python_blocks(os.path.join(DOCS, "ADDING_A_DESTINATION.md"))
+    blocks = python_blocks(os.path.join(DOCS, "configuration", "destinations.md"))
     module = next(b for b in blocks if "class ChatDestination" in b)
     test = next(b for b in blocks if "def test_a_2xx_is_delivered" in b)
     (tmp_path / "mychat.py").write_text(module)
@@ -400,14 +393,14 @@ def test_worked_destination_example_passes_its_tests(tmp_path):
 
 
 def test_the_documented_destination_example_names_the_documented_config():
-    text = page("docs/ADDING_A_DESTINATION.md")
-    block = next(b for b in toml_blocks(os.path.join(DOCS, "ADDING_A_DESTINATION.md")) if "mychat" in b)
+    text = page("docs/configuration/destinations.md")
+    block = next(b for b in toml_blocks(os.path.join(DOCS, "configuration", "destinations.md")) if "mychat" in b)
     assert tomllib.loads(block)["destinations"]["chat"]["module"] == "mychat:ChatDestination"
     assert "mychat:ChatDestination" in text
 
 
 def test_readme_quick_start_config_passes_check(tmp_path, monkeypatch, capsys):
-    qs = section(page("README.md"), "Quick start")
+    qs = page("docs/getting-started/quick-start.md")
     m = re.search(r'config\.toml" <<EOF\n(.*?)\nEOF', qs, re.S)
     assert m, "the quick start has no config heredoc"
     home = tmp_path / "demo"
@@ -465,7 +458,7 @@ def test_relative_links_and_anchors_resolve(path):
 
 ALLOWED_HOSTS = re.compile(
     r"(^|\.)(example\.com|example\.test|example\.invalid|localhost)$|^127\.0\.0\.1$|"
-    r"^(github\.com|docs\.github\.com|www\.standardwebhooks\.com)$")
+    r"^(github\.com|docs\.github\.com|www\.standardwebhooks\.com|hairline\.lucasmarkes\.com)$")
 
 
 @pytest.mark.parametrize("path", PAGES, ids=[os.path.relpath(p, ROOT) for p in PAGES])
@@ -491,43 +484,151 @@ def test_pages_carry_no_real_looking_secrets():
 
 
 # ---- what the project promises ------------------------------------------------------------------------------------
-def test_readme_has_the_promised_sections():
+def prose_lines(text: str) -> int:
+    """Lines of a page without the banner embeds, which are one long line each."""
+    return len([ln for ln in text.splitlines() if not ln.startswith("<picture>")])
+
+
+def test_readme_is_short_and_has_the_promised_sections():
     r = page("README.md")
-    for h in ("The problem", "What it guarantees", "What it does not do", "How it works", "Quick start", "Configuration",
-              "Sources and destinations", "Operations", "FAQ", "How it compares", "Documentation", "License"):
-        assert re.search(rf"^## {re.escape(h)}\s*$", r, re.M), h
-    assert "```mermaid" in r and "flowchart" in r
-    comp = section(r, "How it compares")
+    assert prose_lines(r) <= 180, "the front page is high level: move detail into docs/"
+    order = ("The problem", "What it guarantees", "How it works", "Quick start", "Bobbins", "Documentation",
+             "Contributing", "License")
+    heads = re.findall(r"^## (.+?)\s*$", r, re.M)
+    assert heads == list(order), heads
+    guarantees = section(r, "What it guarantees")
+    for g in ("Commit before acknowledge", "At-least-once", "Order per key", "Bounded batches"):
+        assert g in guarantees, g
+    assert len(re.findall(r"^- ", guarantees, re.M)) <= 6
+    assert "docs/getting-started/quick-start.md" in section(r, "Quick start")
+    bobbins = section(r, "Bobbins")
+    from hookspool import bobbin_loader
+    builtin = sorted(d for d in os.listdir(bobbin_loader.BUILTIN_DIR)
+                     if os.path.exists(os.path.join(bobbin_loader.BUILTIN_DIR, d, "bobbin.toml")))
+    for name in builtin:
+        assert f"`{name}`" in bobbins, f"the README bobbin table lacks {name}"
+
+
+def test_architecture_index_has_the_mechanism_the_comparison_and_the_faq():
+    a = page("docs/architecture/README.md")
+    assert "```mermaid" in a and "flowchart" in a
+    assert "Exactly-once" in section(a, "What it does not do")
+    comp = page("docs/architecture/comparison.md")
     head = table_rows(comp)[0]
     for name in ("Convoy", "Svix", "Hookdeck", "Inngest"):
         assert any(name in c for c in head), name
     # honest: the comparison says when to choose each of the others
     assert "Choose it when" in comp and "use one of the others" in " ".join(comp.split())
-    guarantees = section(r, "What it guarantees")
-    for g in ("Commit before acknowledge", "At-least-once", "Order per key", "Bounded batches"):
-        assert g in guarantees, g
-    assert "Exactly-once" in section(r, "What it does not do")
+    faq = page("docs/architecture/faq.md")
+    for q in ("Why SQLite", "Is it exactly-once?", "What if hookspool is down", "How do I choose a coalescing window?"):
+        assert q in faq, q
 
 
-def test_readme_documentation_table_covers_every_page():
+FOLDERS = ("getting-started", "configuration", "bobbins", "operations", "architecture")
+
+
+def test_every_docs_folder_has_an_index_that_links_to_each_of_its_pages():
+    docs_index = page("docs/README.md")
+    for folder in FOLDERS:
+        assert f"{folder}/README.md" in docs_index, folder
+        index = os.path.join(DOCS, folder, "README.md")
+        assert os.path.exists(index), folder
+        links = {os.path.normpath(os.path.join(os.path.dirname(index), tgt.partition("#")[0]))
+                 for tgt in LINK.findall(read(index)) if not re.match(r"[a-z]+://|#", tgt)}
+        for md in sorted(glob.glob(os.path.join(DOCS, folder, "*.md"))):
+            if md != index:
+                assert md in links, f"docs/{folder}/README.md does not link to {os.path.basename(md)}"
+
+
+def test_readme_links_to_every_docs_folder_and_the_project_files():
     r = page("README.md")
-    for p in sorted(glob.glob(os.path.join(DOCS, "*.md"))):
-        assert f"docs/{os.path.basename(p)}" in r, os.path.basename(p)
-    for f in ("CONTRIBUTING.md", "CHANGELOG.md", "LICENSE", "deploy/README.md"):
+    for folder in FOLDERS:
+        assert f"docs/{folder}/" in r, folder
+    for f in ("CONTRIBUTING.md", "CHANGELOG.md", "LICENSE"):
         assert f in r, f
 
 
-def test_contributing_calls_out_the_extension_model_before_the_setup_steps():
+def test_old_architecture_path_is_a_one_line_pointer():
+    old = page("docs/ARCHITECTURE.md")
+    assert "architecture/ARCHITECTURE.md" in old and len(old.strip().splitlines()) <= 3
+
+
+def test_contributing_is_short_and_points_into_the_bobbin_docs():
     c = page("CONTRIBUTING.md")
-    assert c.index("## Adding a sender: the extension model") < c.index("## Setting up")
-    model = " ".join(section(c, "Adding a sender: the extension model").split())
-    for phrase in ("Config template first", "Code plugin when you need it", "conformance kit", "CI enforces it",
-                   "no Python", "sender's signature documentation"):
-        assert phrase.lower() in model.lower(), phrase
-    assert model.index("Config template first") < model.index("Code plugin when you need it") \
-        < model.index("conformance kit")
-    for ref in ("docs/ADDING_A_SOURCE.md", "docs/ADDING_A_DESTINATION.md", "examples/sources/github.toml"):
+    assert prose_lines(c) <= 120
+    assert c.index("## Adding or changing a bobbin") < c.index("## Changing the core") < c.index("## Setting up")
+    for ref in ("docs/bobbins/writing-a-bobbin.md", "docs/bobbins/review.md", "docs/configuration/destinations.md",
+                "hookspool bobbin check"):
         assert ref in c, ref
+
+
+# ---- banners ------------------------------------------------------------------------------------------------------
+BANNERS = os.path.join(DOCS, "assets", "banners")
+BANNER_NAMES = ("brake", "beads", "letterbox", "ratchet", "spindle", "rack", "dials", "breakers")
+ANIMATED = ("brake", "beads")
+
+
+def test_every_banner_exists_in_both_themes_in_the_format_chosen_for_it():
+    for name in BANNER_NAMES:
+        ext = "gif" if name in ANIMATED else "svg"
+        for theme in ("light", "dark"):
+            assert os.path.isfile(os.path.join(BANNERS, f"{name}-{theme}.{ext}")), f"{name}-{theme}.{ext}"
+    assert {f for f in os.listdir(BANNERS)} == {"README.md"} | {f"{n}-{th}.{'gif' if n in ANIMATED else 'svg'}"
+                                                             for n in BANNER_NAMES for th in ("light", "dark")}
+
+
+@pytest.mark.parametrize("path", sorted(glob.glob(os.path.join(BANNERS, "*.svg"))),
+                         ids=lambda p: os.path.basename(p))
+def test_banner_svg_has_no_script_no_event_handler_and_no_external_reference(path):
+    text = read(path)
+    assert not re.search(r"<\s*(script|foreignObject|iframe|object|embed|image|use|a|style)\b", text, re.I), path
+    assert not re.search(r"\son[a-z]+\s*=", text, re.I), path
+    assert "javascript:" not in text.lower() and "@import" not in text
+    for attr in re.findall(r"""\b(?:xlink:)?href\s*=\s*["']([^"']*)""", text, re.I):
+        assert attr.startswith("#"), (path, attr)
+    for url in re.findall(r"url\(\s*(?:&quot;|['\"])?([^)'\"&]*)", text):
+        assert url.startswith("#"), (path, url)
+    # the only address in the file is the SVG namespace
+    assert set(re.findall(r"https?://[^\s\"'<>)]+", text)) <= {"http://www.w3.org/2000/svg"}, path
+
+
+@pytest.mark.parametrize("path", sorted(glob.glob(os.path.join(BANNERS, "*.gif"))), ids=lambda p: os.path.basename(p))
+def test_banner_gif_is_under_a_megabyte_and_is_a_gif(path):
+    assert os.path.getsize(path) < 1_000_000, path
+    with open(path, "rb") as f:
+        assert f.read(6) in (b"GIF87a", b"GIF89a"), path
+
+
+EMBED = re.compile(r'<picture><source media="\(prefers-color-scheme: dark\)" srcset="([^"]+)"><img alt="([^"]+)" '
+                   r'src="([^"]+)" width="960"></picture>')
+
+
+@pytest.mark.parametrize("path", PAGES, ids=[os.path.relpath(p, ROOT) for p in PAGES])
+def test_banner_embeds_are_well_formed_and_point_at_real_files(path):
+    text = re.sub(r"```.*?```", "", read(path), flags=re.S)       # an example in a code fence is not an embed
+    assert text.count("<picture>") == len(EMBED.findall(text)), f"{os.path.relpath(path, ROOT)}: a <picture> is malformed"
+    for dark, alt, light in EMBED.findall(text):
+        assert alt.endswith(".") and alt.count(".") == 1, f"{alt!r}: one plain sentence"
+        for src in (dark, light):
+            assert os.path.isfile(os.path.normpath(os.path.join(os.path.dirname(path), src))), (path, src)
+        assert dark.replace("-dark.", "-light.") == light, (dark, light)
+        assert os.path.normpath(os.path.join(os.path.dirname(path), light)).startswith(BANNERS)
+
+
+def test_each_banner_is_used_where_the_banner_readme_says():
+    where = {"README.md": ("brake", "letterbox", "ratchet", "beads", "spindle", "rack"),
+             "docs/configuration/README.md": ("dials",), "docs/operations/README.md": ("breakers",)}
+    for rel, names in where.items():
+        text = page(rel)
+        used = [m.group(1) for m in re.finditer(r"assets/banners/(\w+)-light\.", text)]
+        assert used == list(names), (rel, used)
+        if rel == "README.md":     # each directly under its heading, the hero under the pitch
+            for heading, name in (("The problem", "letterbox"), ("What it guarantees", "ratchet"),
+                                  ("How it works", "beads"), ("Quick start", "spindle"), ("Bobbins", "rack")):
+                first = section(text, heading).lstrip().split("\n\n")[0]
+                assert first.startswith("<picture>") and f"{name}-light" in first, heading
+        else:
+            assert text.split("\n\n")[1].startswith("<picture>"), rel
 
 
 def test_changelog_has_an_unreleased_section_with_added():

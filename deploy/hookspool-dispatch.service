@@ -1,4 +1,4 @@
-# hookspool-dispatch.service: the single deliverer (docs/ARCHITECTURE.md section 2).
+# hookspool-dispatch.service: the single deliverer (docs/architecture/ARCHITECTURE.md section 2).
 # Install as /etc/systemd/system/hookspool-dispatch.service, then `systemctl daemon-reload`.
 # Replace User/Group and the paths as in hookspool-intake.service.
 #
@@ -7,7 +7,7 @@
 # any other directory a script writes. ProtectSystem=strict makes everything else read-only, and a script
 # that cannot write its journal fails every batch with a "config"-class error. Every listed path must exist
 # before the unit starts (systemd fails with status 226/NAMESPACE otherwise): create them as in
-# deploy/README.md. A directory under /home is writable only if it is listed here, because
+# docs/operations/running.md. A directory under /home is writable only if it is listed here, because
 # ProtectHome=read-only is set.
 [Unit]
 Description=hookspool dispatcher (coalesce, deliver, retry)
@@ -22,7 +22,7 @@ User=hookspool
 Group=hookspool
 Environment=HOOKSPOOL_HOME=/var/lib/hookspool
 Environment=HOOKSPOOL_LOG=json
-# `check` exits 2 on an older schema, so after an upgrade run `hookspool migrate` first (deploy/README.md, Upgrading).
+# `check` exits 2 on an older schema, so after an upgrade run `hookspool migrate` first (docs/operations/upgrading.md).
 ExecStartPre=/usr/local/bin/hookspool check
 ExecStart=/usr/local/bin/hookspool dispatch
 ExecReload=/usr/local/bin/hookspool reload
