@@ -12,8 +12,10 @@ report:
 | debounce | in memory, per calendar | the `calendar` / `mail` coalescing span of the source |
 | settings | constants in the file | environment (the destination's `env_file`) |
 
-`hookspool_batch.py` is the shared helper (stdlib only): reads the document, builds and prints emits,
-stages state writes and keeps the journal. Copy the three files together.
+`hookspool_batch.py` re-exports `hookspool.processor` (the processor runtime of service packages,
+ARCHITECTURE 14.3.4), which reads the document, builds and prints emits, stages state writes and keeps the
+journal. The scripts need hookspool installed for the interpreter that runs them (or run from this checkout);
+the stand-alone "copy three files" mode is retired.
 
 ## Why the journal
 
@@ -32,7 +34,7 @@ identical on every attempt.
 
 ```toml
 [destinations."script:gcal_delta"]
-argv      = ["/usr/bin/python3", "/opt/hookspool/scripts/gcal_delta.py", "--batch"]
+argv      = ["/opt/hookspool/venv/bin/python", "/opt/hookspool/scripts/gcal_delta.py", "--batch"]
 cwd       = "/opt/hookspool/scripts"
 env_file  = "/etc/hookspool/gcal_delta.env"
 state_dir = "/var/lib/hookspool/scripts/gcal"     # journal; also the default data dir; add to ReadWritePaths

@@ -23,8 +23,8 @@ other way round, fails the suite.
 | `HOOKSPOOL_DB` | path of the spool file, overriding `[spool] db` |
 | `HOOKSPOOL_LOG` | `json` for one JSON object per log line; anything else is the text form |
 | `HOOKSPOOL_ALERT_DRY` | set to anything but `0` to record alerts instead of running `alerts.argv` (tests, rehearsals) |
-| `HOOKSPOOL_SERVICE_PACKAGE`, `HOOKSPOOL_SERVICE_INSTANCE`, `HOOKSPOOL_SERVICE_DIR` | set for a service package's processor: the package, the instance and the package's directory (never read from the dispatcher's environment) |
-| `HOOKSPOOL_SETTINGS`, `HOOKSPOOL_DELTA_ROUTES`, `HOOKSPOOL_SECRET_REFS` | set for a processor: its typed settings, its output map and the references (never values) of the secrets it may read, each as JSON |
+| `HOOKSPOOL_SERVICE_PACKAGE`, `HOOKSPOOL_SERVICE_INSTANCE`, `HOOKSPOOL_SERVICE_DIR` | set by the dispatcher for a service package's processor (`python -m hookspool.processor <instance>`, ARCHITECTURE 14.3.4): the package, the instance and the package directory. Never set by hand, and never read from the dispatcher's own environment |
+| `HOOKSPOOL_SETTINGS`, `HOOKSPOOL_SECRET_REFS`, `HOOKSPOOL_DELTA_ROUTES` | also set for a processor: its typed settings, the references (never values) of the secrets it may read, and the destinations of its event types (its output map), each as JSON |
 
 Precedence for paths is always: option, then environment, then config file, then default.
 

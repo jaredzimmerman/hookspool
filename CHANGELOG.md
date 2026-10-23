@@ -10,6 +10,11 @@ The changes below will ship as 0.2.0.
 
 ### Added
 
+- `hookspool.processor`: the runtime for service-package processors (`python -m hookspool.processor <instance>`): a
+  per-batch state lock, a journal so a retried batch replays without calling `process` again, staged state writes, emits
+  addressed through the deployment's routes, typed settings, and exit codes 0 (done), 75 (retry), 65 (permanent). The
+  stand-alone copy mode of `deploy/scripts/hookspool_batch.py` is retired: it now re-exports the runtime, so the delta
+  scripts must run under the interpreter hookspool is installed in.
 - `unwrap = true` for `hermes` and `http` destinations: a batch is delivered as one request per event, in order, with the
   event's stored payload as the body, for receivers that expect the sender's original payload (a Hermes route whose prompt
   template reads `{pull_request.title}`). Each request carries Standard Webhooks headers with a per-event `webhook-id`
