@@ -1,0 +1,13 @@
+# test values for `hookspool bobbin check`
+[secrets]
+client_id = "test-plaid-client-PAYLOAD-SENTINEL-7f3a"
+secret = "test-plaid-secret-PAYLOAD-SENTINEL-7f3a"
+
+[settings]
+env = "sandbox"
+
+[[http]]                       # Plaid's verification-key endpoint: the public half of the test key the captures are signed with
+method = "POST"
+url = "https://sandbox.plaid.com/webhook_verification_key/get"
+status = 200
+json = { key = { alg = "ES256", crv = "P-256", kid = "test-kid-0001", kty = "EC", use = "sig", created_at = 1700000000, x = "Qp9yofR-DbwcD_-4bqw08HydWNwKk_jNVOTx_5Tfe6w", y = "m7oX96XMQ2qqTlAW0-831u5-qaCkV6e5lvZ7vl_koyo" } }

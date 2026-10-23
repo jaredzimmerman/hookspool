@@ -57,6 +57,19 @@ The changes below will ship as 0.2.0.
   script that was started on the side). `hookspool/providers/google.py` holds what the Google bobbins share: the push-channel
   check (token, `sync` handshake, header payload) and the Gmail, Calendar and free/busy calls on `ctx.oauth`.
 - A bobbin secret may be marked `required = false`, so an instance can leave it out.
+- The `zoom` and `plaid` bobbins (`hookspool/bobbins/`): the Zoom event subscription and the Plaid webhook sources, moved
+  from `hookspool/sources/` with their captures (`hookspool.sources.zoom` and `.plaid` still import and are the bobbins' own
+  modules). Both now call core only (ARCHITECTURE 14.3.7): Zoom's HMAC and URL validation answer through `hookspool.verify`,
+  and Plaid's key fetch and cache are `verify.key_fetcher` and `verify.shared_key_cache`, called through `hookspool/net.py`, with no
+  `urllib`, `threading` or `logging` of the bobbin's own. Plaid's `env` is the bobbin setting `env`.
+- `hookspool.verify.key_fetcher` (a key fetch for a per-key endpoint or a JWKS URL, with the "sender has no such key" refusals
+  mapped to None), `verify.shared_key_cache` and `reset_shared_key_caches`, and `KeyCache.lookup(..., fetch=)` for a fetch that
+  needs the request's credentials; a failed key fetch is logged once by `KeyCache` (class, HTTP status and the sender's short
+  error code, never a body).
+- A bobbin manifest's `[source] config = ["env", ...]` names the settings that become keys of the source's own table (the
+  source module's `config_keys`), for a code source that reads them.
+- The conformance kit answers a source's own HTTP calls (a sender's verification keys) from `captures/kit.toml` `[[http]]`,
+  as it does for a processor's `ctx.http`.
 
 ### Changed
 

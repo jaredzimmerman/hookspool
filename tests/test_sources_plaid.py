@@ -2,8 +2,11 @@
 (ARCHITECTURE section 10) and the 600 s dedup window (built into the plugin)."""
 from __future__ import annotations
 
+import io
 import json
 import os
+import urllib.error
+import urllib.request
 
 import plaidkit
 import pytest
@@ -233,36 +236,47 @@ def test_key_plaid_marked_expired_stays_dropped_after_the_negative_cache_lapses(
 
 
 class _Resp:
+    """A 200 answer for the stubbed opener (the shape ``net.Http`` reads)."""
+    status = 200
+
     def __init__(self, data):
-        self.data = json.dumps(data).encode()
+        self.fp = io.BytesIO(json.dumps(data).encode())
 
     def read(self, n=-1):
-        return self.data
+        return self.fp.read(n)
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
+    def close(self):
+        pass
 
 
 def _real_fetch(monkeypatch, answers):
-    """Run the real ``fetch_key`` against a stub ``urlopen``: each answer is a JWK dict (200)
-    or an ``(http status, error_code)`` refusal."""
-    import io
-    import urllib.error
+    """Run the real ``fetch_key`` (through ``net.Http``) against a stubbed opener: each answer is a JWK dict
+    (200) or an ``(http status, error_code)`` refusal."""
     calls = []
 
-    def urlopen(req, timeout=None):
+    def open_(self, req, data=None, timeout=None):
         calls.append(json.loads(req.data))
         a = answers.pop(0)
         if isinstance(a, tuple):
             body = json.dumps({"error_code": a[1], "error_message": "x " + plaidkit.SECRET}).encode()
             raise urllib.error.HTTPError(req.full_url, a[0], "refused", {}, io.BytesIO(body))
         return _Resp({"key": a})
-    monkeypatch.setattr(plaid.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", open_)
     monkeypatch.setattr(plaid, "fetch_key", REAL_FETCH)
     return calls
+
+
+def test_the_real_fetch_posts_the_credentials_to_the_env_host(monkeypatch):
+    seen = []
+
+    def open_(self, req, data=None, timeout=None):
+        seen.append((req.full_url, req.get_method(), json.loads(req.data)))
+        return _Resp({"key": plaidkit.jwk_of(plaidkit.private_key())})
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", open_)
+    jwk = REAL_FETCH("sandbox", "cid", "sec", "kid-1")
+    assert jwk["kid"] == plaidkit.KID
+    assert seen == [("https://sandbox.plaid.com/webhook_verification_key/get", "POST",
+                     {"client_id": "cid", "secret": "sec", "key_id": "kid-1"})]
 
 
 def test_a_400_invalid_api_keys_keeps_the_known_key_and_is_not_negative_cached(monkeypatch, env, clock):
@@ -277,7 +291,8 @@ def test_a_400_invalid_api_keys_keeps_the_known_key_and_is_not_negative_cached(m
     assert post(env, plaidkit.make_jwt(BODY, clock())).status == 200      # credentials fixed: fresh key
     assert len(calls) == 4
     text = env.logs.rendered()
-    assert "http=400 error_code=INVALID_API_KEYS" in text and plaidkit.SECRET not in text
+    assert "plaid sandbox key fetch failed: Permanent http=400 error_code=INVALID_API_KEYS" in text
+    assert plaidkit.SECRET not in text and plaidkit.CLIENT_ID not in text
 
 
 @pytest.mark.parametrize("answer", [(400, "INVALID_WEBHOOK_VERIFICATION_KEY_ID"), (404, "")])
@@ -296,27 +311,25 @@ def test_error_code_is_sanitised_before_logging(monkeypatch, env, clock):
     _real_fetch(monkeypatch, [(400, "bad code\n" + plaidkit.SECRET)])
     assert post(env, plaidkit.make_jwt(BODY, clock())).status == 401
     text = env.logs.rendered()
-    assert "error_code=-" in text and plaidkit.SECRET not in text
+    assert "http=400 error_code=-" in text and plaidkit.SECRET not in text
 
 
 def test_key_fetch_failures_leave_one_safe_log_line(env, clock, fetcher):
     fetcher.error = OSError("network down " + plaidkit.SECRET)
     assert post(env, plaidkit.make_jwt(BODY, clock())).status == 401
     text = env.logs.rendered()
-    assert "plaid key fetch failed: OSError" in text
+    assert "plaid sandbox key fetch failed: OSError" in text
     assert plaidkit.SECRET not in text and plaidkit.CLIENT_ID not in text
 
 
 def test_a_400_from_plaid_is_logged_and_still_401(monkeypatch, env, clock):
-    import io
-    import urllib.error
-    def refuse(req, timeout=None):
+    def refuse(self, req, data=None, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 400, "bad", {}, io.BytesIO(b'{"error_code":"INVALID_API_KEYS"}'))
-    monkeypatch.setattr(plaid.urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refuse)
     monkeypatch.setattr(plaid, "fetch_key", REAL_FETCH)
     assert post(env, plaidkit.make_jwt(BODY, clock())).status == 401
     text = env.logs.rendered()
-    assert "env=" in text and "http=400" in text and plaidkit.SECRET not in text
+    assert "plaid sandbox" in text and "http=400" in text and plaidkit.SECRET not in text
 
 
 def test_expired_key_is_not_used(env, clock, fetcher):
@@ -332,15 +345,6 @@ def test_network_failure_is_401_and_not_negative_cached(env, clock, fetcher):
     clock.advance(61)
     assert post(env, plaidkit.make_jwt(BODY, clock())).status == 200
     assert len(fetcher.calls) == 2
-
-
-def test_cache_is_bounded(clock):
-    c = plaid.KeyCache()
-    now = clock()
-    for i in range(plaid.MAX_CACHED * 3):
-        now += plaid.FETCH_COOLDOWN_S + 1
-        assert c.lookup(f"k{i}", now, lambda k: None) is None
-    assert len(c.unknown) <= plaid.MAX_CACHED
 
 
 def test_unreadable_secret_answers_503_not_401(env, clock, fetcher):

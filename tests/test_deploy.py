@@ -353,10 +353,14 @@ def test_config_example_every_source_is_covered_by_the_readme_sweep_table():
         # the example ships 0 everywhere (README section 2: a source that was never moved would alert
         # "silent" on day one); the value to set at cutover is the bobbin's recommendation, named in the README cell
         if src in CONFIG["bobbins"]:
-            assert CONFIG["bobbins"][src].get("expect") is False, src
             with open(os.path.join(ROOT, "hookspool", "bobbins", src, "bobbin.toml"), "rb") as f:
-                later = tomllib.load(f)["source"]["expect_every_s"]
-            assert f"`{later}`" in cells[4], f"{src}: README says {cells[4]!r}, the bobbin recommends {later}"
+                later = tomllib.load(f)["source"].get("expect_every_s")
+            if later is None:                    # the bobbin recommends no silence limit: the cell says 0
+                assert CONFIG["bobbins"][src].get("expect") is not True, src
+                assert cells[4].startswith("`0`"), f"{src}: README says {cells[4]!r}, the bobbin recommends none"
+            else:
+                assert CONFIG["bobbins"][src].get("expect") is False, src
+                assert f"`{later}`" in cells[4], f"{src}: README says {cells[4]!r}, the bobbin recommends {later}"
         else:
             assert CONFIG["sources"][src].get("expect_every_s", 0) == 0, src
     assert "removed" in table.lower() or "none" in table.lower()
