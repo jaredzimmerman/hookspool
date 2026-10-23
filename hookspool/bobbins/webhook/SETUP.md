@@ -68,10 +68,12 @@ Pass `/hooks/acme-events` through with its path unchanged. For `url-token`, keep
 instance whose `sender_retries` is false (the default). If the sender does retry, set `sender_retries = true`
 and the warning goes. If it does not, a delivery refused while hookspool was down is lost unless something
 asks the sender again. Install a small periodic job (daily is enough) that lists the sender's recent failed
-deliveries and redelivers them, or that reconciles the sender's own state; redeliveries are harmless because
-`dedup` recognises a delivery already queued. Read the sender's documentation for a "recent deliveries" or
-"redeliver" call; if it has none, the job reads the object list instead and enqueues what is missing with
-`hookspool enqueue --source acme-events ...`. Set `expect_every_s` on the instance when the sender normally
+deliveries and redelivers them, or that reconciles the sender's own state. A sweep needs `dedup` set (the
+sender's delivery id, or `body_sha256` when it has none): `dedup` is optional and unset by default, and without
+it every redelivery queues a second event. With it set, a redelivery of a delivery already queued is
+recognised and dropped. Read the sender's documentation for a "recent deliveries" or "redeliver" call; if it
+has none, the job reads the object list instead and enqueues what is missing with
+`hookspool enqueue --source acme-events --key <key> --dedup-id <the value dedup reads> ...`. Set `expect_every_s` on the instance when the sender normally
 sends something within a known period, so a silent source opens an issue.
 
 ## Roll back

@@ -679,7 +679,7 @@ description = "the token in the Pub/Sub push endpoint URL"
 
 [settings.owner]                                 # non-secret, typed settings for the processor and hooks
 description = "the owner's mailbox"
-type = "string"                                  # string | int | bool | list | path; required
+type = "string"                                  # string | int | bool | list | path | table; required
 required = true                                  # default false; a non-required setting needs `default`
 default = ""                                     # must match `type`
 

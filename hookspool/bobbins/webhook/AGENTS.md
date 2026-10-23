@@ -59,9 +59,12 @@ signing secret: the person writes the secret file and registers the webhook.
    prefix or secret differs from the sender's; compare each with the documentation sentence from step 2.
 8. **Goal:** lost deliveries are recovered. If the sender does not retry (`sender_retries = false`; `hookspool
    check` warns about it), propose a periodic job that lists the sender's recent failed deliveries and
-   redelivers them, or enqueues what is missing with `hookspool enqueue --source <INSTANCE> ...`; redelivery is
-   harmless because `dedup` recognises a delivery already queued. **Check:** the person approves the job
-   before it is installed. **If it fails:** the sender has no way to list deliveries; ask the person how else
+   redelivers them, or enqueues what is missing with
+   `hookspool enqueue --source <INSTANCE> --key <key> --dedup-id <the value dedup reads> ...`. A sweep needs
+   `dedup` set (the sender's delivery id, or `body_sha256` when it has none): `dedup` is optional and unset by
+   default, and without it every redelivery queues a second event. **Check:** `dedup` is set in the instance
+   settings, and the person approves the job before it is installed. **If `dedup` is unset:** add it (step 2),
+   then run steps 4 and 5 again. **If it fails:** the sender has no way to list deliveries; ask the person how else
    the objects can be listed.
 9. **Outward, rollback:** remove `[bobbins.<INSTANCE>]`, run `hookspool check` and `hookspool reload`. Then ask
    the person to delete the webhook at the sender. The agent does not run the delete.
