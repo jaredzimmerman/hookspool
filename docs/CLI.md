@@ -23,7 +23,7 @@ other way round, fails the suite.
 | `HOOKSPOOL_DB` | path of the spool file, overriding `[spool] db` |
 | `HOOKSPOOL_LOG` | `json` for one JSON object per log line; anything else is the text form |
 | `HOOKSPOOL_ALERT_DRY` | set to anything but `0` to record alerts instead of running `alerts.argv` (tests, rehearsals) |
-| `HOOKSPOOL_SERVICE_PACKAGE`, `HOOKSPOOL_SERVICE_INSTANCE`, `HOOKSPOOL_SERVICE_DIR` | set by the dispatcher for a service package's processor (`python -m hookspool.processor <instance>`, ARCHITECTURE 14.3.4): the package, the instance and the package directory. Never set by hand, and never read from the dispatcher's own environment |
+| `HOOKSPOOL_BOBBIN`, `HOOKSPOOL_BOBBIN_INSTANCE`, `HOOKSPOOL_BOBBIN_DIR` | set by the dispatcher for a bobbin's processor (`python -m hookspool.processor <instance>`, ARCHITECTURE 14.3.4): the bobbin, the instance and the bobbin directory. Never set by hand, and never read from the dispatcher's own environment |
 | `HOOKSPOOL_SETTINGS`, `HOOKSPOOL_SECRET_REFS`, `HOOKSPOOL_DELTA_ROUTES` | also set for a processor: its typed settings, the references (never values) of the secrets it may read, and the destinations of its event types (its output map), each as JSON |
 
 Precedence for paths is always: option, then environment, then config file, then default.
@@ -247,19 +247,19 @@ events, attempts, dedup rows and issues it deleted. Dead batches are never prune
 |---|---|
 | `--vacuum` | also run `VACUUM` to return space to the filesystem. Needs free space of about the size of the spool file |
 
-### hookspool service
+### hookspool bobbin
 
-Service packages (see `docs/ARCHITECTURE.md` section 14.3). The subcommand is one of `list`, `show`, `expand` and
+Bobbins (see `docs/ARCHITECTURE.md` section 14.3). The subcommand is one of `list`, `show`, `expand` and
 `new`:
 
 | form | does |
 |---|---|
-| `service list` | the packages found (built in, then each `[packages] path` directory): name, version, where it comes from, summary, and the `[services.<instance>]` tables that use it |
-| `service show <package>` | one package: its secrets, settings (type, required, default), outputs, span, whether the sender retries, the reverse-proxy note |
-| `service expand [<instance>]` | the ordinary tables one instance (or every instance) expands to, as TOML. Secret references stay references and `HOOKSPOOL_SECRET_REFS` is shown by secret name only: no secret value is ever read or printed. Exit 2 with every problem when the services do not expand |
-| `service new <name>` | scaffold a new package directory: manifest, `source.py` (or a template source), optional `processor.py`, one capture and a README |
+| `bobbin list` | the bobbins found (built in, then each `[spool] bobbin_path` directory): name, version, where it comes from, summary, and the `[bobbins.<instance>]` tables that use it |
+| `bobbin show <bobbin>` | one bobbin: its secrets, settings (type, required, default), outputs, span, whether the sender retries, the reverse-proxy note |
+| `bobbin expand [<instance>]` | the ordinary tables one instance (or every instance) expands to, as TOML. Secret references stay references and `HOOKSPOOL_SECRET_REFS` is shown by secret name only: no secret value is ever read or printed. Exit 2 with every problem when the bobbins do not expand |
+| `bobbin new <name>` | scaffold a new bobbin directory: manifest, `source.py` (or a template source), optional `processor.py`, one capture and a README |
 
-`name` is the package for `show`, the instance for `expand` and the new package's name for `new`.
+`name` is the bobbin for `show`, the instance for `expand` and the new bobbin's name for `new`.
 
 | option | meaning |
 |---|---|

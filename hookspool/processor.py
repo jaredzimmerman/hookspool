@@ -1,18 +1,18 @@
-"""The processor runtime for service packages (ARCHITECTURE 14.3.4) and the batch protocol of
+"""The processor runtime for bobbins (ARCHITECTURE 14.3.4) and the batch protocol of
 ``script:`` destinations (6.6).
 
-``python -m hookspool.processor <instance>`` is what the dispatcher runs for a service package that has
+``python -m hookspool.processor <instance>`` is what the dispatcher runs for a bobbin that has
 a processor. It reads the batch document on stdin, loads ``processor.py`` from
-``$HOOKSPOOL_SERVICE_DIR`` and calls::
+``$HOOKSPOOL_BOBBIN_DIR`` and calls::
 
     def process(batch: Batch, ctx: Context) -> list[dict]:
         '''Return items; each is {"event_type": ..., <payload fields>}; [] means nothing to do.'''
 
-The environment (built by the config expansion, 14.3.3): ``HOOKSPOOL_SERVICE_PACKAGE``,
-``HOOKSPOOL_SERVICE_INSTANCE``, ``HOOKSPOOL_SERVICE_DIR``, ``HOOKSPOOL_SETTINGS`` (JSON, typed, defaults
+The environment (built by the config expansion, 14.3.3): ``HOOKSPOOL_BOBBIN``,
+``HOOKSPOOL_BOBBIN_INSTANCE``, ``HOOKSPOOL_BOBBIN_DIR``, ``HOOKSPOOL_SETTINGS`` (JSON, typed, defaults
 applied), ``HOOKSPOOL_DELTA_ROUTES`` (JSON, event type -> destination), ``HOOKSPOOL_SECRET_REFS`` (JSON,
 secret name -> reference, never a value), and from the ``script`` destination ``HOOKSPOOL_BATCH_ID``,
-``HOOKSPOOL_DELIVERY_ID`` and, when the package keeps state, ``HOOKSPOOL_STATE_DIR``.
+``HOOKSPOOL_DELIVERY_ID`` and, when the bobbin keeps state, ``HOOKSPOOL_STATE_DIR``.
 
 One batch, with the state lock (``<state_dir>/.lock``) held throughout:
 
@@ -32,9 +32,9 @@ is never logged. ``Retryable`` or any other exception exits 75 (retry), with onl
 the log. Nothing but emit lines ever reaches stdout: while the runtime runs, file descriptor 1 is the
 standard error.
 
-Limits worth knowing. A package that keeps no state (no ``HOOKSPOOL_STATE_DIR``) has no journal, so a
+Limits worth knowing. A bobbin that keeps no state (no ``HOOKSPOOL_STATE_DIR``) has no journal, so a
 retried batch calls ``process`` again and the stable emit dedup id is the only guard against duplicates.
-The runtime trusts ``HOOKSPOOL_SERVICE_DIR`` from the dispatcher (``hookspool check`` verifies the
+The runtime trusts ``HOOKSPOOL_BOBBIN_DIR`` from the dispatcher (``hookspool check`` verifies the
 directory; only the ``hooks`` file is path-checked here, 14.3.6). Settings that the manifest does not
 declare pass through unchanged, and ``hooks`` loads even when ``[settings.hooks]`` is not declared:
 the config expansion and ``check`` are the validators, not this runtime.
@@ -354,15 +354,15 @@ class Settings(Mapping):
 
 
 def read_manifest(service_dir: str) -> dict:
-    """``service.toml`` of the package ({} when there is none)."""
-    p = os.path.join(service_dir, "service.toml")
+    """``bobbin.toml`` of the bobbin ({} when there is none)."""
+    p = os.path.join(service_dir, "bobbin.toml")
     try:
         with open(p, "rb") as f:
             m = tomllib.load(f)
     except FileNotFoundError:
         return {}
     except (OSError, tomllib.TOMLDecodeError) as e:
-        raise BatchError(f"service.toml cannot be read ({e.__class__.__name__})") from None
+        raise BatchError(f"bobbin.toml cannot be read ({e.__class__.__name__})") from None
     return m if isinstance(m, dict) else {}
 
 
@@ -439,22 +439,22 @@ def _load_file(name: str, path: str):
 
 
 def load_processor(service_dir: str, instance: str, manifest: Mapping[str, Any] | None = None):
-    """The package's processor module: imported by name for a built-in package, by file path (under a
-    private module name, never on ``sys.path``) for one in a ``packages.path`` directory."""
+    """The bobbin's processor module: imported by name for a built-in bobbin, by file path (under a
+    private module name, never on ``sys.path``) for one in a ``spool.bobbin_path`` directory."""
     if not service_dir or not os.path.isdir(service_dir):
-        raise BatchError("HOOKSPOOL_SERVICE_DIR is not a directory")
+        raise BatchError("HOOKSPOOL_BOBBIN_DIR is not a directory")
     proc = (manifest or {}).get("processor")
     module = (proc.get("module") if isinstance(proc, dict) else None) or "processor"
     if not isinstance(module, str) or not _MODULE_NAME.match(module):
-        raise BatchError("the manifest's processor module must be a module name in the package")
+        raise BatchError("the manifest's processor module must be a module name in the bobbin")
     real = os.path.realpath(service_dir)
-    builtin = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "services"))
+    builtin = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bobbins"))
     if os.path.dirname(real) == builtin and _MODULE_NAME.match(os.path.basename(real)):
-        mod = importlib.import_module(f"hookspool.services.{os.path.basename(real)}.{module}")
+        mod = importlib.import_module(f"hookspool.bobbins.{os.path.basename(real)}.{module}")
     else:
         path = os.path.join(real, module + ".py")
         if not os.path.isfile(path):
-            raise BatchError(f"the package has no {module}.py")
+            raise BatchError(f"the bobbin has no {module}.py")
         mod = _load_file(_private_name("processor", instance), path)
     if not callable(getattr(mod, "process", None)):
         raise BatchError(f"{module}.py defines no process(batch, ctx)")
@@ -479,7 +479,7 @@ def _default_extras(state: dict, secret_resolver: Callable[[str], str], **kw: An
 
 
 class Context:
-    """What ``process`` gets besides the batch (14.3.4). A package never reads the environment, opens
+    """What ``process`` gets besides the batch (14.3.4). A bobbin never reads the environment, opens
     files, logs or sleeps on its own; it goes through this object."""
 
     def __init__(self, *, instance: str, settings: Settings | None = None, secret_refs: Mapping[str, Any] | None = None,
@@ -537,7 +537,7 @@ class Context:
         if not isinstance(name, str) or not _STATE_NAME.match(name):
             raise BatchError("a state name is letters, digits, '_', '-' and '.' (at most 100)")
         if not self._sdir:
-            raise BatchError("no state directory: the package's manifest needs [processor] state = true")
+            raise BatchError("no state directory: the bobbin's manifest needs [processor] state = true")
         return os.path.join(self._sdir, name + ".json")
 
     def load_state(self, name: str, default: Any = None) -> Any:
@@ -641,7 +641,7 @@ def run(instance: str, doc: dict | None = None, *, env: Mapping[str, str] | None
         batch = Batch.from_doc(doc, env)
         routes = destinations(env)
         sdir = env.get("HOOKSPOOL_STATE_DIR", "")
-        service_dir = env.get("HOOKSPOOL_SERVICE_DIR", "")
+        service_dir = env.get("HOOKSPOOL_BOBBIN_DIR", "")
         with _state_lock(sdir):
             j = load_journal(sdir, batch.id) if sdir else None
             if j is not None:
@@ -692,9 +692,9 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write("usage: python -m hookspool.processor <instance>\n")
         return EX_RETRY
     instance = args[0]
-    named = os.environ.get("HOOKSPOOL_SERVICE_INSTANCE")
+    named = os.environ.get("HOOKSPOOL_BOBBIN_INSTANCE")
     if named and named != instance:
-        sys.stderr.write(f"hookspool.processor {instance}: HOOKSPOOL_SERVICE_INSTANCE names another instance\n")
+        sys.stderr.write(f"hookspool.processor {instance}: HOOKSPOOL_BOBBIN_INSTANCE names another instance\n")
         return EX_RETRY
     sys.stdout.flush()
     real = os.fdopen(os.dup(1), "w", encoding="utf-8")

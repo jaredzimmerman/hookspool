@@ -1,6 +1,6 @@
 """The processor runtime (ARCHITECTURE 14.3.4): ``hookspool.processor``.
 
-A throwaway package (``service.toml`` + ``processor.py``) is written per test; the runtime is driven
+A throwaway package (``bobbin.toml`` + ``processor.py``) is written per test; the runtime is driven
 in-process through ``run()`` and, for the stdout and exit-code guarantees, as the real
 ``python -m hookspool.processor <instance>`` subprocess.
 """
@@ -69,10 +69,10 @@ class Rig:
         self.tmp = tmp_path
         self.pkg = tmp_path / "demo"
         self.pkg.mkdir()
-        (self.pkg / "service.toml").write_text(MANIFEST)
+        (self.pkg / "bobbin.toml").write_text(MANIFEST)
         self.state = tmp_path / "state"
-        self.env = {"HOOKSPOOL_SERVICE_PACKAGE": "demo", "HOOKSPOOL_SERVICE_INSTANCE": "demo-a",
-                    "HOOKSPOOL_SERVICE_DIR": str(self.pkg), "HOOKSPOOL_STATE_DIR": str(self.state),
+        self.env = {"HOOKSPOOL_BOBBIN": "demo", "HOOKSPOOL_BOBBIN_INSTANCE": "demo-a",
+                    "HOOKSPOOL_BOBBIN_DIR": str(self.pkg), "HOOKSPOOL_STATE_DIR": str(self.state),
                     "HOOKSPOOL_BATCH_ID": "7", "HOOKSPOOL_DELIVERY_ID": "hs_demo_7",
                     "HOOKSPOOL_DELTA_ROUTES": json.dumps({"alert": "hermes:alerts"}),
                     "HOOKSPOOL_SETTINGS": json.dumps({"tz": "Europe/Paris"}), "HOOKSPOOL_SECRET_REFS": "{}"}
@@ -270,7 +270,7 @@ def test_fail_permanent_raises(rig):
 
 def test_environment_problems_are_retried(rig):
     rig.processor(COUNTER)
-    for env in ({"HOOKSPOOL_SERVICE_DIR": str(rig.tmp / "missing")}, {"HOOKSPOOL_DELTA_ROUTES": "nope"},
+    for env in ({"HOOKSPOOL_BOBBIN_DIR": str(rig.tmp / "missing")}, {"HOOKSPOOL_DELTA_ROUTES": "nope"},
                 {"HOOKSPOOL_SETTINGS": "[1]"}, {"HOOKSPOOL_SECRET_REFS": "x"}):
         assert rig.run(env=env)[0] == 75, env
     out, err = io.StringIO(), io.StringIO()
@@ -386,7 +386,7 @@ def test_settings_are_read_only():
 
 
 def test_settings_without_a_manifest_are_passed_through(rig):
-    (rig.pkg / "service.toml").unlink()
+    (rig.pkg / "bobbin.toml").unlink()
     rig.processor(SHOW_SETTINGS)
     rc, emits, _ = rig.run()
     assert rc == 0 and emits[0]["payload"]["settings"] == {"tz": "Europe/Paris"}
@@ -595,10 +595,10 @@ def test_a_path_loaded_processor_cannot_import_its_siblings_and_sys_path_is_unto
 
 
 def test_the_manifest_names_the_processor_module(rig):
-    (rig.pkg / "service.toml").write_text(MANIFEST.replace('module = "processor"', 'module = "work"'))
+    (rig.pkg / "bobbin.toml").write_text(MANIFEST.replace('module = "processor"', 'module = "work"'))
     (rig.pkg / "work.py").write_text("def process(batch, ctx):\n    return [{'event_type': 'alert', 'm': 'work'}]\n")
     assert rig.run()[1][0]["payload"]["m"] == "work"
-    (rig.pkg / "service.toml").write_text(MANIFEST.replace('module = "processor"', 'module = "../evil"'))
+    (rig.pkg / "bobbin.toml").write_text(MANIFEST.replace('module = "processor"', 'module = "../evil"'))
     assert rig.run(env={"HOOKSPOOL_BATCH_ID": "8"})[0] == 75
 
 

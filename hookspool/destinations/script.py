@@ -1,7 +1,7 @@
 """``script:<name>`` destination (contract C3; ARCHITECTURE §6.6).
 
 Runs ``argv`` (no shell) with the batch document on stdin, in its own session so a timeout or
-the worker deadline can kill the whole process group. A service package's processor destination
+the worker deadline can kill the whole process group. A bobbin's processor destination
 has ``processor = "<instance>"`` instead of ``argv``; the argv is then built at spawn as
 ``[sys.executable, "-I", "-m", "hookspool.processor", "<instance>"]``, so the interpreter is always
 the dispatcher's own and the working directory is never on ``sys.path`` (ARCHITECTURE §14.3.3).

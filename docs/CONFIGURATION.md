@@ -22,6 +22,7 @@ never written in this file; they are references (see [Secrets](#secrets)).
 | `home` | `/var/lib/hookspool` | state directory: `config.toml`, `spool.db` (and its `-wal`, `-shm`), `dispatch.lock`. `HOOKSPOOL_HOME` and `--home` override it |
 | `db` | `spool.db` | spool file name, relative to `home` (`HOOKSPOOL_DB` overrides) |
 | `store_raw` | `true` | keep each request's original body, so a quarantined request can be reclassified and a capture re-verified. A source can override it. Turn it off for sources whose bodies you must not keep |
+| `bobbin_path` | none | list of absolute directories searched for bobbins after the built-in ones (`hookspool/bobbins/`). See `docs/ARCHITECTURE.md` section 14.3 |
 
 ## `[intake]`
 
@@ -229,7 +230,7 @@ table with a `type`.
 | `cwd` | `script` | none | working directory (absolute path) |
 | `env_file` | `script` | none | `KEY=value` file, re-read on every attempt, whose values become the script's environment (absolute path) |
 | `env` | `script` | none | `NAME = "value"` strings set over `env_file` in the script's environment. Names match `^[A-Z][A-Z0-9_]*$`; `HOOKSPOOL_*` names are set by hookspool only |
-| `processor` | `script` | none | set only by a `[services.<instance>]` expansion, in place of `argv`: the dispatcher runs its own interpreter as `python -I -m hookspool.processor <instance>` |
+| `processor` | `script` | none | set only by a `[bobbins.<instance>]` expansion, in place of `argv`: the dispatcher runs its own interpreter as `python -I -m hookspool.processor <instance>` |
 | `state_dir` | `script` | none | a directory the script may keep state in (absolute path). Created if missing; passed as `HOOKSPOOL_STATE_DIR`. List it in the service unit's `ReadWritePaths` |
 | `url` | `http` | required | where to POST. Must be `https://` unless `allow_insecure` |
 | `secret` | `http` | required | secret reference used to sign each delivery |
