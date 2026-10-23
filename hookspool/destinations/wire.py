@@ -8,6 +8,8 @@
   the response is read in small pieces against the same deadline, so a receiver that drips a
   byte at a time cannot hold a worker past the lease deadline. Redirects are never followed.
 - ``classify_status``: the §6.5 mapping from an HTTP status to an ``Outcome``.
+- ``unwrap_deliver``: the ``unwrap`` mode shared by ``hermes`` and ``http``: one request per
+  event, body = the event's stored payload, stop at the first failure (§6.4).
 
 Nothing here logs, and no message includes a secret, a header value or a body.
 """
@@ -23,8 +25,9 @@ import socket
 import ssl
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from email.utils import parsedate_to_datetime
+from typing import Callable
 from urllib.parse import urlsplit
 
 from .. import __version__
@@ -41,6 +44,14 @@ RESERVED_HEADERS = frozenset({
     "x-hookspool-batch", "x-hookspool-attempt",
 })
 _HEADER_VALUE = re.compile(r"[\x20-\x7e\xa0-\xff\t]*")
+_HEADER_NAME = re.compile(r"[A-Za-z0-9-]{1,64}")
+
+
+def header_name_ok(name) -> bool:
+    """A configurable header name (a source's or destination's ``event_header``, a destination's
+    ``dedup_header``): a plain token, and none of the headers hookspool sets itself."""
+    return (isinstance(name, str) and _HEADER_NAME.fullmatch(name) is not None
+            and name.lower() not in RESERVED_HEADERS)
 
 
 def header_value_ok(value: str) -> bool:
@@ -267,3 +278,58 @@ def classify_status(resp: Response, now: float, *, redirect_permanent: bool) -> 
     if 400 <= code < 500:       # any other 4xx: the operator's to look at, never dropped
         return Outcome.config(reason, status=code, detail=reason)
     return Outcome.transport(reason, status=code, detail=reason)    # 1xx, >= 600: not a real answer
+
+
+# ---- unwrap: one request per event -------------------------------------------------------------
+def event_delivery_id(batch_delivery_id: str, event_id) -> str:
+    """``hs_<instance>_<batch>_<event id>``: the per-batch id plus the event's id, identical on
+    every attempt, so a receiver that keeps ids answers a re-sent event ``duplicate``."""
+    return f"{batch_delivery_id}_{int(event_id)}"
+
+
+def event_extra_headers(meta: dict, event_header: str | None, dedup_header: str | None) -> dict[str, str]:
+    """The optional per-event headers: the event's type and its sender-side dedup id. A value
+    that cannot go on the wire is left out (it would be a transport failure on every attempt)."""
+    out: dict[str, str] = {}
+    et = str(meta.get("event_type") or "")
+    if event_header and et and header_value_ok(et):
+        out[event_header] = et
+    dd = meta.get("dedup_id")
+    dd = "" if dd is None else str(dd)
+    if dedup_header and dd and header_value_ok(dd):
+        out[dedup_header] = dd
+    return out
+
+
+def unwrap_deliver(doc: dict, delivery_id: str, ctx: DeliveryContext,
+                   send_one: Callable[[dict, bytes, str], Outcome]) -> Outcome:
+    """Deliver a batch as one request per event, in event order.
+
+    ``send_one(meta, body, event_delivery_id)`` sends one event's stored payload and returns its
+    outcome. The batch is ``ok`` only when every event's request was; the first failure stops
+    the attempt and is returned as is (same class, so the dispatcher retries or kills the whole
+    batch exactly as for a document), with the event's id and the count delivered before it.
+    Reasons and details carry ids and counts only, never a body."""
+    meta = list(doc.get("event_meta") or [])
+    payloads = ctx.payloads
+    if payloads is None or len(payloads) != len(meta):
+        why = "internal error: stored payloads are not available for an unwrap delivery"
+        return replace(Outcome.transport(why, detail=why), events_delivered=0)
+    n = len(meta)
+    last: Outcome | None = None
+    for i, (m, body) in enumerate(zip(meta, payloads)):
+        eid = m.get("id")
+        where = f"event {eid} ({i + 1} of {n})"
+        if body is None:
+            why = f"{where} has no stored payload"
+            out = Outcome.permanent(why, detail=why)
+        else:
+            out = send_one(m, bytes(body), event_delivery_id(delivery_id, eid))
+        if out.kind != "ok":
+            return replace(out, reason=f"{where}: {out.reason}",
+                           detail=f"{where}: {out.detail or out.reason}; {i} of {n} delivered before it",
+                           events_delivered=i, failed_event_id=None if eid is None else int(eid))
+        last = out
+    status = last.status if last is not None else None
+    return replace(Outcome.ok(f"{n} event(s) delivered one by one", status=status,
+                              detail=f"unwrap: {n} of {n} event(s) delivered"), events_delivered=n)

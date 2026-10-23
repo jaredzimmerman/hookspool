@@ -89,9 +89,9 @@ def test_schema_check_refuses_missing_older_and_newer(tmp_path):
     sqlite3.connect(p).close()
     with pytest.raises(SchemaError, match="older"):
         s.check_schema()
-    assert s.ensure_schema() == [1]
+    assert s.ensure_schema() == [1, 2]
     assert s.ensure_schema() == []                                        # idempotent
-    assert s.check_schema() == 1
+    assert s.check_schema() == 2
     assert len(s.instance_id()) == 12
     s._conn().execute("PRAGMA user_version=99")
     with pytest.raises(SchemaError, match="newer"):
@@ -101,9 +101,25 @@ def test_schema_check_refuses_missing_older_and_newer(tmp_path):
     s.close()
 
 
-def test_single_migration_file():
-    assert [n for n, _ in store_mod.migrations()] == [1]
-    assert os.path.basename(store_mod.migrations()[0][1]) == "0001_v2.sql"
+def test_migration_files():
+    assert [n for n, _ in store_mod.migrations()] == [1, 2] and store_mod.SCHEMA_VERSION == 2
+    assert [os.path.basename(p) for _, p in store_mod.migrations()] == ["0001_v2.sql", "0002_unwrap.sql"]
+
+
+def test_a_schema_1_spool_upgrades_in_place_keeping_its_attempts(tmp_path):
+    """0002 adds the unwrap per-event columns to ``attempts``; existing rows keep NULL there."""
+    p = str(tmp_path / "old.db")
+    c = sqlite3.connect(p)
+    for stmt in store_mod._split_sql(open(store_mod.migrations()[0][1], encoding="utf-8").read()):
+        c.execute(stmt)
+    c.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '1')")
+    c.execute("PRAGMA user_version=1")
+    c.execute("INSERT INTO attempts (batch_id, n, destination, started_at) VALUES (1, 1, 'd', 1.0)")
+    c.commit()
+    c.close()
+    s = Store(p, cfg())
+    assert s.ensure_schema() == [2] and s.check_schema() == 2
+    assert [(a["batch_id"], a["events_delivered"], a["failed_event_id"]) for a in s.attempts(1)] == [(1, None, None)]
 
 
 # ---- readiness truth table (§5) -----------------------------------------------------------------
@@ -734,7 +750,7 @@ def test_status_shape(make_store, clock):
     clock.advance(10)
     s = st.status()
     assert s["batches"]["open"] == 1 and s["batches"]["dead"] == 1
-    assert s["oldest_pending_age_s"] == 10.0 and s["schema"] == 1
+    assert s["oldest_pending_age_s"] == 10.0 and s["schema"] == store_mod.SCHEMA_VERSION
     assert s["dispatcher"] == {"alive": True, "heartbeat_age_s": 15.0, "pid": 42}
     assert s["destinations"][DEST]["state"] == "open" and s["destinations"][DEST]["cooldown_s"] == 30
     assert s["sources"]["gcal"] == {"last_event_age_s": None, "expected_every_s": 100, "silent": True}

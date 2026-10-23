@@ -10,6 +10,13 @@ so a rotation or a profile change needs no restart. Idempotency is per attempt (
 ``webhook-id`` each time): Hermes records a delivery id on admission and answers
 ``duplicate`` afterwards, which proves admission, not processing (§6.4).
 
+With ``unwrap = true`` the batch goes out as one request per event, each carrying the event's
+stored payload exactly as the sender's original body, so a gateway route with payload prompt
+templates sees what it would have seen without hookspool. Idempotency is then per event
+(``hs_<instance>_<batch>_<event id>`` on every attempt), so an event the gateway already admitted
+is answered ``duplicate`` when a later failure in the same batch makes it retry; ``ignored`` and
+``coalesced`` are the gateway's own filter and coalescing at work and add no ``notice``.
+
 Outcomes: 2xx is ``ok`` (a body ``status`` of ``ignored``/``coalesced`` adds a ``notice``);
 401, 403 and 404 are ``config`` with a pointed reason; 400, 413, 415, 422 are ``permanent``;
 429 and 503 with ``Retry-After`` are ``throttle``; connection failures, timeouts and other 5xx
@@ -18,24 +25,21 @@ are ``transport``.
 from __future__ import annotations
 
 import json
-import re
 import os
 from typing import ClassVar
 from urllib.parse import quote, urlsplit
 
 from .. import config as _config
 from .base import DeliveryContext, Destination, Outcome
-from .wire import (RESERVED_HEADERS, BadSecret, NetError, Response, classify_status, delivery_headers,
-                   header_value_ok, net_outcome, post, signing_key)
+from .wire import (BadSecret, NetError, Response, classify_status, delivery_headers, event_extra_headers,
+                   header_name_ok, header_value_ok, net_outcome, post, signing_key, unwrap_deliver)
 
 NOTICE_STATUSES = ("ignored", "coalesced")
-_HEADER_NAME = re.compile(r"[A-Za-z0-9-]{1,64}")
 
 
 def event_header_ok(name) -> bool:
     """A source's ``event_header`` may name any plain header except one hookspool sets."""
-    return (isinstance(name, str) and _HEADER_NAME.fullmatch(name) is not None
-            and name.lower() not in RESERVED_HEADERS)
+    return header_name_ok(name)
 
 
 class HermesDestination(Destination):
@@ -49,6 +53,12 @@ class HermesDestination(Destination):
         self.base_url = str(h.get("base_url") or "").rstrip("/")
         self.subscriptions_path = os.path.expanduser(str(h.get("subscriptions_path") or ""))
         self.legacy_signature = bool(h.get("legacy_signature", True))
+        self.unwrap = self.spec.get("unwrap") is True
+        if self.unwrap:
+            self.idempotency = "per-event"
+        eh, dh = self.spec.get("event_header"), self.spec.get("dedup_header")
+        self.event_header = eh if header_name_ok(eh) else None
+        self.dedup_header = dh if header_name_ok(dh) else None
 
     def _default_timeout(self, config: dict) -> float:
         return float((config.get("hermes") or {}).get("timeout_s") or self.default_timeout_s)
@@ -76,10 +86,13 @@ class HermesDestination(Destination):
         return secret, (profile.strip() if profile else None)
 
     def _event_header(self, doc: dict) -> str | None:
-        """The header that carries the event type, if any: the source's ``event_header`` setting
-        (any source, a template source included, can ask for one; the GitHub example sets
-        ``X-GitHub-Event``, which Hermes' GitHub route reads). A name that is not a plain token,
-        or that is one of the headers hookspool sets itself, is never used."""
+        """The header that carries the event type, if any: the destination's own ``event_header``
+        (unwrap), else the source's ``event_header`` setting (any source, a template source
+        included, can ask for one; the GitHub example sets ``X-GitHub-Event``, which Hermes'
+        GitHub route reads). A name that is not a plain token, or that is one of the headers
+        hookspool sets itself, is never used."""
+        if self.unwrap and self.event_header:
+            return self.event_header
         src = str(doc.get("source") or "")
         spec = (self.config.get("sources") or {}).get(src)
         h = spec.get("event_header") if isinstance(spec, dict) else None
@@ -100,6 +113,12 @@ class HermesDestination(Destination):
         if not self.base_url:
             return Outcome.config("hermes.base_url is not set", detail="hermes.base_url is not set")
         try:
+            signing_key(secret)
+        except BadSecret as e:
+            return Outcome.config(f"route {self.route!r} secret unusable: {e}", detail=str(e))
+        if self.unwrap:
+            return self._deliver_unwrapped(doc, delivery_id, ctx, secret, profile)
+        try:
             headers = delivery_headers([secret], delivery_id, ctx, body, legacy=self.legacy_signature)
         except BadSecret as e:
             return Outcome.config(f"route {self.route!r} secret unusable: {e}", detail=str(e))
@@ -115,6 +134,26 @@ class HermesDestination(Destination):
             return net_outcome(e, timed_out_reason=why)
         return self._outcome(resp, ctx)
 
+    def _deliver_unwrapped(self, doc: dict, delivery_id: str, ctx: DeliveryContext, secret: str,
+                           profile: str | None) -> Outcome:
+        """One request per event: the stored payload as the body, signed per event (Standard
+        Webhooks and ``X-Hub-Signature-256``), with the event's type and dedup id as headers."""
+        url = self.url(profile)
+        ev_header = self._event_header(doc)
+
+        def send_one(meta: dict, body: bytes, event_id: str) -> Outcome:
+            headers = delivery_headers([secret], event_id, ctx, body, legacy=True)
+            for k, v in event_extra_headers(meta, ev_header, self.dedup_header).items():
+                headers.setdefault(k, v)
+            budget = ctx.timeout(self.timeout_s)
+            why = "deadline" if budget < self.timeout_s else "timeout"
+            try:
+                resp = post(url, headers, body, budget)
+            except NetError as e:
+                return net_outcome(e, timed_out_reason=why)
+            return self._outcome(resp, ctx)
+        return unwrap_deliver(doc, delivery_id, ctx, send_one)
+
     def _outcome(self, resp: Response, ctx: DeliveryContext) -> Outcome:
         code = resp.status
         if 200 <= code < 300:
@@ -125,7 +164,8 @@ class HermesDestination(Destination):
                     status = parsed["status"]
             except ValueError:
                 pass
-            notice = status if status in NOTICE_STATUSES else None
+            # unwrap: the gateway sees original events, so its own filter and coalescing are expected
+            notice = status if status in NOTICE_STATUSES and not self.unwrap else None
             reason = f"http {code}" + (f" {status}" if status else "")
             return Outcome.ok(reason, status=code, notice=notice)
         if code == 401:

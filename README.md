@@ -231,6 +231,12 @@ references (`{ file = ... }`, `{ env_file = ..., key = ... }` or `{ env = ... }`
 | `http` (a named table) | signed POST to any HTTPS endpoint |
 | your own | a small class: [docs/ADDING_A_DESTINATION.md](docs/ADDING_A_DESTINATION.md) |
 
+A `hermes` or `http` destination with `unwrap = true` sends each event on its own, with the sender's original payload as
+the body, instead of the batch document, for receivers written for the sender (a Hermes route whose prompt reads
+`{pull_request.title}`). It keeps the spool's guarantees: the batch counts as delivered only when every event was, a failure
+retries the batch, and each event's `webhook-id` is stable so the receiver answers `duplicate` to one it already took. Pair
+it with coalescing off for the route; see [Unwrap](docs/CONFIGURATION.md#unwrap-one-request-per-event).
+
 ## Operations
 
 ```sh

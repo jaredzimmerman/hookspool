@@ -81,10 +81,11 @@ SOURCE_KEYS = {"module", "span", "secrets", "dedup_window_s", "expect_every_s", 
                "keep_headers", "store_raw", "event_header", *WINDOW_FIELDS}
 ROUTE_KEYS = {"name", "source", "match", "destination", *WINDOW_FIELDS}
 _DEST_COMMON = {"type", "module", "timeout_s", "max_body_bytes", "max_inflight"}
+_DEST_UNWRAP = {"unwrap", "event_header", "dedup_header"}       # one request per event (hermes, http)
 DEST_KEYS = {
-    "hermes": _DEST_COMMON,
+    "hermes": _DEST_COMMON | _DEST_UNWRAP,
     "script": _DEST_COMMON | {"argv", "cwd", "env_file", "state_dir"},
-    "http": _DEST_COMMON | {"url", "secret", "secret_previous", "headers", "allow_insecure"},
+    "http": _DEST_COMMON | {"url", "secret", "secret_previous", "headers", "allow_insecure"} | _DEST_UNWRAP,
 }
 # Keys that existed in the v1 draft or the first v2 draft and were removed on purpose.
 REMOVED_KEYS = {
@@ -264,6 +265,12 @@ def destination_type(cfg: dict, name: str) -> str | None:
     if name.startswith("script:"):
         return "script"
     return None
+
+
+def destination_unwrap(cfg: dict, name: str) -> bool:
+    """True when the destination delivers one request per event (``unwrap = true``)."""
+    d = (cfg.get("destinations") or {}).get(name) or {}
+    return isinstance(d, dict) and d.get("unwrap") is True and destination_type(cfg, name) in ("hermes", "http")
 
 
 def destination_max_body_bytes(cfg: dict, name: str) -> int | None:
@@ -632,8 +639,8 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
             if h.lower() in auth:
                 rep.err(f"{where}.keep_headers: {h} is an auth header and is never stored")
         if s.get("event_header") is not None:
-            from .destinations.hermes import event_header_ok     # lazy: destinations import this module
-            if not event_header_ok(s["event_header"]):
+            from .destinations.wire import header_name_ok     # lazy: destinations import this module
+            if not header_name_ok(s["event_header"]):
                 rep.err(f"{where}.event_header: must be a plain header name (letters, digits, '-')"
                         " that hookspool does not set itself")
         if plugin is not None and getattr(plugin, "sender_retries", None) is False:
@@ -722,6 +729,8 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
             h = d.get("headers", {})
             if not isinstance(h, dict) or not all(isinstance(v, str) for v in h.values()):
                 rep.err(f"{where}.headers: must be a table of strings")
+        if t in ("hermes", "http"):
+            _check_unwrap(rep, where, d)
     for name in dests:
         if name.startswith("script:") and not dests[name].get("argv"):
             pass  # reported above
@@ -738,6 +747,10 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
         where = f"route {route}" + (f" (source {src})" if route != src else "")
         if w["quiet_s"] > w["max_s"]:
             rep.warn(f"{where}: quiet_s {w['quiet_s']:g} > max_s {w['max_s']:g}; the quiet window can never fire")
+        if dest and destination_unwrap(cfg, dest) and (w["quiet_s"] > 0 or w["max_s"] > 0):
+            rep.warn(f"{where}: {dest} has unwrap = true but the route coalesces (quiet_s {w['quiet_s']:g},"
+                     f" max_s {w['max_s']:g}); every event is still delivered, in order, so the receiver gets"
+                     " a burst. Set quiet_s = max_s = 0 (span = \"immediate\") for one event per batch")
         cap = destination_max_body_bytes(cfg, dest) if dest else None
         if cap is not None and w["max_bytes"] > 0.75 * cap:
             rep.err(f"{where}: max_bytes {w['max_bytes']} exceeds 0.75 x {dest} max_body_bytes ({cap})")
@@ -746,8 +759,12 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
             rep.err(f"{where}: source max_body_bytes {smax} exceeds the route's max_bytes {w['max_bytes']};"
                     " one event could overflow the document")
 
-    # Hermes routes fed by hookspool must not filter or coalesce on the gateway side.
+    # Hermes routes fed by hookspool documents must not filter or coalesce on the gateway side. An
+    # unwrap destination sends original events one by one, so the gateway's own filter and
+    # coalescing see what they were written for and are allowed.
     hermes_routes = sorted({d.split(":", 1)[1] for d in used_dests if destination_type(cfg, d) == "hermes"})
+    unwrapped = {d.split(":", 1)[1] for d in used_dests if destination_type(cfg, d) == "hermes"
+                 and destination_unwrap(cfg, d)}
     if hermes_routes:
         sp = (cfg.get("hermes") or {}).get("subscriptions_path")
         try:
@@ -761,6 +778,8 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
                 if not isinstance(sub, dict):
                     rep.warn(f"hermes:{hr}: no such route in {sp} (deliveries will retry as config errors)")
                     continue
+                if hr in unwrapped:
+                    continue
                 if sub.get("events"):
                     rep.err(f"hermes:{hr}: the gateway route sets 'events'; it filters whole batches on one"
                             " event type. Remove it and route by attrs in hookspool")
@@ -768,6 +787,32 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
                     rep.err(f"hermes:{hr}: the gateway route sets 'coalesce' (in memory, keeps the last event"
                             " only). Remove it; hookspool coalesces")
     return rep
+
+
+def _check_unwrap(rep: Report, where: str, d: dict) -> None:
+    """``unwrap``, ``event_header`` and ``dedup_header`` of a ``hermes`` or ``http`` destination."""
+    from .destinations.wire import header_name_ok     # lazy: destinations import this module
+    u = d.get("unwrap")
+    if u is not None and not isinstance(u, bool):
+        rep.err(f"{where}.unwrap: must be true or false")
+    names = []
+    for k in ("event_header", "dedup_header"):
+        v = d.get(k)
+        if v is None:
+            continue
+        if not header_name_ok(v):
+            rep.err(f"{where}.{k}: must be a plain header name (letters, digits, '-') that hookspool does not"
+                    " set itself")
+            continue
+        names.append(v.lower())
+        if u is not True:
+            rep.warn(f"{where}.{k}: only used with unwrap = true; ignored")
+    hdrs = d.get("headers") if isinstance(d.get("headers"), dict) else {}
+    if len(names) == 2 and names[0] == names[1]:
+        rep.err(f"{where}: event_header and dedup_header name the same header")
+    for k in hdrs:
+        if isinstance(k, str) and k.lower() in names:
+            rep.err(f"{where}.headers: {k!r} is also the event_header or dedup_header")
 
 
 def _feeds(cfg: dict, sources: dict, plugins: dict):

@@ -40,7 +40,7 @@ CLASSES = ("transport", "throttle", "batch", "config", "permanent", "poison", "q
 QUARANTINE = "quarantine"
 KEY_MAX_BYTES = 512
 ERROR_MAX = 500
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
 EMIT_KEYS = ("source", "key", "action", "payload", "route", "event_type", "dedup_id",
              "quiet_s", "max_s", "max_events", "max_bytes", "not_before")
@@ -618,11 +618,14 @@ class Store:
         return out
 
     @staticmethod
-    def _finish_attempt_txn(c, attempt_id, now, outcome, klass, status, error, duration_ms, counted):
+    def _finish_attempt_txn(c, attempt_id, now, outcome, klass, status, error, duration_ms, counted,
+                            events_delivered=None, failed_event_id=None):
         c.execute("UPDATE attempts SET finished_at=?, outcome=?, klass=?, status=?, error=?, duration_ms=?,"
-                  " counted=? WHERE id=? AND finished_at IS NULL",
+                  " counted=?, events_delivered=?, failed_event_id=? WHERE id=? AND finished_at IS NULL",
                   (now, outcome, klass, status, None if error is None else scrub(error),
-                   None if duration_ms is None else int(duration_ms), int(bool(counted)), attempt_id))
+                   None if duration_ms is None else int(duration_ms), int(bool(counted)),
+                   None if events_delivered is None else int(events_delivered),
+                   None if failed_event_id is None else int(failed_event_id), attempt_id))
 
     def finish_attempt(self, attempt_id: int, outcome: str, *, klass: str | None = None,
                        status: int | None = None, error: str | None = None, duration_ms: float | None = None,
@@ -656,7 +659,9 @@ class Store:
 
     def mark_delivered(self, batch_id: int, owner: str, result: str = "", emits: list | None = None, *,
                        attempt_id: int | None = None, status: int | None = None,
-                       duration_ms: float | None = None, now: float | None = None) -> list[EnqueueResult]:
+                       duration_ms: float | None = None, now: float | None = None,
+                       events_delivered: int | None = None,
+                       failed_event_id: int | None = None) -> list[EnqueueResult]:
         """leased -> delivered; the emits are enqueued in the same fenced transaction.
         Raises InvalidEvent (before writing anything) if any emit is malformed."""
         now = self.now() if now is None else now
@@ -669,7 +674,8 @@ class Store:
             _hook("deliver:after_emits")
         self._fenced(batch_id, owner, now, attempt_id,
                      {"outcome": "ok", "klass": None, "status": status, "error": None,
-                      "duration_ms": duration_ms, "counted": True},
+                      "duration_ms": duration_ms, "counted": True, "events_delivered": events_delivered,
+                      "failed_event_id": failed_event_id},
                      "UPDATE batches SET state='delivered', delivered_at=?, result=?, attempts = attempts + 1,"
                      " last_error=NULL, last_class=NULL, next_attempt_at=NULL, lease_until=NULL, lease_owner=NULL",
                      (now, scrub(result)), after)
@@ -677,26 +683,30 @@ class Store:
 
     def mark_retry(self, batch_id: int, owner: str, error: str, klass: str, next_at: float, counted: bool, *,
                    attempt_id: int | None = None, status: int | None = None,
-                   duration_ms: float | None = None, now: float | None = None) -> None:
+                   duration_ms: float | None = None, now: float | None = None,
+                   events_delivered: int | None = None, failed_event_id: int | None = None) -> None:
         if klass not in ("transport", "throttle", "batch", "config"):
             raise ValueError(f"retry class must be transport, throttle, batch or config, not {klass!r}")
         now = self.now() if now is None else now
         self._fenced(batch_id, owner, now, attempt_id,
                      {"outcome": "retry", "klass": klass, "status": status, "error": error,
-                      "duration_ms": duration_ms, "counted": counted},
+                      "duration_ms": duration_ms, "counted": counted, "events_delivered": events_delivered,
+                      "failed_event_id": failed_event_id},
                      "UPDATE batches SET state='retry', next_attempt_at=?, attempts = attempts + ?, last_error=?,"
                      " last_class=?, lease_until=NULL, lease_owner=NULL",
                      (float(next_at), int(bool(counted)), scrub(error), klass))
 
     def mark_dead(self, batch_id: int, owner: str, error: str, klass: str, *, counted: bool = False,
                   attempt_id: int | None = None, status: int | None = None,
-                  duration_ms: float | None = None, now: float | None = None) -> None:
+                  duration_ms: float | None = None, now: float | None = None,
+                  events_delivered: int | None = None, failed_event_id: int | None = None) -> None:
         if klass not in ("permanent", "poison", "batch"):
             raise ValueError(f"dead class must be permanent, poison or batch, not {klass!r}")
         now = self.now() if now is None else now
         self._fenced(batch_id, owner, now, attempt_id,
                      {"outcome": "dead", "klass": klass, "status": status, "error": error,
-                      "duration_ms": duration_ms, "counted": counted},
+                      "duration_ms": duration_ms, "counted": counted, "events_delivered": events_delivered,
+                      "failed_event_id": failed_event_id},
                      "UPDATE batches SET state='dead', next_attempt_at=NULL, attempts = attempts + ?, last_error=?,"
                      " last_class=?, lease_until=NULL, lease_owner=NULL",
                      (int(bool(counted)), scrub(error), klass))
@@ -1159,6 +1169,13 @@ class Store:
                 d["payload"] = None if d["payload"] is None else json.loads(d["payload"])
             out.append(d)
         return out
+
+    def stored_payloads(self, batch_id: int) -> list[tuple[int, bytes | None]]:
+        """``(event id, payload bytes exactly as stored)`` for the batch's delivered events, in
+        the document's order (an unwrap delivery sends these bytes, never a re-encoding)."""
+        rows = self._read("SELECT id, payload FROM events WHERE batch_id=? AND excluded_at IS NULL ORDER BY id",
+                          (batch_id,))
+        return [(int(r["id"]), None if r["payload"] is None else r["payload"].encode("utf-8")) for r in rows]
 
     def document(self, batch_id: int, delivery_id: str, attempt: int) -> dict:
         """The delivery document of §6.4 (identical for every destination type)."""

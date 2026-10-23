@@ -6,6 +6,27 @@ an interface, and the entry will say so.
 
 ## [Unreleased]
 
+The changes below will ship as 0.2.0.
+
+### Added
+
+- `unwrap = true` for `hermes` and `http` destinations: a batch is delivered as one request per event, in order, with the
+  event's stored payload as the body, for receivers that expect the sender's original payload (a Hermes route whose prompt
+  template reads `{pull_request.title}`). Each request carries Standard Webhooks headers with a per-event `webhook-id`
+  (`hs_<instance>_<batch>_<event id>`, stable across attempts), `X-Hub-Signature-256` over that body, and the optional
+  `event_header` (the event's type) and `dedup_header` (its dedup id). The batch is delivered only when every event was; the
+  first failure stops the attempt, is classified as before, and retries the whole batch, whose already-accepted events the
+  receiver answers `duplicate`. Hermes `ignored`/`coalesced` answers open no issue in this mode, and `hookspool check`
+  allows the gateway route's own `events` filter and `coalesce` there, and warns when an unwrapped route coalesces.
+- Attempt rows record an unwrap delivery's progress: `events_delivered` and `failed_event_id` (ids and counts, no bodies).
+
+### Changed
+
+- Spool schema 2 (migration `0002_unwrap.sql` adds the two attempt columns). The dispatcher applies it at startup, or run
+  `hookspool migrate`; the intake refuses a schema 1 spool until then, so restart the dispatcher first.
+
+## [0.1.0]
+
 ### Added
 
 - The spool: one SQLite file in WAL mode with `synchronous=FULL`. A request is committed before its sender gets a 2xx;

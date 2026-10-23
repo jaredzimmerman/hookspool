@@ -153,6 +153,15 @@ quiet_s = 60                           # route-level override of one field; the 
 [destinations."hermes:github-ci"]
 max_inflight = 2
 
+# A receiver that expects the sender's original payload, one request per event (a Hermes route whose
+# prompt template reads {pull_request.title}): unwrap. Give the routes that feed it span = "immediate"
+# (quiet_s = max_s = 0) so each event is its own batch; the gateway route may then keep its own
+# `events` filter. See docs/CONFIGURATION.md, "Unwrap: one request per event".
+# [destinations."hermes:github-releases"]
+# unwrap = true
+# event_header = "X-GitHub-Event"
+# dedup_header = "X-GitHub-Delivery"
+
 # The delta scripts (deploy/scripts/README.md). Keep max_inflight = 1: two passes over one state file
 # would both report the same changes. Every state_dir below must also be in the dispatch unit's
 # ReadWritePaths (deploy/hookspool-dispatch.service).

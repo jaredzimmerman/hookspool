@@ -14,6 +14,9 @@ Three destination types are built in. Most needs are covered by one of them.
 | `http` | a name you choose, `type = "http"` | POST the batch, signed, to any HTTPS endpoint |
 | `hermes` | `hermes:<route>` | wake a Hermes Agent gateway route |
 
+`hermes` and `http` also have an `unwrap` mode for receivers that expect the sender's original payload, one request per
+event, instead of the document (see [Unwrapped delivery](#unwrapped-delivery) below).
+
 A **script** is the answer when you can write the work as a program. It gets the document on stdin, exits 0 for success, and
 may print `{"enqueue": {...}}` lines to hand new events back to the spool, atomically with the batch being marked
 delivered (see [Scripts](#scripts)). Write a destination class only when you need something a subprocess cannot be:
@@ -74,6 +77,16 @@ HTTP deliveries also carry the [Standard Webhooks](https://www.standardwebhooks.
 remembers an id on admission and would answer `duplicate` to a retry of a batch it admitted but did not process. For
 `http` and `script` it is the same on every attempt of a batch, so a receiver that keeps ids can drop a redelivery.
 
+### Unwrapped delivery
+
+With `unwrap = true` on a `hermes` or `http` destination, the document is not sent. Each event is one POST, in order, whose
+body is the event's stored payload, signed per event, with `webhook-id` `hs_<instance>_<batch>_<event id>` (the same on
+every attempt), `X-Hub-Signature-256` over that body, and the optional `event_header` (the event's type) and `dedup_header`
+(its dedup id). The batch succeeds only when every event's request did; the first failure stops the attempt with that
+request's outcome and the whole batch is retried, so events already accepted are sent again and should be answered
+`duplicate`. Configuration and the coalescing advice are in
+[CONFIGURATION.md](CONFIGURATION.md#unwrap-one-request-per-event).
+
 ## A destination class
 
 Subclass `Destination`, implement `deliver`, and name the class in config.
@@ -81,7 +94,8 @@ Subclass `Destination`, implement `deliver`, and name the class in config.
 ```python
 class Destination:
     type_name: str                  # a label for logs
-    idempotency: "per-batch" | "per-attempt"      # how delivery ids are issued; fixed by the type
+    idempotency: "per-batch" | "per-attempt" | "per-event"   # how delivery ids are issued; fixed by the type
+    unwrap: bool                    # True: one request per event (ctx.payloads holds the stored bodies)
     default_timeout_s: float
     default_max_body_bytes: int | None
 
@@ -120,6 +134,13 @@ may carry `emits` (as scripts do) and a `notice` (an operator-facing note that o
 (one POST that cannot outlive its budget), `classify_status(response, now, redirect_permanent=...)` (the status mapping above),
 `net_outcome(error, timed_out_reason=...)` and `delivery_headers(...)` (Standard Webhooks signing). Reuse them for an HTTP
 transport; they have the timeouts and the status mapping right.
+
+A destination class can offer the unwrap mode too: set `self.unwrap = True` and `self.idempotency = "per-event"` in
+`__init__`, and the dispatcher fills `ctx.payloads` with each event's stored payload bytes, aligned with
+`doc["event_meta"]`, and applies `max_body_bytes` to each of them. `wire.unwrap_deliver(doc, delivery_id, ctx, send_one)`
+runs the loop: it calls `send_one(meta, body, event_delivery_id)` per event, stops at the first outcome that is not `ok`,
+and returns it with the event's id and the count delivered before it (`events_delivered`, `failed_event_id`, which the
+dispatcher stores on the attempt row).
 
 ### The deadline is a hard rule
 

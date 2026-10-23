@@ -203,8 +203,37 @@ table with a `type`.
 | `secret_previous` | `http` | none | the old secret during a rotation; deliveries then carry both signatures |
 | `headers` | `http` | none | extra static headers, a table of strings. Headers hookspool sets itself are refused |
 | `allow_insecure` | `http` | `false` | permit a plain `http://` URL |
+| `unwrap` | `hermes`, `http` | `false` | deliver each event on its own, as the sender sent it, instead of the batch document (see [Unwrap](#unwrap-one-request-per-event)) |
+| `event_header` | `hermes`, `http` | none | with `unwrap`: the header that carries each event's type (for example `X-GitHub-Event`). A `hermes` destination without it falls back to the source's `event_header` |
+| `dedup_header` | `hermes`, `http` | none | with `unwrap`: the header that carries each event's sender-side dedup id when it has one (for example `X-GitHub-Delivery`) |
 
 `quarantine` is a reserved name that never delivers.
+
+### Unwrap: one request per event
+
+Some receivers expect the sender's original payload, one request per event, not hookspool's batch document: a Hermes
+route whose prompt template reads `{pull_request.title}`, or an endpoint written for the sender itself. `unwrap = true`
+keeps everything hookspool adds (commit before the sender's 2xx, retry until accepted, the breaker, issues) and changes
+only what goes on the wire:
+
+- each event of a batch is its own POST, in event order; the body is the event's stored payload
+- `webhook-id` is `hs_<instance>_<batch>_<event id>`, the same on every attempt, with the Standard Webhooks signature and
+  `X-Hub-Signature-256` computed over that body; `event_header` and `dedup_header` add the event's type and dedup id
+- the batch is delivered only when every event's request succeeded. The first failure stops the attempt and the whole batch
+  is retried (or goes dead) exactly as a document would; events the receiver already accepted are sent again with the same
+  id, which a receiver that keeps ids (Hermes does) answers `duplicate`
+- for `hermes`, an answer of `ignored` or `coalesced` is the gateway's own filter or coalescing at work and opens no issue,
+  and `check` allows the gateway route's `events` filter and `coalesce` block (they see original events now)
+
+Use it with coalescing off for the route (`quiet_s = max_s = 0`, the `immediate` span), so each event is its own batch.
+With a window, every event is still delivered in order, but the receiver gets them as a burst; `check` warns.
+
+```toml
+[destinations."hermes:github-releases"]
+unwrap = true
+event_header = "X-GitHub-Event"
+dedup_header = "X-GitHub-Delivery"
+```
 
 ```toml
 [destinations."script:digest"]
