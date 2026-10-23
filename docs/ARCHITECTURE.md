@@ -640,39 +640,40 @@ hookspool/services/<package>/          built in; or <dir>/<package>/ under a con
     README.md                           what it does, setup at the provider, settings, outputs; required
 ```
 
-Package names match `^[a-z][a-z0-9-]{0,39}$`. A package directory is importable as
-`hookspool.services.<package_with_underscores>` when built in; a package under `packages.path` is loaded
-by file path under a private module name, never added to `sys.path`.
+Package names match `^[a-z][a-z0-9-]{0,39}$`; `-` maps to `_` for the module name, so two packages whose
+names differ only by `-`/`_` are refused. Built-in packages import as
+`hookspool.services.<package_with_underscores>`. A package under `packages.path` is loaded by file path
+under a private module name (never added to `sys.path`), and may not share a name with a built-in.
 
 #### 14.3.2 Manifest (`service.toml`)
 
 ```toml
 name = "gmail"                                   # must equal the directory name
-version = "1"                                    # manifest/package version, free text, shown by `service list`
+version = "1"                                    # free text, shown by `service list`
 summary = "Gmail push (Cloud Pub/Sub): new mail in watched mailboxes"
-extends = ""                                     # optional: another package name (14.3.6)
 
 [source]                                         # exactly one of `module` or `template`
-module = "source"                                # a file in this package (source.py), or a dotted module
+module = "source"                                # source.py in this package, or a dotted module
 # template = { scheme = "hmac-sha256-hex", header = "X-Hub-Signature-256", prefix = "sha256=", key = "repository.full_name", ... }
 span = "mail"                                    # default span preset name
 sender_retries = true
 expect_every_s = 345600                          # recommended; applied only when the instance sets expect = true
 proxy = "keep the query string (?token=...)"     # one line for the reverse-proxy recipe, optional
 
-[secrets.push_token]                             # one table per secret the source needs
+[secrets.push_token]                             # one table per secret
 description = "the token in the Pub/Sub push endpoint URL"
+# processor = true                               # the processor needs it too (14.3.4); the source gets it regardless
 
-[settings.owner]                                 # non-secret settings, passed to the processor
+[settings.owner]                                 # non-secret, typed settings for the processor and hooks
 description = "the owner's mailbox"
-required = true                                  # default false
-default = ""                                     # optional; string, int, bool or list of strings
-env = "GMAIL_DELTA_OWNER"                        # environment variable the processor reads
+type = "string"                                  # string | int | bool | list | path; required
+required = true                                  # default false; a non-required setting needs `default`
+default = ""                                     # must match `type`
 
 [processor]                                      # optional; absent = events go straight to outputs
 module = "processor"                             # processor.py in this package
 timeout_s = 300
-state = true                                     # the processor keeps state: gets a state_dir, max_inflight 1
+state = true                                     # keeps state: gets a state_dir; max_inflight is 1
 
 [outputs.scheduling]                             # one table per event_type the package can produce
 description = "a message asks the owner for their availability; carries free windows"
@@ -680,11 +681,11 @@ description = "a message asks the owner for their availability; carries free win
 description = "new mail in the assistant's own mailbox"
 ```
 
-Without a processor the package's outputs are the source's own event types and `[outputs.*]` may hold a
-single `event` table meaning "every accepted event". `check` validates the manifest: unknown keys, a
-name/directory mismatch, both or neither of `module`/`template`, a span that is not a preset, a setting
-`env` name that is not `^[A-Z][A-Z0-9_]*$` or that starts with `HOOKSPOOL_`, a `default` of the wrong
-type, and an `extends` cycle or a missing parent are errors.
+Without a processor the outputs are the source's own event types; `[outputs."*"]` means "every accepted
+event" (the only key that may stand for more than one event type). `check` validates every manifest it
+loads: unknown keys, name/directory mismatch, both or neither of `module`/`template`, a span that is not a
+preset, a setting without `type`, a `default` of the wrong type, a non-required setting without `default`,
+and an output key that is not an event-type token or `"*"` are errors.
 
 #### 14.3.3 Instances in config
 
@@ -695,95 +696,116 @@ path = ["/etc/hookspool/services"]               # extra package directories, se
 [services.gmail]                                 # instance name = table key; the URL is /hooks/<instance>
 package = "gmail"                                # default: the instance name
 secrets.push_token = { file = "/etc/hookspool/secrets/gmail_push_token" }
+secrets.cred_owner = { file = "/etc/hookspool/google/owner.json" }
 settings = { owner = "owner@example.com", tz = "America/New_York" }
 outputs = { scheduling = "hermes:mail-scheduling", agent-mail = "hermes:assistant-mail" }
 expect = true                                    # apply the manifest's expect_every_s
 # optional overrides: span, quiet_s, max_s, max_events, max_bytes, expect_every_s, dedup_window_s,
-#                     max_body_bytes, timeout_s (processor)
+#                     max_body_bytes, timeout_s (processor), state_dir (processor; keeps existing state
+#                     across a migration; it must be in the dispatcher unit's ReadWritePaths)
 ```
 
 Two instances of one package are two tables with different keys and the same `package` (e.g.
 `github-ci` and `github-prs`, each with its own secret).
 
-**Expansion.** `load_config` expands every `[services.<i>]` into ordinary tables before anything else
-sees the config, so the intake, dispatcher, `check` and every existing rule work unchanged:
+**Expansion.** Expansion happens inside `load_config`, on every path that builds a config from a file
+(startup, `check`, the intake's and the dispatcher's reload), so every other part of hookspool sees only
+ordinary tables:
 
-1. `sources.<i>`: the package source (`module` resolved to the package's file, or the template keys),
-   `secrets` from the instance, `span`/window/expect/dedup/body overrides from the instance, and
-   `action` = `script:<i>` when the package has a processor, else the destination of the single output
-   (an output mapped to nothing is an error when there is no processor).
-2. With a processor, `destinations."script:<i>"`: `argv = [<python>, "-m", "hookspool.processor", "<i>"]`
-   (`<python>` is `sys.executable` of the process that expanded it), `timeout_s` from the instance or
-   manifest, `state_dir = <spool.home>/services/<i>` when `state = true`, `max_inflight = 1`, and an
-   `env` table (new key on `script` destinations: string values only, no secrets, merged over
-   `env_file`) holding each setting's `env` name → value (lists joined with `,`, bools `"1"`/`"0"`),
-   plus `HOOKSPOOL_SERVICE_PACKAGE`, `HOOKSPOOL_SERVICE_INSTANCE` and `HOOKSPOOL_DELTA_ROUTES` (the JSON of
-   `outputs`).
-3. Routes: none generated. A processor addresses outputs by event type; `hookspool.processor` resolves
-   them through `HOOKSPOOL_DELTA_ROUTES`. Without a processor and with several outputs, `outputs` keys
-   are matched against the source's `event_type` and expanded to `[[routes]]` named `<i>-<event_type>`
-   with `match = { event_type = ... }` (the source must expose `event_type` in `attrs`), inserted before
-   the file's own routes. The file's own `[[routes]]` (including tees) may still name `source = "<i>"`.
+1. `sources.<i>`: the package source (the package's `source.py` or the template keys), `secrets` from the
+   instance, window/expect/dedup/body overrides from the instance, and `action` = `script:<i>` when the
+   package has a processor, else the mapped destination of the single output (or of `"*"`).
+2. With a processor, `destinations."script:<i>"` with `processor = "<i>"` (a new script key that replaces
+   `argv`: the **dispatcher** builds `[sys.executable, "-I", "-m", "hookspool.processor", "<i>"]` at spawn,
+   so the interpreter is always the dispatcher's own and `-I` keeps the working directory off
+   `sys.path`), `timeout_s`, `state_dir` (instance override, else `<spool.home>/services/<i>`, when
+   `state = true`), `max_inflight = 1`, and an `env` table (a new script key: string values only, names
+   `^[A-Z][A-Z0-9_]*$`, never `HOOKSPOOL_*` from config, merged over `env_file`) holding:
+   - `HOOKSPOOL_SERVICE_PACKAGE`, `HOOKSPOOL_SERVICE_INSTANCE`, the package's resolved directory as
+     `HOOKSPOOL_SERVICE_DIR`;
+   - `HOOKSPOOL_SETTINGS`: one JSON object, setting name → typed value, defaults applied;
+   - `HOOKSPOOL_DELTA_ROUTES`: the JSON of `outputs`;
+   - `HOOKSPOOL_SECRET_REFS`: JSON, secret name → its **reference** (never a value) for each secret the
+     manifest marks `processor = true`. `check` refuses `{ env = ... }` references for those (the child
+     does not inherit the dispatcher's environment); `file` and `env_file` references resolve in the child.
+3. Routes. With a processor, no routes are generated, and `check` refuses a non-tee `[[routes]]` entry with
+   `source = "<i>"` whose destination is not `script:<i>` (it would bypass the processor); tee routes are
+   allowed. Without a processor and with more than one output, the outputs are expanded to `[[routes]]`
+   named `<i>-<event_type>` with `match = { event_type = ... }` (the source exposes `event_type` in
+   `attrs`), inserted before the file's own routes; the source's `action` is the `"*"` output, and `check`
+   refuses a multi-output instance without `"*"` mapped, so no event can reach a route with no action.
 4. An explicit `[sources.<i>]` or `[destinations."script:<i>"]` that collides with an expansion is an
    error (no silent override). Unknown instance keys, an unknown package, a missing required setting or
-   secret, a setting that is not in the manifest, and an output key that is not in the manifest are
-   errors. An output key the instance leaves out is dropped by the processor with one log line per batch
-   (not an error: the deployment does not want it).
+   secret, a setting value that does not match its `type`, a setting or output not in the manifest, and a
+   processor package's output mapped to a destination that does not exist are errors. An output the
+   instance leaves out is dropped by the processor with one log line per batch (the deployment does not
+   want it).
 
-`hookspool check` prints nothing extra on success; `hookspool service expand [<i>]` prints the expanded
-TOML (secret refs shown as refs, never values) so the operator can see exactly what runs.
+**Reload.** Manifests and package directories are re-read on every config load. Editing a `service.toml`
+or a `packages.path` directory does not touch `config.toml`'s mtime, so it takes effect at the next
+`hookspool reload` (or service restart). Processor code is loaded fresh by each processor subprocess, so a
+change to `processor.py` or a hooks module applies to the next batch; source code is loaded by the intake
+at start and on reload.
+
+`hookspool service expand [<i>]` prints the expanded TOML with secret references as references and
+`HOOKSPOOL_SECRET_REFS` shown by name only; no value is ever printed.
 
 #### 14.3.4 Processors
 
-`hookspool.processor` is the runtime (it absorbs `deploy/scripts/hookspool_batch.py`; that file remains
-as a thin re-export for scripts outside packages). `python -m hookspool.processor <instance>` reads
-`HOOKSPOOL_SERVICE_PACKAGE`, loads the package's processor module and calls
+`hookspool.processor` is the runtime. `deploy/scripts/hookspool_batch.py` becomes a re-export of it and
+the stand-alone "copy three files" mode is retired; the delta scripts move into their packages. 
+`python -m hookspool.processor <instance>` loads the processor module from `HOOKSPOOL_SERVICE_DIR` and calls
 
 ```python
 def process(batch: Batch, ctx: Context) -> list[dict]:
-    """Return items; each is {"event_type": ..., <payload fields>}; may also return [] (nothing to do)."""
+    """Return items; each is {"event_type": ..., <payload fields>}; [] means nothing to do."""
 ```
 
-`Batch`: `id`, `delivery_id`, `source`, `key`, `events` (the stored payloads, oldest first), `doc` (the
-whole document). `Context`: `settings` (name → typed value, from the env the expansion wrote, defaults
-applied), `state_dir`, `log(line)` (stderr, never bodies), `load_state(name, default)` and
-`save_state(name, obj)` (staged; applied only after the journal records the result, exactly as
-`hookspool_batch.run_batch` does today), `hooks` (14.3.6, or None), `now()`.
+`Batch`: `id`, `delivery_id`, `source`, `key`, `events` (stored payloads, oldest first), `doc`.
+`Context`: `settings` (typed), `secret(name)` (resolves a `processor = true` secret through the config
+resolver; never logged), `http` and `oauth(secret_name)` (14.3.7), `load_state(name, default)` /
+`save_state(name, obj)` (staged; applied only after the journal records the result), `hooks` (14.3.6 or
+None), `log(line)` (stderr; ids and counts, never bodies), `now()`, and `fail_permanent(reason)` which
+**raises** `Permanent`.
 
-The runtime turns items into `{"enqueue": ...}` emits addressed through `HOOKSPOOL_DELTA_ROUTES`
-(`source` = instance, `key` = the item's `key` field or the batch key, stable dedup id derived from the
-batch id and item index as `make_emit` does), journals them under `HOOKSPOOL_BATCH_ID`, applies the
-staged state, prints the emits, and exits 0. A retry of the same batch replays the journal (no second
-call to the outside system). An exception in `process` exits 75 (retry) and logs the exception class
-only; `ctx.fail_permanent(reason)` exits 65 (the dispatcher's "permanent" class). Unmapped event types
-are dropped with one log line, as 14.3.3 rule 4 says.
+The runtime holds the state lock for the whole batch, turns items into `{"enqueue": ...}` emits addressed
+through `HOOKSPOOL_DELTA_ROUTES` (`source` = instance, `key` = the item's `key` field or the batch key,
+dedup id derived from the batch id and item index), journals emits and staged state under
+`HOOKSPOOL_BATCH_ID`, applies the state, prints the emits and exits 0. A retry of the same batch replays
+the journal without calling `process`. `Retryable` or any other exception → exit 75 (retry), with the
+exception class only in the log; `Permanent` → exit 65 (the dispatcher's permanent class). Nothing but
+emit lines ever reaches stdout. Unmapped event types are dropped with one log line.
 
 #### 14.3.5 Tooling
 
 - `hookspool service list` — packages found (built-in, then each `packages.path` dir): name, version,
   origin, summary, and which instances use them.
-- `hookspool service show <package>` — manifest: secrets, settings (required/default/env), outputs, span,
+- `hookspool service show <package>` — secrets, settings (type/required/default), outputs, span,
   sender_retries, proxy note.
 - `hookspool service expand [<instance>]` — 14.3.3.
-- `hookspool service new <name> [--dir D]` — scaffold a package (manifest, `source.py` stub or template,
-  optional `processor.py`, one capture, README) that passes the conformance kit as soon as it is filled in.
+- `hookspool service new <name> [--dir D]` — scaffold (manifest, `source.py` or template, optional
+  `processor.py`, one capture, README) that passes the conformance kit once filled in.
 - **Conformance** (`hookspool.testing.servicekit`, run by CI for every package in the repo and by
-  `.github/scripts/plugin_ci.py` for every changed package): manifest valid; source passes the source kit
-  with each capture; the processor (if any) runs a capture's payload through `process` with a fake
-  `Context`, its items' event types are declared outputs, a second run of the same batch id replays the
-  journal, and no stdout line other than emits is printed.
+  `.github/scripts/plugin_ci.py` for every changed package): manifest valid; the 14.3.7 rules; the source
+  passes the source kit with each capture; the processor (if any) runs each capture's payload through
+  `process` with a fake `Context` (stub HTTP), its items' event types are declared outputs, a second run
+  of the same batch id replays the journal, and nothing but emits reaches stdout.
 
 #### 14.3.6 Private customisation
 
-A deployment never edits a built-in package. Two ways to change behaviour:
+A deployment never edits a built-in package. Behaviour changes through:
 
-1. **Settings** (14.3.2), including a setting whose value is a path to a hooks module, declared by the
-   package as `[settings.hooks]` with `env = "<PKG>_HOOKS"`. The runtime loads it by file path and
-   passes it as `ctx.hooks`; the package documents which functions it calls (e.g. gmail calls
-   `hooks.classify(message, account) -> dict | None` before its own rules).
-2. **A private package** in a `packages.path` directory with `extends = "<parent>"`: its manifest is the
-   parent's merged with its own (tables deep-merged, its keys win), and a missing `source.py` /
-   `processor.py` falls back to the parent's. A private package is never published with the repo.
+1. **Settings** (14.3.2).
+2. **A hooks module**: a package that supports hooks declares `[settings.hooks]` with `type = "path"` and
+   documents the functions it calls (e.g. gmail calls `hooks.classify(message, account) -> dict | None`
+   before its own rules; gcal calls `hooks.travel(event, ctx) -> dict | None` for travel blocks). The
+   runtime loads it by file path and passes it as `ctx.hooks`. Hooks are deployment code: the 14.3.7
+   rules apply to packages, not to hooks.
+3. **A private package** in a `packages.path` directory, when the service is not in the repo at all.
+
+Code loaded by path (a `packages.path` directory, a hooks module) must be an absolute path to a regular
+file or directory that is not group- or other-writable and is owned by root or the user hookspool runs
+as; `check` verifies this as it does for secret files.
 
 #### 14.3.7 Packages call core; they never re-implement it
 
@@ -794,31 +816,34 @@ Everything that is the same for two services is core, and a package calls it:
 | need | core API (the only allowed way) |
 |---|---|
 | signature / token / timestamp checks | `hookspool.verify` (via `hookspool.plugin.verify`), or the `template` source |
-| JSON paths, headers, dedup ids | `hookspool.plugin` (`get_path`, `Request`, `dedup`) |
-| durable state, journal, replay, atomic writes, locking | `ctx.load_state` / `ctx.save_state` (the runtime holds the state lock for the batch) |
+| a sender's published verification keys (JWKS) | `hookspool.verify` key fetch and cache (moved out of the plaid source) |
+| JSON paths, headers, dedup ids, body hashes | `hookspool.plugin` (`get_path`, `Request`, `dedup`) |
+| durable state, journal, replay, atomic writes, locking | `ctx.load_state` / `ctx.save_state` (the runtime holds the lock for the batch) |
 | results to the agent or another destination | return items from `process`; the runtime emits them |
-| retries, backoff, timeouts, dead-letter | the dispatcher: raise `Retryable`/`Permanent` (or `ctx.fail_permanent`), never loop or sleep |
-| HTTP to the provider's API | `ctx.http` (`hookspool.net`): timeouts, JSON, status → `Retryable`/`Permanent` classification, no bodies in errors or logs |
-| OAuth 2 refresh-token flows | `ctx.oauth(<secret name>)` (`hookspool.net.oauth`): reads the credential through the secret resolver, caches the access token in the runtime's state, refreshes on expiry or 401 |
-| secrets in a processor | `[secrets.*]` in the manifest may be marked `processor = true`; the expansion passes the **reference** (never the value) to the processor and `ctx.secret(name)` resolves it through `hookspool.config`'s resolver |
-| settings | `ctx.settings` (typed, defaults applied); a package never reads `os.environ` |
+| retries, backoff, timeouts, dead-letter | the dispatcher: raise `Retryable` / `Permanent` (or `ctx.fail_permanent`); never loop or sleep |
+| HTTP to the provider's API | `ctx.http` (`hookspool.net`): timeouts, JSON, status → `Retryable`/`Permanent`, no bodies or query strings in errors or logs |
+| OAuth 2 refresh-token flows | `ctx.oauth(<secret name>)` (`hookspool.net`): reads the credential through `ctx.secret`, caches access tokens in runtime state, refreshes on expiry or one 401, and **never rewrites the credential file** (a rotated refresh token is kept in runtime state and used from then on) |
+| secrets | `ctx.secret(name)` (processor) / the source's `Secrets` (source) |
+| settings | `ctx.settings`; a package never reads the environment |
 | logging | `ctx.log` (processor) / the intake's logger (source); a package never opens log files |
 | time | `ctx.now()` / `req.now` |
-| provider helpers shared by several packages (e.g. Google free/busy, Gmail history paging) | a module under `hookspool/providers/<provider>.py`, written once, built on `ctx.http`/`ctx.oauth` |
+| helpers shared by several packages of one provider (Google free/busy, Gmail history paging) | `hookspool/providers/<provider>.py`, written once on `ctx.http` / `ctx.oauth` |
 
-Enforcement: the conformance kit (14.3.5) parses every package module and fails on imports of `hmac`,
-`hashlib`, `urllib`, `http.client`, `requests`, `socket`, `subprocess`, `sqlite3`, `threading`,
-`fcntl`, `tempfile`, `logging`, on `open(` for writing, on `os.environ`, `os.replace`, `os.fsync`,
-`time.sleep`, and on `print(`. A package that needs something core lacks gets it added to core (a PR to
-`hookspool/net.py`, `hookspool/providers/`, the runtime or the plugin API), not a private copy.
+Enforcement: the conformance kit walks the AST of every package module and fails on imports of `hmac`,
+`urllib`, `http`, `requests`, `httpx`, `aiohttp`, `socket`, `ssl`, `subprocess`, `asyncio`, `threading`,
+`multiprocessing`, `signal`, `sqlite3`, `fcntl`, `tempfile`, `shutil`, `pickle`, `logging`, `importlib`;
+on calls to `open`, `print`, `exec`, `eval`, `compile`, `__import__`, `os.*` other than `os.path.*`,
+`time.sleep`, any `.write_text`/`.write_bytes`/`.open`/`.unlink` method, and on any use of `sys.path` or
+`os.environ`. A package that needs something core lacks gets it added to core (a PR to `hookspool/net.py`,
+`hookspool/verify.py`, `hookspool/providers/`, the runtime or the plugin API), never a private copy.
 `.github/scripts/plugin_ci.py` runs the same check on every changed package.
 
 #### 14.3.8 Compatibility
 
-`[sources.*]` tables keep working exactly as now (they are what an expansion produces). The built-in
-code sources move into their packages; `hookspool.sources.<name>` remains importable as a re-export so
-existing configs with `[sources.gmail]` (implicit module) still load. `examples/sources/*.toml` become
-packages built on the `template` source.
+`[sources.*]` tables keep working exactly as now (they are what an expansion produces). The built-in code
+sources move into their packages; `hookspool.sources.<name>` stays importable as a re-export so existing
+configs with `[sources.gmail]` (implicit module) still load. `examples/sources/*.toml` become packages on
+the `template` source.
 
 ## 15. Configuration
 
