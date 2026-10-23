@@ -474,6 +474,34 @@ def test_the_bobbins_command_fails_for_a_failing_bobbin(tmp_path):
     assert "**FAIL**" in summary and "1 of 9 required checks fail (todos)" in summary
 
 
+def test_the_bobbins_command_scores_two_bobbins_bobbin_only_with_reports_in_the_checkout(tmp_path):
+    """Round-2 regression: with --report-dir inside the checkout, the first bobbin's scorecard files used to be
+    untracked files by the time the second bobbin's scope check ran, so every bobbin after the first was scored
+    touches-core. The reports are written after the last check; both cards must be bobbin-only."""
+    root = tmp_path / "repo"
+    dirs = []
+    for name in ("kitcode", "kittpl"):
+        d = root / "bobbins" / name
+        shutil.copytree(os.path.join(ROOT, FIX_BOBBINS, name), d)
+        dirs.append(str(d))
+    (root / ".gitignore").write_text("__pycache__/\n")        # bobbin-reports/ deliberately not ignored
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.test", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@example.test", "PATH": os.environ["PATH"], "HOME": str(root)}
+    for cmd in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-q", "-m", "base"]):
+        subprocess.run(["git", "-C", str(root), *cmd], check=True, env=env, capture_output=True)
+    out = root / "bobbin-reports"      # inside the checkout, as the reviewer's probe ran it
+    run_env = dict(os.environ, GITHUB_STEP_SUMMARY=str(tmp_path / "s.md"))
+    p = subprocess.run([sys.executable, SCRIPT, "bobbins", *dirs, "--base", "HEAD", "--report-dir", str(out),
+                        "--pr", "7"], cwd=ROOT, env=run_env, capture_output=True, text=True)
+    assert p.returncode == 0, p.stdout + p.stderr
+    for name in ("kitcode", "kittpl"):
+        doc = json.loads((out / f"{name}.json").read_text())
+        scope = next(c for c in doc["checks"] if c["name"] == "scope")
+        assert doc["ok"] and doc["scope"] == "bobbin-only", (name, scope)
+        assert scope["result"] == "pass" and scope["findings"] == [], (name, scope)
+    assert json.loads((out / "meta.json").read_text()) == {"pr": 7, "bobbins": ["kitcode", "kittpl"]}
+
+
 def test_the_bobbins_command_with_nothing_changed_writes_meta(tmp_path, repo):
     out = tmp_path / "reports"
     assert P.main(["bobbins", "--base", "HEAD", "--report-dir", str(out)]) == 0
@@ -496,11 +524,13 @@ def test_bobbin_workflow_jobs_and_permissions():
     assert co["with"] == {"fetch-depth": 0, "persist-credentials": False}
     run = next(s for s in steps if "plugin_ci.py bobbins" in str(s.get("run", "")))
     assert run["run"] == ('python .github/scripts/plugin_ci.py bobbins --base "$BASE_SHA" --pr "$PR_NUMBER"'
-                          " --report-dir bobbin-reports")
+                          ' --report-dir "$RUNNER_TEMP/bobbin-reports"'), \
+        "the reports live outside the checkout: inside it they are untracked files the scope check would count"
     assert run["env"] == {"BASE_SHA": "${{ github.event.pull_request.base.sha }}",
                           "PR_NUMBER": "${{ github.event.pull_request.number }}"}
     up = next(s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact@"))
-    assert up["if"] == "always()" and up["with"]["name"] == "bobbin-reports" and up["with"]["path"] == "bobbin-reports/"
+    assert up["if"] == "always()" and up["with"]["name"] == "bobbin-reports"
+    assert up["with"]["path"] == "${{ runner.temp }}/bobbin-reports/"
 
 
 def test_label_workflow_runs_only_trusted_code_with_the_least_write_access():

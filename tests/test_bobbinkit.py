@@ -120,6 +120,7 @@ def test_manifest_red_reading_another_bobbins_signature_header(tmp_path):
     f, = c.findings
     assert f.file == "source.py" and f.line > 0
     assert "x-kitcode-signature, the signature header of bobbin 'kitcode'" in f.message
+    assert "declare it in this bobbin's auth_headers" in f.message, "the fix for a shared generic header name"
 
 
 def test_manifest_red_another_bobbins_api_host_unless_they_share_a_provider_module(tmp_path):

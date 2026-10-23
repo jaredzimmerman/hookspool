@@ -217,9 +217,13 @@ def discover_bobbins(files: list[str]) -> list[str]:
 
 
 def run_bobbin(rel_dir: str, report: Report, *, base: str | None = None, strict: bool = False,
-               report_dir: str | None = None) -> dict | None:
+               report_dir: str | None = None, pending: list[tuple[str, dict, str]] | None = None) -> dict | None:
     """``hookspool bobbin check <dir> --report json`` (the contributor's command, run the same way), one result
-    row, the Markdown scorecard in the job summary and, with ``report_dir``, ``<name>.json`` / ``<name>.md``."""
+    row, the Markdown scorecard in the job summary and, with ``report_dir``, ``<name>.json`` / ``<name>.md``.
+
+    With ``pending`` the files are not written here but queued for ``write_reports``: a report written into
+    the checkout between two checks would be an untracked file, and the next bobbin's ``scope`` check would
+    list it as a change outside the bobbin (``touches-core``)."""
     from hookspool.testing import bobbinkit
     argv = [sys.executable, "-m", "hookspool", "bobbin", "check", rel_dir, "--report", "json"]
     if base:
@@ -243,13 +247,22 @@ def run_bobbin(rel_dir: str, report: Report, *, base: str | None = None, strict:
     report.add("bobbin", rel_dir, bool(doc["ok"]) and p.returncode == 0, f"{doc['summary']} ({secs:.1f}s)")
     report.extra.append(md)
     if report_dir:
-        os.makedirs(report_dir, exist_ok=True)
         name = re.sub(r"[^a-z0-9_-]", "_", str(doc.get("bobbin") or os.path.basename(rel_dir)))
+        if pending is not None:
+            pending.append((name, doc, md))
+        else:
+            write_reports(report_dir, [(name, doc, md)])
+    return doc
+
+
+def write_reports(report_dir: str, cards: list[tuple[str, dict, str]]) -> None:
+    """``<name>.json`` and ``<name>.md`` for every queued scorecard, written once every bobbin is checked."""
+    os.makedirs(report_dir, exist_ok=True)
+    for name, doc, md in cards:
         with open(os.path.join(report_dir, f"{name}.json"), "w", encoding="utf-8") as f:
             json.dump(doc, f, indent=1, sort_keys=True)
         with open(os.path.join(report_dir, f"{name}.md"), "w", encoding="utf-8") as f:
             f.write(md)
-    return doc
 
 
 def write_meta(report_dir: str, pr: str | None, names: list[str]) -> None:
@@ -614,9 +627,11 @@ def main(argv: list[str] | None = None) -> int:
         dirs = args.dirs or discover_bobbins(changed_files(args.base))
         if not dirs:
             report.add("bobbins", "changed bobbins", True, "no bobbin touched")
+        pending: list[tuple[str, dict, str]] = []
         for d in dirs:
-            run_bobbin(d, report, base=args.base, strict=args.strict, report_dir=args.report_dir)
-        if args.report_dir:
+            run_bobbin(d, report, base=args.base, strict=args.strict, report_dir=args.report_dir, pending=pending)
+        if args.report_dir:        # written after the last check: see run_bobbin on why not in between
+            write_reports(args.report_dir, pending)
             write_meta(args.report_dir, args.pr, [os.path.basename(d) for d in dirs])
         report.emit("Bobbin scorecards")
     elif args.cmd == "guard":

@@ -604,7 +604,9 @@ def _one_service(b: Bobbin) -> list[Finding]:
             if h in me.reads:
                 p, line = me.reads[h]
                 found.append(Finding(b.rel(p), line, f"reads {h}, the signature header of bobbin {name!r}: one bobbin"
-                                                    " covers one service"))
+                                                    " covers one service. If this service uses the same header name"
+                                                    " (generic names are shared by unrelated providers), declare it"
+                                                    " in this bobbin's auth_headers"))
         if me.providers & other.providers:
             continue
         for h in sorted(set(me.hosts) & set(other.hosts)):
