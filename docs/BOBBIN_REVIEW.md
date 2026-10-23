@@ -31,9 +31,9 @@ changes. There is no check that only CI knows about.
 | `docs` | SETUP.md and AGENTS.md name every secret and required setting, AGENTS.md opens with **Needs from the human** and has numbered steps, a step that changes something at the provider is marked `outward`, and the `[bobbins.<instance>]` table in each expands |
 | `captures` | at least one accepted and one rejected (bad signature) capture, every `# expect:` holds, and no capture carries a secret-looking value or real-looking personal data (an address outside example.com, a phone number, a public address) |
 | `source-kit` | with each accepted capture, the source passes the shared source kit: signed, unsigned, tampered, stale and future timestamps, oversized, chunked, duplicate, the handshakes, quarantine, spool failures, and nothing secret in the spool or the logs |
-| `processor` | each capture's payload goes through the real processor runtime with stub HTTP and the network blocked: only declared outputs come back, a second run of the same batch replays the journal, nothing but emits reaches stdout, a failure exits 75 and a permanent one 65 |
-| `tests` | the bobbin's own tests (`hookspool/bobbins/<name>/tests/` or `tests/bobbins/test_<name>.py`) pass with the network blocked |
-| `scope` (advisory) | `bobbin-only` when every changed file is inside the bobbin (or its test file); `touches-core` lists the others |
+| `processor` | each capture's payload goes through the real processor runtime with stub HTTP and the network blocked, loopback included (any real socket fails the check; only Unix sockets stay): only declared outputs come back, a second run of the same batch replays the journal, nothing but emits reaches stdout, a failure exits 75 and a permanent one 65 |
+| `tests` | the bobbin's own tests (`hookspool/bobbins/<name>/tests/` or `tests/bobbins/test_<name>.py`) pass with the network blocked; loopback is allowed here so a test may run a local stub server |
+| `scope` (advisory) | `bobbin-only` when every changed file is inside the bobbin (or its test file); `touches-core` lists the others. Changed means added, copied, modified or renamed: a pull request that only deletes files runs no bobbin check and gets no label, so review a deletion by hand (the built-in bobbins are re-checked by `tests/test_services_conformance.py` in the main test job) |
 
 ## What a maintainer still checks by hand
 

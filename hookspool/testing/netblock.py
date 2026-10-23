@@ -1,9 +1,11 @@
 """Block the network for code under test (the bobbin conformance kit).
 
-``block_network()`` is a context manager that makes every outbound connection and every name
+``block_network()`` is a context manager that makes every outbound connection, UDP send and name
 lookup of a non-loopback host fail with ``NetworkBlocked``, and records each attempt (host only,
 never a path or a payload) in the list it yields. Loopback addresses, ``localhost`` and Unix
-sockets stay usable, so a test's local stub server keeps working.
+sockets stay usable, so a test's local stub server keeps working. ``block_network(loopback=False)``
+refuses loopback too (only Unix sockets stay): the processor check runs under it, so any real
+socket fails the check.
 
 Loaded as a pytest plugin (``-p hookspool.testing.netblock``) it blocks the network for the whole
 session and fails the run at the end if any test tried to reach it, even when the code under test
@@ -45,49 +47,65 @@ def _host_of(address: Any) -> Any:
 
 
 @contextmanager
-def block_network() -> Iterator[list[str]]:
-    """Block outbound connections and lookups of non-loopback hosts; yield the attempts list."""
+def block_network(*, loopback: bool = True) -> Iterator[list[str]]:
+    """Block outbound connections, UDP sends and lookups; yield the attempts list.
+
+    ``loopback=True`` (the default) lets loopback hosts through for a local stub server;
+    ``loopback=False`` refuses every host, so only Unix sockets remain.
+    """
     attempts: list[str] = []
     orig = {"connect": socket.socket.connect, "connect_ex": socket.socket.connect_ex,
-            "create_connection": socket.create_connection, "getaddrinfo": socket.getaddrinfo,
-            "gethostbyname": socket.gethostbyname, "gethostbyname_ex": socket.gethostbyname_ex}
+            "sendto": socket.socket.sendto, "create_connection": socket.create_connection,
+            "getaddrinfo": socket.getaddrinfo, "gethostbyname": socket.gethostbyname,
+            "gethostbyname_ex": socket.gethostbyname_ex}
+    unix = getattr(socket, "AF_UNIX", None)
+
+    def allowed(host: Any) -> bool:
+        return loopback and _local_host(host)
 
     def refuse(host: Any) -> NetworkBlocked:
         attempts.append(str(host)[:100])
         return NetworkBlocked(f"network blocked by the bobbin kit (host {str(host)[:100]})")
 
     def connect(self, address):
-        if self.family != getattr(socket, "AF_UNIX", None) and not _local_host(_host_of(address)):
+        if self.family != unix and not allowed(_host_of(address)):
             raise refuse(_host_of(address))
         return orig["connect"](self, address)
 
     def connect_ex(self, address):
-        if self.family != getattr(socket, "AF_UNIX", None) and not _local_host(_host_of(address)):
+        if self.family != unix and not allowed(_host_of(address)):
             raise refuse(_host_of(address))
         return orig["connect_ex"](self, address)
 
+    def sendto(self, data, *args):
+        address = args[-1] if args else None
+        if self.family != unix and not allowed(_host_of(address)):
+            raise refuse(_host_of(address))
+        return orig["sendto"](self, data, *args)
+
     def create_connection(address, *a, **kw):
-        if not _local_host(_host_of(address)):
+        if not allowed(_host_of(address)):
             raise refuse(_host_of(address))
         return orig["create_connection"](address, *a, **kw)
 
     def getaddrinfo(host, *a, **kw):
-        if not _local_host(host):
+        if not allowed(host):
             raise refuse(host)
         return orig["getaddrinfo"](host, *a, **kw)
 
     def gethostbyname(host):
-        if not _local_host(host):
+        if not allowed(host):
             raise refuse(host)
         return orig["gethostbyname"](host)
 
     def gethostbyname_ex(host):
-        if not _local_host(host):
+        if not allowed(host):
             raise refuse(host)
         return orig["gethostbyname_ex"](host)
 
     socket.socket.connect = connect                 # type: ignore[method-assign]
     socket.socket.connect_ex = connect_ex           # type: ignore[method-assign]
+    socket.socket.sendto = sendto                   # type: ignore[method-assign]
     socket.create_connection = create_connection    # type: ignore[assignment]
     socket.getaddrinfo = getaddrinfo                # type: ignore[assignment]
     socket.gethostbyname = gethostbyname            # type: ignore[assignment]
@@ -97,6 +115,7 @@ def block_network() -> Iterator[list[str]]:
     finally:
         socket.socket.connect = orig["connect"]                 # type: ignore[method-assign]
         socket.socket.connect_ex = orig["connect_ex"]           # type: ignore[method-assign]
+        socket.socket.sendto = orig["sendto"]                   # type: ignore[method-assign]
         socket.create_connection = orig["create_connection"]    # type: ignore[assignment]
         socket.getaddrinfo = orig["getaddrinfo"]                # type: ignore[assignment]
         socket.gethostbyname = orig["gethostbyname"]            # type: ignore[assignment]

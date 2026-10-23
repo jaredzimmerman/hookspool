@@ -138,6 +138,19 @@ def test_a_bobbin_without_a_scorecard_is_named_instead_of_no_bobbin(tmp_path):
     assert not any(m == "POST" for m, _p in api.writes())
 
 
+def test_a_dead_check_next_to_a_surviving_card_is_named_and_sets_no_label(tmp_path):
+    api = FakeApi()
+    d = artifact(tmp_path, [card("acme")])
+    (tmp_path / "reports" / "meta.json").write_text(json.dumps({"pr": 7, "bobbins": ["acme", "gone"]}))
+    assert L.main(["--reports", d, "--repo", REPO, "--head-sha", SHA], api=api) == 0
+    body = next(b for m, p, b in api.calls if p.endswith("/comments") and m == "POST")["body"]
+    assert "### `acme`: PASS" in body and "No scorecard for `gone`" in body and "No label until" in body
+    assert "Label:" not in body
+    assert not any(p.endswith("/labels") and m == "POST" for m, p in api.writes())
+    deleted = {p.rsplit("/", 1)[1] for m, p in api.writes() if m == "DELETE"}
+    assert deleted == {"bobbin-only", "touches-core"}
+
+
 def test_no_label_when_a_scorecard_has_no_scope(tmp_path):
     api = FakeApi()
     assert L.main(["--reports", artifact(tmp_path, [card(scope=None)]), "--repo", REPO, "--head-sha", SHA], api=api) == 0

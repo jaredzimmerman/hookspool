@@ -647,6 +647,8 @@ class _BanWalker(ast.NodeVisitor):
         self.rel = rel
         self.found: list[Finding] = []
         self.alias: dict[str, str] = {}            # local name -> "os" | "os.path" | "time" | "sys" | "builtins"
+        self.imported: set[str] = set()            # every local name an import binds (a module may re-export os)
+        self._covered: set[int] = set()            # inner Attribute nodes already reported with their outer one
 
     def hit(self, node: ast.AST, msg: str) -> None:
         self.found.append(Finding(self.rel, getattr(node, "lineno", 0), msg))
@@ -662,6 +664,7 @@ class _BanWalker(ast.NodeVisitor):
         for a in node.names:
             self._module(node, a.name)
             top = a.name.split(".")[0]
+            self.imported.add(a.asname or top)
             if a.name == "os.path" and a.asname:
                 self.alias[a.asname] = "os.path"        # the allowed module under its own name: nothing to check
             elif top in ("os", "time", "sys", "builtins"):
@@ -674,6 +677,7 @@ class _BanWalker(ast.NodeVisitor):
                            " runtime loads source.py and processor.py; shared code goes to core)")
         mod = node.module or ""
         if not node.level:
+            self.imported.update(a.asname or a.name for a in node.names)
             self._module(node, mod)
             if mod == "hookspool" and any(a.name == "bobbins" for a in node.names):
                 self.hit(node, "imports hookspool.bobbins: a bobbin never imports another bobbin")
@@ -702,6 +706,17 @@ class _BanWalker(ast.NodeVisitor):
                 self.hit(node, "uses sys.path: a bobbin never changes the import path")
             elif mod == "builtins" and node.attr in BANNED_CALLS:
                 self.hit(node, f"uses builtins.{node.attr}: {BANNED_CALLS[node.attr]}")
+        # ``os`` and ``sys`` reached through a module that re-exports them (os.path.os, glob.os, osp.sys, ...)
+        if node.attr in _REEXPORTED and id(node) not in self._covered and _root(node) in self.imported:
+            self.hit(node, f"reaches {node.attr} through {_dotted(node)}: a re-export of {node.attr} is still "
+                           f"{node.attr} ({_REEXPORTED[node.attr]})")
+        # the environment names on any attribute chain whatever the base is called; the process names
+        # (plausible attributes of a payload object) only on a chain that starts at an imported module
+        if node.attr in _OS_NAMES and isinstance(node.value, ast.Attribute) and (
+                node.attr in _ENV_NAMES or _root(node) in self.imported):
+            if node.value.attr in _REEXPORTED:
+                self._covered.add(id(node.value))      # one finding for ``x.os.environ``, not two
+            self.hit(node, f"uses .{node.attr} through {_dotted(node)}: " + _os_hint(node.attr))
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -713,9 +728,33 @@ class _BanWalker(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+_REEXPORTED = {"os": "a bobbin never reads the environment or touches files; only os.path is allowed",
+               "sys": "a bobbin never changes the import path"}
+_ENV_NAMES = {"environ", "getenv", "putenv"}
+_OS_NAMES = _ENV_NAMES | {"system", "popen"}
+
+
+def _root(node: ast.AST) -> str | None:
+    """The name at the bottom of an attribute chain (``a`` for ``a.b.c``), or None."""
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _dotted(node: ast.AST) -> str:
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    parts.append(node.id if isinstance(node, ast.Name) else "...")
+    return ".".join(reversed(parts))
+
+
 def _os_hint(attr: str) -> str:
     if attr == "environ" or attr.startswith("getenv") or attr.startswith("putenv"):
         return "settings are ctx.settings and secrets ctx.secret(); a bobbin never reads the environment"
+    if attr in ("system", "popen"):
+        return "a bobbin never starts a process (shared code goes to core)"
     return "only os.path is allowed (state is ctx.load_state / ctx.save_state)"
 
 

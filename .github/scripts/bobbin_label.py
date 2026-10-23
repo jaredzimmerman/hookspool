@@ -116,11 +116,14 @@ def decide_label(cards: list[dict]) -> str | None:
     return "touches-core" if "touches-core" in scopes else "bobbin-only"
 
 
-def comment_body(cards: list[dict], label: str | None) -> str:
+def comment_body(cards: list[dict], label: str | None, missing: list[str] = ()) -> str:
     lines = [MARKER, "## Bobbin scorecards", ""]
     if label:
         lines += [f"Label: `{label}`" + (" (every change is inside the bobbin)" if label == "bobbin-only" else
                                         " (files outside the bobbin changed: review those as core changes)"), ""]
+    if missing:
+        lines += [f"No scorecard for {', '.join(f'`{n}`' for n in missing)}: the check job stopped before writing"
+                  " one (see its log). No label until every changed bobbin has a scorecard.", ""]
     for c in cards:
         lines += [f"### `{c['bobbin']}`: {'PASS' if c['ok'] else 'FAIL'}", "", c["summary"], "",
                   "| Check | Result | Detail |", "|---|---|---|"]
@@ -189,13 +192,18 @@ def clear(api: Api, repo: str, pr: int, head_sha: str, *, missing: list[str] = (
     return done
 
 
-def apply(api: Api, repo: str, pr: int, head_sha: str, cards: list[dict], *, dry_run: bool = False) -> dict:
-    """Verify the pull request, then set the label and the one comment. Returns what was done."""
+def apply(api: Api, repo: str, pr: int, head_sha: str, cards: list[dict], *, missing: list[str] = (),
+          dry_run: bool = False) -> dict:
+    """Verify the pull request, then set the label and the one comment. Returns what was done.
+
+    ``missing`` names the bobbins meta.json says were checked but no scorecard arrived for (that
+    child died): the comment names them, and no label is set because their scope is unknown.
+    """
     info = api("GET", f"/repos/{repo}/pulls/{pr}", None)
     if not isinstance(info, dict) or (info.get("head") or {}).get("sha") != head_sha:
         raise Refused("the artifact names a pull request whose head is not this run's commit")
-    label = decide_label(cards)
-    body = comment_body(cards, label)
+    label = None if missing else decide_label(cards)
+    body = comment_body(cards, label, missing)
     done: dict[str, Any] = {"pr": pr, "label": label, "comment": None}
     if dry_run:
         done["comment"] = "dry-run"
@@ -204,6 +212,9 @@ def apply(api: Api, repo: str, pr: int, head_sha: str, cards: list[dict], *, dry
         api("POST", f"/repos/{repo}/issues/{pr}/labels", {"labels": [label]})
         other = next(x for x in LABELS if x != label)
         api("DELETE", f"/repos/{repo}/issues/{pr}/labels/{other}", None)
+    elif missing:
+        for name in LABELS:                             # an earlier push's label must not survive a dead check
+            api("DELETE", f"/repos/{repo}/issues/{pr}/labels/{name}", None)
     existing = find_comment(api, repo, pr)
     if existing is not None:
         api("PATCH", f"/repos/{repo}/issues/comments/{int(existing['id'])}", {"body": body})
@@ -236,7 +247,9 @@ def main(argv: list[str] | None = None, api: Api | None = None) -> int:
             if not token:
                 raise Refused("GH_TOKEN is not set")
             api = github_api(token, os.environ.get("GITHUB_API_URL") or "https://api.github.com")
-        done = (apply(api, a.repo, pr, a.head_sha, cards, dry_run=a.dry_run) if cards
+        carded = {c["bobbin"] for c in cards}
+        missing = [n for n in names if n not in carded]
+        done = (apply(api, a.repo, pr, a.head_sha, cards, missing=missing, dry_run=a.dry_run) if cards
                 else clear(api, a.repo, pr, a.head_sha, missing=names, dry_run=a.dry_run))
     except Refused as e:
         print(f"bobbin_label: refused: {e}")

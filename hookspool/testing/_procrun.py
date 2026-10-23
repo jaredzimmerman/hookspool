@@ -112,7 +112,7 @@ def main(argv: list[str]) -> int:
     os.dup2(2, 1)
     saved, sys.stdout = sys.stdout, sys.stderr
     try:
-        with block_network() as attempts:
+        with block_network(loopback=False) as attempts:      # any real socket fails the check, loopback included
             code = P.run(instance, stdin=sys.stdin, out=real, err=sys.stderr, clock=clock, extras_factory=extras)
         report["network"] = list(attempts)
     finally:

@@ -222,6 +222,17 @@ BANNED = [
     ("from hookspool.bobbins.other import source", "imports hookspool.bobbins.other"),
     ("from hookspool import bobbins", "imports hookspool.bobbins"), ("from . import helpers", "relative import"),
     ("from ..other import source", "relative import"),
+    # os and sys reached through a module that re-exports them
+    ("import os.path as osp\nX = osp.os.environ['X']", "uses .environ through osp.os.environ"),
+    ("import os.path as osp\nosp.os.system('x')", "uses .system through osp.os.system"),
+    ("import os.path as osp\nY = osp.os.listdir('.')", "reaches os through osp.os"),
+    ("import os.path\nX = os.path.os.environ['X']", "uses .environ through os.path.os.environ"),
+    ("import os.path\nos.path.sys.path.insert(0, 'x')", "reaches sys through os.path.sys"),
+    ("from os import path\nX = path.os.getenv('X')", "uses .getenv through path.os.getenv"),
+    ("import glob\nX = glob.os.environ['X']", "uses .environ through glob.os.environ"),
+    ("import glob\nX = glob.sys.modules", "reaches sys through glob.sys"),
+    ("import shlex\nshlex.os.popen('x')", "uses .popen through shlex.os.popen"),
+    ("def f(m):\n    return m.util.putenv('X', '1')", "uses .putenv through m.util.putenv"),
 ]
 
 
@@ -249,6 +260,17 @@ def test_core_only_green_for_what_core_allows(tmp_path):
     write(d, "tests/test_own.py", "import hmac\nimport socket\n")         # the bobbin's own tests are not bobbin code
     c = run(d, "core-only")["core-only"]
     assert c.result == "pass", messages(c)
+
+
+def test_core_only_reports_a_re_export_once_and_leaves_plain_attributes_alone(tmp_path):
+    d = copy(tmp_path, "kitcode")
+    with open(os.path.join(d, "source.py"), "a") as f:
+        f.write("\nimport glob\nX = glob.os.environ['X']\n"                     # one finding, not .os plus .environ
+                "\n\ndef g(batch, ctx):\n    return batch.meta.system, ctx.settings['popen']\n")   # not a chain of .attr
+    c = run(d, "core-only")["core-only"]
+    assert len(c.findings) == 1, messages(c)                 # batch.meta.system and ctx.settings[...] are not os
+    assert c.findings[0].message == ("uses .environ through glob.os.environ: settings are ctx.settings and secrets"
+                                     " ctx.secret(); a bobbin never reads the environment")
 
 
 def test_core_only_reports_a_syntax_error(tmp_path):
@@ -497,6 +519,38 @@ def test_processor_red_a_network_connection(tmp_path):
          "    out = []\n")
     c = run(d, "processor")["processor"]
     assert c.result == "fail" and any("opened a network connection (to 192.0.2.1)" in m for m in messages(c))
+
+
+def test_processor_red_a_loopback_connection_too(tmp_path):
+    d = copy(tmp_path, "kitproc")
+    edit(d, "processor.py", "    out = []\n", "    import socket\n    try:\n"
+         "        socket.create_connection(('127.0.0.1', 9), timeout=1)\n    except OSError:\n        pass\n"
+         "    out = []\n")
+    c = run(d, "processor")["processor"]
+    assert c.result == "fail" and any("opened a network connection (to 127.0.0.1)" in m for m in messages(c)), messages(c)
+
+
+def test_netblock_loopback_flag_and_udp():
+    import socket
+    from hookspool.testing.netblock import NetworkBlocked, block_network
+    with block_network() as attempts:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        with pytest.raises(NetworkBlocked):
+            s.sendto(b"x", ("192.0.2.1", 9))
+        s.close()
+        assert socket.getaddrinfo("127.0.0.1", 9)                  # loopback stays usable by default
+    assert attempts == ["192.0.2.1"]
+    with block_network(loopback=False) as attempts:
+        with pytest.raises(NetworkBlocked):
+            socket.create_connection(("127.0.0.1", 9), timeout=1)
+        with pytest.raises(NetworkBlocked):
+            socket.getaddrinfo("localhost", 9)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        with pytest.raises(NetworkBlocked):
+            s.sendto(b"x", ("127.0.0.1", 9))
+        s.close()
+    assert attempts == ["127.0.0.1", "localhost", "127.0.0.1"]
+    assert socket.getaddrinfo("127.0.0.1", 9)                      # restored on exit
 
 
 def test_processor_red_different_emits_for_the_same_batch(tmp_path):
