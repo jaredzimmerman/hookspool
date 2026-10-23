@@ -400,6 +400,12 @@ class Dispatcher:
         try:
             doc = self.store.document(bid, att.delivery_id, att.n)
             body = encode_body(doc)
+            payloads = None
+            if getattr(dest, "unwrap", False):      # one request per event: the stored bytes, in order
+                rows = self.store.stored_payloads(bid)
+                if [i for i, _ in rows] != [m["id"] for m in doc["event_meta"]]:
+                    raise RuntimeError("stored payloads do not match the document")
+                payloads = tuple(p for _, p in rows)
         except Exception as e:      # unreadable batch: put it back, uncounted
             log.error("cannot build document batch=%d: %s", bid, e.__class__.__name__)
             try:
@@ -410,7 +416,7 @@ class Dispatcher:
             return False
         ctx = DeliveryContext(batch_id=bid, attempt=att.n, attempt_id=att.id, delivery_id=att.delivery_id,
                               probe=probe, lease_until=lease_until, deadline=lease_until - DEADLINE_MARGIN_S,
-                              now=self._clock)
+                              now=self._clock, payloads=payloads)
         w = _Work(b, dest, owner, att, probe, now, lease_until, doc, body, ctx)
         fut = self._pool.submit(self._run, w)
         self._work[fut] = w
@@ -425,11 +431,19 @@ class Dispatcher:
     def _run(w: _Work) -> Outcome:
         t0 = time.monotonic()
         try:
+            cap = w.dest.max_body_bytes
+            # unwrap sends each stored payload on its own: the receiver's cap applies to each one
+            sizes = ([(m.get("id"), len(p)) for m, p in zip(w.doc.get("event_meta") or [], w.ctx.payloads) if p]
+                     if w.ctx.payloads is not None else [])
+            big = max(sizes, key=lambda x: x[1]) if sizes else None
             if w.doc.get("count", 0) == 0:
                 out = Outcome.ok("empty: every event is excluded")
-            elif w.dest.max_body_bytes is not None and len(w.body) > w.dest.max_body_bytes:
+            elif cap is not None and w.ctx.payloads is None and len(w.body) > cap:
                 out = Outcome.permanent(f"document is {len(w.body)} bytes, over the destination's"
-                                        f" max_body_bytes {w.dest.max_body_bytes}; split the batch")
+                                        f" max_body_bytes {cap}; split the batch")
+            elif cap is not None and big is not None and big[1] > cap:
+                out = Outcome.permanent(f"event {big[0]} is {big[1]} bytes, over the destination's"
+                                        f" max_body_bytes {cap}; exclude it")
             else:
                 out = w.dest.deliver(w.doc, w.body, w.attempt.delivery_id, w.ctx)
                 if not isinstance(out, Outcome):
@@ -456,7 +470,8 @@ class Dispatcher:
     def _finish(self, w: _Work, out: Outcome) -> None:
         now = self.now_eff()
         bid, name = int(w.batch["id"]), w.dest.name
-        common = {"attempt_id": w.attempt.id, "status": out.status, "duration_ms": w.duration_ms, "now": now}
+        common = {"attempt_id": w.attempt.id, "status": out.status, "duration_ms": w.duration_ms, "now": now,
+                  "events_delivered": out.events_delivered, "failed_event_id": out.failed_event_id}
         try:
             if out.kind == "ok":
                 try:

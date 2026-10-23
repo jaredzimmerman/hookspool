@@ -8,6 +8,10 @@ accepts the Standard Webhooks document.
 - ``secret`` is a secret reference, resolved on every attempt; ``secret_previous`` adds a
   second ``v1`` signature while a receiver rotates.
 - Idempotency is per batch: ``webhook-id`` is identical on every attempt.
+- ``unwrap = true``: one request per event instead of the document, each carrying the event's
+  stored payload, its own ``webhook-id`` (``hs_<instance>_<batch>_<event id>``, identical on every
+  attempt), ``X-Hub-Signature-256`` over that body, and the optional ``event_header`` /
+  ``dedup_header``. The batch is ``ok`` only when every event's request was.
 """
 from __future__ import annotations
 
@@ -16,8 +20,8 @@ from urllib.parse import urlsplit
 
 from .. import config as _config
 from .base import DeliveryContext, Destination, Outcome
-from .wire import (RESERVED_HEADERS, BadSecret, NetError, classify_status, delivery_headers, header_value_ok,
-                   net_outcome, post, signing_key)
+from .wire import (RESERVED_HEADERS, BadSecret, NetError, classify_status, delivery_headers, event_extra_headers,
+                   header_name_ok, header_value_ok, net_outcome, post, signing_key, unwrap_deliver)
 
 
 class HttpDestination(Destination):
@@ -30,6 +34,12 @@ class HttpDestination(Destination):
         self.url = str(self.spec.get("url") or "")
         self.allow_insecure = bool(self.spec.get("allow_insecure", False))
         self.extra_headers = {str(k): str(v) for k, v in (self.spec.get("headers") or {}).items()}
+        self.unwrap = self.spec.get("unwrap") is True
+        if self.unwrap:
+            self.idempotency = "per-event"
+        eh, dh = self.spec.get("event_header"), self.spec.get("dedup_header")
+        self.event_header = eh if header_name_ok(eh) else None
+        self.dedup_header = dh if header_name_ok(dh) else None
 
     def _tls_context(self):
         """Seam for tests that need a private CA without touching the environment."""
@@ -55,9 +65,22 @@ class HttpDestination(Destination):
             return Outcome.config(problem, detail=problem)
         try:
             secrets = self._secrets()
-            headers = delivery_headers(secrets, delivery_id, ctx, body)
+            for s in secrets:
+                signing_key(s)
         except (_config.SecretError, BadSecret) as e:
             return Outcome.config(f"secret unusable: {e}", detail=f"secret unusable: {e}")
+        if self.unwrap:
+            def send_one(meta: dict, event_body: bytes, event_id: str) -> Outcome:
+                extra = event_extra_headers(meta, self.event_header, self.dedup_header)
+                return self._send(secrets, event_id, ctx, event_body, legacy=True, extra=extra)
+            return unwrap_deliver(doc, delivery_id, ctx, send_one)
+        return self._send(secrets, delivery_id, ctx, body)
+
+    def _send(self, secrets: list[str], delivery_id: str, ctx: DeliveryContext, body: bytes, *,
+              legacy: bool = False, extra: dict | None = None) -> Outcome:
+        headers = delivery_headers(secrets, delivery_id, ctx, body, legacy=legacy)
+        for k, v in (extra or {}).items():
+            headers.setdefault(k, v)
         for k, v in self.extra_headers.items():     # ours always win; one http.client would refuse is left out
             if k.lower() not in RESERVED_HEADERS and header_value_ok(k) and header_value_ok(v):
                 headers.setdefault(k, v)

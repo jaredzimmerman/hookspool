@@ -17,6 +17,11 @@ never raises on purpose; an exception is recorded as a transport failure.
 ``Outcome.reason`` is short and safe for logs and alerts; ``detail`` goes to
 ``last_error`` (scrubbed to 500 chars) and is never logged; ``notice`` (Hermes
 ``ignored``/``coalesced``) opens an issue without changing the outcome.
+
+A destination with ``unwrap = True`` (idempotency ``per-event``) delivers each event's stored
+payload as its own request instead of the document. The dispatcher then fills
+``ctx.payloads`` (the stored payload bytes, aligned with ``doc["event_meta"]``) and the
+outcome reports ``events_delivered`` and ``failed_event_id`` for the attempt row.
 """
 from __future__ import annotations
 
@@ -41,6 +46,8 @@ class Outcome:
     retry_after_s: float | None = None  # throttle only
     emits: list = field(default_factory=list)   # script emits ({"enqueue": {...}} objects' insides)
     notice: str | None = None          # e.g. "ignored": opens an issue, outcome unchanged
+    events_delivered: int | None = None  # unwrap: events accepted by this attempt, in order
+    failed_event_id: int | None = None   # unwrap: the event whose request failed (the attempt stopped there)
 
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
@@ -99,6 +106,7 @@ class DeliveryContext:
     lease_until: float
     deadline: float              # lease_until - 5 s; deliver must not outlive it
     now: Callable[[], float]     # the dispatcher's clock (never earlier than its last tick)
+    payloads: tuple | None = None   # unwrap only: each event's stored payload bytes, in event_meta order
 
     def remaining(self) -> float:
         return self.deadline - self.now()
@@ -118,7 +126,8 @@ class Destination:
     implement ``deliver`` (and ``check``)."""
 
     type_name: ClassVar[str] = ""
-    idempotency: ClassVar[Literal["per-batch", "per-attempt"]] = "per-batch"
+    idempotency: ClassVar[Literal["per-batch", "per-attempt", "per-event"]] = "per-batch"
+    unwrap: bool = False         # True: one request per event, body = the stored payload (see unwrap_deliver)
     default_timeout_s: ClassVar[float] = 30.0
     default_max_body_bytes: ClassVar[int | None] = None
 

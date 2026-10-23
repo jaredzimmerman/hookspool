@@ -139,7 +139,7 @@ Indexes: `(route, key, state)` for the open-batch lookup; `(state, next_attempt_
 ### `attempts`
 One row per try, written *before* the request is made and completed after.
 
-`id, batch_id, n, destination, started_at, finished_at, outcome (ok|retry|dead|discarded), klass, status (HTTP code or exit code), error, duration_ms, probe (0/1), counted (0/1), delivery_id (the webhook-id sent)`. `discarded` means the worker finished after losing its lease and its result was not applied.
+`id, batch_id, n, destination, started_at, finished_at, outcome (ok|retry|dead|discarded), klass, status (HTTP code or exit code), error, duration_ms, probe (0/1), counted (0/1), delivery_id (the webhook-id sent), events_delivered, failed_event_id`. `discarded` means the worker finished after losing its lease and its result was not applied. `events_delivered` and `failed_event_id` (schema 2) are set only for an `unwrap` delivery (section 6.4): how many events this attempt delivered, in order, and the event whose request failed; ids and counts only, never a body.
 
 ### `destinations`
 Runtime state, one row per destination name (created on first use).
@@ -260,7 +260,7 @@ Consequences to know: `immediate` still coalesces whatever arrives within one po
 
 **Replay** sets `not_before = now`; a batch with `not_before` in the future is not a candidate.
 
-**Hermes' `coalesce` route option and `events` filter must be off** for routes fed by hookspool; `hookspool check` reads `subscriptions_path` and fails if either is set on a route a hookspool destination feeds.
+**Hermes' `coalesce` route option and `events` filter must be off** for routes fed by hookspool; `hookspool check` reads `subscriptions_path` and fails if either is set on a route a hookspool destination feeds. The exception is an `unwrap` destination (section 6.4): it sends original events one by one, which is what the gateway's filter and coalescing were written for, so `check` allows both there.
 
 ---
 
@@ -300,9 +300,10 @@ User-Agent:          hookspool/<version>
 
 The signing key is the destination's secret: if it starts with `whsec_` the rest is base64-decoded, otherwise the raw UTF-8 bytes are used (both are what Hermes and Standard Webhooks receivers expect). Multiple signatures (space-separated) are emitted during a secret rotation when the destination lists `secret_previous`.
 
-`delivery_id` is fixed by the destination **type** (there is no per-destination setting):
+`delivery_id` is fixed by the destination **type** and its delivery mode (there is no per-destination id setting):
 
 - `http`, `script`: **per batch**, `hs_<instance_id>_<batch_id>`, identical on every attempt, as Standard Webhooks intends. A receiver that keeps ids dedups a lease-expiry redelivery.
+- `hermes` or `http` with `unwrap = true`: **per event**, `hs_<instance_id>_<batch_id>_<event id>`, identical on every attempt (section 6.4.1).
 - `hermes`: **per attempt**, `hs_<instance_id>_<batch_id>_<attempt_id>`. Hermes records a delivery id *before* it runs a route and answers `200 status=duplicate` for an hour afterwards; `duplicate` is proof of admission, not of processing. With a per-batch id the sequence "Hermes admits, crashes before running, we see 502, we retry, Hermes says duplicate, we mark delivered" loses the batch. A fresh id per attempt keeps at-least-once true at the cost of a possible double wake-up after a dispatcher crash between the gateway's 200 and the mark. Routes that must not run twice dedup on `X-Hookspool-Batch` (stable per batch) on the Hermes side, where the admit-vs-process gap is theirs to close.
 
 The document body (identical for Hermes, scripts and HTTP):
@@ -318,6 +319,17 @@ The document body (identical for Hermes, scripts and HTTP):
 ```
 
 `events` and `event_meta` are frozen at seal and are what `content_hash` covers; `delivery_id`, `attempt` and the headers change per attempt by design. `event_type` is the last event's type and `event_types` counts every type in the batch (so a receiver can see mixed batches instead of guessing from one field); a source's `event_header` (the GitHub example sets `X-GitHub-Event`) carries `event_type` as a header. `summary` is a plain count line, never an interpretation. Excluded events are omitted from both arrays.
+
+#### 6.4.1 Unwrap: one request per event
+
+Some receivers expect the sender's original payload, one request per event, not the document: a Hermes route whose prompt template reads `{pull_request.title}`, or an endpoint written for the sender itself. A `hermes` or `http` destination with `unwrap = true` (default `false`) keeps every promise above (commit before ack, retry until accepted, the breaker, issues) and changes only the wire:
+
+- **Requests.** A batch is delivered as one POST per event, in `events.id` order. The body is the event's stored payload, byte for byte as the spool holds it (`events.payload`), never the document and never a re-encoding. The dispatcher reads those bytes with the document and hands them to the destination in `ctx.payloads`; the destination's `max_body_bytes` then applies to each event, not to the document.
+- **Headers.** The Standard Webhooks headers with a per-event `webhook-id` `hs_<instance_id>_<batch_id>_<event id>`, the same on every attempt; `X-Hub-Signature-256` over that body (the route secret for `hermes`, the current `secret` for `http`); `X-Hookspool-Batch` and `X-Hookspool-Attempt` as usual. `event_header` (a destination option; a `hermes` destination without it falls back to the source's `event_header`) carries the event's `event_type`, and `dedup_header` carries its `dedup_id` when it has one (the GitHub case: `X-GitHub-Event`, `X-GitHub-Delivery`). Both are refused by `check` when they name a header hookspool sets, and a value that cannot go on the wire is left out.
+- **Outcome.** The batch is `ok` only when every event's request was (2xx; for Hermes `delivered`, `accepted`, `duplicate`, and also `ignored` and `coalesced`). On the first failure the attempt stops and its outcome is classified exactly as a document's would be (transport, throttle, config, permanent; section 6.5), so the whole batch retries, trips the breaker or goes dead as usual. The retry starts again at the first event: events the receiver already accepted are re-sent with the same id and answered `duplicate` by a receiver that keeps ids, and no event is ever sent before an earlier one of its batch has been accepted. The attempt row records `events_delivered` and `failed_event_id`; reasons and details carry ids and counts, never a body.
+- **Idempotency trade-off.** A per-event id is stable, so the admit-vs-process gap described above for Hermes is the receiver's again: a gateway that admits an event, then crashes before running it, will answer `duplicate` to the retry. That is the price of letting the receiver's duplicate detection make a replay safe, which is what a route reading original events needs; use the document mode where a lost wake-up is worse than a double one.
+- **Hermes answers.** `ignored` (the route's own `events` filter) and `coalesced` (its own `coalesce`) are expected when the gateway sees original events, so they are `ok` without a notice or an issue. `check` does not fail on a route's `events` or `coalesce` when its destination unwraps (section 5).
+- **Coalescing.** Unwrap is meant for routes with coalescing off (`quiet_s = max_s = 0`, the `immediate` span), so each event is its own batch. With a window, every event of the batch is still delivered, in order, and the receiver gets them as a burst; `check` warns but does not fail. All the requests of one attempt share the attempt's deadline (section 6.2); a batch that runs out of time resumes on the next attempt, its accepted events answered `duplicate`.
 
 ### 6.5 Retry, backoff and the attempt counter
 
@@ -586,17 +598,19 @@ class Destination(Protocol):
     name: str                                     # "hermes:github-ci"
     timeout_s: float
     max_body_bytes: int                           # what the receiver accepts; `check` bounds max_bytes by it
-    idempotency: Literal["per-batch", "per-attempt"]   # fixed by the type, not configurable
+    idempotency: Literal["per-batch", "per-attempt", "per-event"]   # fixed by the type ("per-event": unwrap)
+    unwrap: bool                                  # one request per event; ctx.payloads holds the stored bodies
     def deliver(self, doc: dict, body: bytes, delivery_id: str, ctx: DeliveryContext) -> Outcome: ...
     def check(self) -> list[str]:                 # config/secret problems for `hookspool check`
 ```
 
-`ctx.deadline` is the worker deadline (`lease_until - 5 s`); `deliver` must not outlive it. `Outcome(kind: "ok"|"retry"|"dead", klass: "transport"|"throttle"|"batch"|"config"|"permanent"|None, status: int|None, reason: str, detail: str, retry_after_s: float|None, emits: list[dict], notice: str|None)`. `reason` is safe for logs and alerts; `detail` is stored in `last_error` (scrubbed to 500 chars) and never logged; `notice` (for example Hermes `ignored`) opens an issue without changing the outcome.
+`ctx.deadline` is the worker deadline (`lease_until - 5 s`); `deliver` must not outlive it. `Outcome(kind: "ok"|"retry"|"dead", klass: "transport"|"throttle"|"batch"|"config"|"permanent"|None, status: int|None, reason: str, detail: str, retry_after_s: float|None, emits: list[dict], notice: str|None, events_delivered: int|None, failed_event_id: int|None)`; the last two are an unwrap delivery's per-event progress, stored on the attempt row. `reason` is safe for logs and alerts; `detail` is stored in `last_error` (scrubbed to 500 chars) and never logged; `notice` (for example Hermes `ignored`) opens an issue without changing the outcome.
 
 - **`hermes`**: POSTs the document to `<base_url>/p/<profile>/webhooks/<route>` (or `/webhooks/<route>` without a profile), with the headers of section 6.4. The route secret and profile are read fresh from `subscriptions_path` on each attempt (rotation without restart). 2xx is `ok`; Hermes `status` `ignored` or `coalesced` adds a `notice`. 401, 403, 404 are `config` with pointed reasons (`bad secret`, `unknown route`); 413 is `permanent`. `max_body_bytes` defaults to 1 MiB, Hermes' own default (`max_body_bytes` in its webhook platform config). Idempotency per attempt, `max_inflight = 2`.
 - **Status mapping shared by `hermes` and `http`** (section 6.5 is the table): any 4xx not named there (409, 418, ...) is `config`, because it needs a person and must never be dropped; 408 is `transport`; a 3xx is never followed and is `permanent` on `http` but `config` on `hermes` (the base URL is wrong, not the document); a TLS certificate failure is `config`. Every request is bounded in total time by `min(timeout_s, ctx.deadline)`, DNS and connect included, with a watchdog, so a stalled or dripping receiver cannot hold a worker past its lease.
 - **`script`**: section 6.6. Idempotency per batch, `max_inflight = 1`, `max_body_bytes` unbounded by default. Stdout over 1 MiB fails the attempt (`batch`) instead of truncating, since a truncated tail would silently lose emits. `HOOKSPOOL_STATE_DIR` is set (and the directory created) when `state_dir` is configured.
 - **`http`**: any URL, Standard Webhooks headers, `secret` ref, optional extra static headers, `allow_insecure`. Idempotency per batch, `max_inflight = 4`, `max_body_bytes` set in config (default 1 MiB).
+- **`unwrap`** (`hermes` and `http`): `unwrap = true` sends one request per event with the event's stored payload as the body, plus the optional `event_header` and `dedup_header`; idempotency is then per event (`idempotency = "per-event"`, section 6.4.1).
 
 Action strings keep the C0 shorthand: `hermes:<route>` and `script:<name>` resolve to implicit destinations named the same; `[destinations.<name>]` tables define `http` destinations and override defaults for implicit ones. `quarantine` is a reserved destination name that never delivers.
 

@@ -33,7 +33,7 @@ def test_cli_round_trip(home, capsys, monkeypatch):
     assert run(capsys, "status")[0] == 2                                  # no spool yet
     assert not os.path.exists(home / "spool.db")                          # a status probe never creates it
     rc, out, _ = run(capsys, "migrate")
-    assert rc == 0 and "applied [1]" in out
+    assert rc == 0 and "applied [1, 2]" in out
     assert run(capsys, "migrate")[1].strip() == "schema is current"
     payload = json.dumps({"n": 1, "note": SENTINEL})
     for i in range(4):
