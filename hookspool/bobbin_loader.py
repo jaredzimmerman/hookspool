@@ -1,8 +1,8 @@
-"""Service packages (ARCHITECTURE §14.3): discovery, manifests, and expansion into ordinary tables.
+"""Bobbins (ARCHITECTURE §14.3): discovery, manifests, and expansion into ordinary tables.
 
-A service package is one directory with a ``service.toml`` manifest, an optional ``source.py``
-and ``processor.py``, captures and a README. Built-in packages live under ``hookspool/services/``;
-``[packages].path`` adds directories searched after them. A ``[services.<instance>]`` table
+A bobbin is one directory with a ``bobbin.toml`` manifest, an optional ``source.py``
+and ``processor.py``, captures and a README. Built-in packages live under ``hookspool/bobbins/``;
+``[spool].path`` adds directories searched after them. A ``[bobbins.<instance>]`` table
 enables a package; ``expand`` turns every instance into a ``[sources.<instance>]`` table, a
 ``[destinations."script:<instance>"]`` table when the package has a processor, and ``[[routes]]``
 for a multi-output package without one. ``load_config`` calls ``expand``, so the rest of
@@ -32,11 +32,11 @@ EVENT_TYPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 ENV_NAME_RE = _config.ENV_NAME_RE
 SETTING_TYPES = ("string", "int", "bool", "list", "path")
 ALL_OUTPUTS = "*"
-MANIFEST = "service.toml"
-BUILTIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "services")
+MANIFEST = "bobbin.toml"
+BUILTIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bobbins")
 BUILTIN = "built-in"
-BUILTIN_MODULE = "hookspool.services"
-PATH_MODULE_PREFIX = "_hookspool_services."       # private names for code loaded by file path
+BUILTIN_MODULE = "hookspool.bobbins"
+PATH_MODULE_PREFIX = "_hookspool_bobbins."       # private names for code loaded by file path
 TEMPLATE_MODULE = "hookspool.sources.template"
 PROCESSOR_MODULE = "hookspool.processor"
 DEFAULT_PROCESSOR_TIMEOUT_S = 300
@@ -47,11 +47,10 @@ SECRET_KEYS = {"description", "processor"}
 SETTING_KEYS = {"description", "type", "required", "default"}
 PROCESSOR_KEYS = {"module", "timeout_s", "state"}
 OUTPUT_KEYS = {"description"}
-PACKAGES_KEYS = {"path"}
 # window, liveness, dedup and body overrides copied onto the expanded source table
 SOURCE_OVERRIDES = ("span", *_config.WINDOW_FIELDS, "expect_every_s", "dedup_window_s", "max_body_bytes")
 PROCESSOR_OVERRIDES = ("timeout_s", "state_dir")
-INSTANCE_KEYS = {"package", "secrets", "settings", "outputs", "expect", *SOURCE_OVERRIDES, *PROCESSOR_OVERRIDES}
+INSTANCE_KEYS = {"bobbin", "secrets", "settings", "outputs", "expect", *SOURCE_OVERRIDES, *PROCESSOR_OVERRIDES}
 # keys of a manifest's source template that the instance or the manifest's own [source] sets
 _TEMPLATE_RESERVED = {"module", "action", "secrets", "span", "expect_every_s", "dedup_window_s", "max_body_bytes",
                       *_config.WINDOW_FIELDS}
@@ -59,8 +58,8 @@ HOOKS_SETTING = "hooks"
 ENV_SECRET_REFS = "HOOKSPOOL_SECRET_REFS"
 
 
-class PackageError(_config.ConfigError):
-    """One or more ``[services]`` / ``[packages]`` problems; ``errors`` lists every one."""
+class BobbinError(_config.ConfigError):
+    """One or more ``[bobbins]`` / ``[spool]`` problems; ``errors`` lists every one."""
 
     def __init__(self, errors: list[str]):
         super().__init__("; ".join(errors))
@@ -72,7 +71,7 @@ class PackageError(_config.ConfigError):
 class Package:
     name: str
     dir: str
-    origin: str                                   # "built-in" or the packages.path directory
+    origin: str                                   # "built-in" or the spool.bobbin_path directory
     manifest: dict = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
@@ -121,8 +120,8 @@ class Package:
         return os.path.join(self.dir, f"{module}.py")
 
     def code_module(self, module: str) -> str:
-        """The import name of a module of this package: ``hookspool.services.<pkg>.<mod>`` for a
-        built-in, a private name loaded by file path for a package under ``packages.path``."""
+        """The import name of a module of this package: ``hookspool.bobbins.<pkg>.<mod>`` for a
+        built-in, a private name loaded by file path for a package under ``spool.bobbin_path``."""
         if self.builtin:
             return f"{BUILTIN_MODULE}.{os.path.basename(self.dir)}.{module}"
         return f"{PATH_MODULE_PREFIX}{self.module_name}.{module}"
@@ -248,7 +247,7 @@ def validate_manifest(m: Any, dirname: str, spans: dict) -> list[str]:
     if proc is not None and unknown("processor", proc, PROCESSOR_KEYS):
         mod = proc.get("module", "processor")
         if mod != "processor":
-            errs.append("processor.module: must be \"processor\" (processor.py in the package)")
+            errs.append("processor.module: must be \"processor\" (processor.py in the bobbin)")
         t = proc.get("timeout_s")
         if t is not None and (isinstance(t, bool) or not isinstance(t, (int, float)) or t <= 0):
             errs.append("processor.timeout_s: must be a number > 0")
@@ -306,7 +305,7 @@ def load_package(pkg_dir: str, origin: str, spans: dict) -> Package:
 
 # ---- discovery -------------------------------------------------------------------------------------------
 def package_dirs(cfg: dict) -> list[tuple[str, str]]:
-    """(directory, origin) in search order: the built-ins, then each ``packages.path`` entry."""
+    """(directory, origin) in search order: the built-ins, then each ``spool.bobbin_path`` entry."""
     out = [(BUILTIN_DIR, BUILTIN)]
     for p in _path_list(cfg):
         out.append((p, p))
@@ -314,7 +313,7 @@ def package_dirs(cfg: dict) -> list[tuple[str, str]]:
 
 
 def _path_list(cfg: dict) -> list[str]:
-    p = (cfg.get("packages") or {}).get("path") if isinstance(cfg.get("packages"), dict) else None
+    p = (cfg.get("spool") or {}).get("bobbin_path") if isinstance(cfg.get("spool"), dict) else None
     if isinstance(p, list):
         return [x for x in p if isinstance(x, str)]
     return []
@@ -322,22 +321,15 @@ def _path_list(cfg: dict) -> list[str]:
 
 def _packages_table_errors(cfg: dict) -> list[str]:
     errs: list[str] = []
-    pk = cfg.get("packages")
-    if pk is None:
-        return errs
-    if not isinstance(pk, dict):
-        return ["packages: must be a table"]
-    for k in pk:
-        if k not in PACKAGES_KEYS:
-            errs.append(f"packages.{k}: unknown key")
-    p = pk.get("path")
+    sp = cfg.get("spool")
+    p = sp.get("bobbin_path") if isinstance(sp, dict) else None
     if p is not None:
         if not isinstance(p, list) or not all(isinstance(x, str) for x in p):
-            errs.append("packages.path: must be a list of absolute directory paths")
+            errs.append("spool.bobbin_path: must be a list of absolute directory paths")
         else:
             for x in p:
                 if not os.path.isabs(x):
-                    errs.append(f"packages.path: {x!r} must be an absolute path")
+                    errs.append(f"spool.bobbin_path: {x!r} must be an absolute path")
     return errs
 
 
@@ -347,12 +339,12 @@ def _spans(cfg: dict) -> dict:
 
 
 def discover_tagged(cfg: dict) -> tuple[dict[str, Package], list[tuple[frozenset | None, str]]]:
-    """Every package found (built-ins first, then ``packages.path`` in order) and every problem.
+    """Every package found (built-ins first, then ``spool.bobbin_path`` in order) and every problem.
 
-    A package that shares a name with a built-in, or with an earlier ``packages.path`` package, is
+    A package that shares a name with a built-in, or with an earlier ``spool.bobbin_path`` package, is
     refused; so are two packages whose names differ only by ``-``/``_`` (they would share a module
-    name). Manifest problems are reported as ``service <name>: ...``; the package is still returned
-    (with ``errors``) so ``service list`` can show it.
+    name). Manifest problems are reported as ``bobbin <name>: ...``; the package is still returned
+    (with ``errors``) so ``bobbin list`` can show it.
     """
     errs: list[tuple[frozenset | None, str]] = [(None, e) for e in _packages_table_errors(cfg)]
     spans = _spans(cfg)
@@ -363,12 +355,12 @@ def discover_tagged(cfg: dict) -> tuple[dict[str, Package], list[tuple[frozenset
             continue
         if not os.path.isdir(root):
             if origin != BUILTIN:
-                errs.append((None, f"packages.path: {root} is not a directory"))
+                errs.append((None, f"spool.bobbin_path: {root} is not a directory"))
             continue
         try:
             entries = sorted(os.listdir(root))
         except OSError as e:
-            errs.append((None, f"packages.path: cannot list {root} ({e.__class__.__name__})"))
+            errs.append((None, f"spool.bobbin_path: cannot list {root} ({e.__class__.__name__})"))
             continue
         for d in entries:
             pkg_dir = os.path.join(root, d)
@@ -376,7 +368,7 @@ def discover_tagged(cfg: dict) -> tuple[dict[str, Package], list[tuple[frozenset
                 continue
             pkg = load_package(pkg_dir, origin, spans)
             mod = pkg.name.replace("-", "_")
-            where = f"service {pkg.name} ({pkg.dir})"
+            where = f"bobbin {pkg.name} ({pkg.dir})"
             prev = by_module.get(mod)
             if pkg.name in found:
                 first = found[pkg.name]
@@ -395,7 +387,7 @@ def discover_tagged(cfg: dict) -> tuple[dict[str, Package], list[tuple[frozenset
                              f" ({prev.dir}) only by '-'/'_'; the two would share a module name"))
                 continue
             for e in pkg.errors:
-                errs.append((frozenset({pkg.name}), f"service {pkg.name}: {e}"))
+                errs.append((frozenset({pkg.name}), f"bobbin {pkg.name}: {e}"))
             found[pkg.name] = pkg
             by_module[mod] = pkg
     return found, errs
@@ -444,13 +436,13 @@ def register_path_module(name: str, file: str, pkg_dir: str) -> None:
 
 
 def load_path_module(name: str):
-    """Load a ``packages.path`` package's module by file path under its private name (never
+    """Load a ``spool.bobbin_path`` package's module by file path under its private name (never
     through ``sys.path``). Loaded again when the file changes, so an intake reload picks up
     edited source code. Refuses code that fails the ownership rules."""
     with _LOAD_LOCK:
         entry = _PATH_MODULES.get(name)
         if entry is None:
-            raise ImportError(f"{name}: no service package provides this module (is it in packages.path?)")
+            raise ImportError(f"{name}: no bobbin provides this module (is it in spool.bobbin_path?)")
         file, pkg_dir = entry
         for p, want in ((pkg_dir, "dir"), (file, "file")):
             problem = code_path_problem(p, want=want)
@@ -547,7 +539,7 @@ def _outputs_for(pkg: Package, given: Any, where: str, errs: list[str]) -> dict:
 
 def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home: str,
                 errs: list[str]) -> tuple[dict, dict | None, list[dict], dict] | None:
-    where = f"services.{inst}"
+    where = f"bobbins.{inst}"
     if not INSTANCE_RE.match(inst):
         errs.append(f"{where}: the instance name must match {INSTANCE_RE.pattern} (it is the URL /hooks/<instance>)")
         return None
@@ -558,13 +550,13 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
     for k in spec:
         if k not in INSTANCE_KEYS:
             errs.append(f"{where}.{k}: unknown key")
-    pname = spec.get("package", inst)
+    pname = spec.get("bobbin", inst)
     if not isinstance(pname, str) or pname not in pkgs:
-        errs.append(f"{where}.package: unknown package {pname!r} (see `hookspool service list`)")
+        errs.append(f"{where}.bobbin: unknown package {pname!r} (see `hookspool bobbin list`)")
         return None
     pkg = pkgs[pname]
     if pkg.errors:
-        errs.append(f"{where}: package {pname!r} is invalid (see the service {pname} errors)")
+        errs.append(f"{where}: package {pname!r} is invalid (see the bobbin {pname} errors)")
         return None
     settings = _settings_for(pkg, spec.get("settings"), where, errs)
     secrets = _secrets_for(pkg, spec.get("secrets"), where, errs)
@@ -616,9 +608,9 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
         elif "state_dir" in spec:
             errs.append(f"{where}.state_dir: package {pname!r} keeps no state")
         dest["env"] = {
-            "HOOKSPOOL_SERVICE_PACKAGE": pkg.name,
-            "HOOKSPOOL_SERVICE_INSTANCE": inst,
-            "HOOKSPOOL_SERVICE_DIR": pkg.dir,
+            "HOOKSPOOL_BOBBIN": pkg.name,
+            "HOOKSPOOL_BOBBIN_INSTANCE": inst,
+            "HOOKSPOOL_BOBBIN_DIR": pkg.dir,
             "HOOKSPOOL_SETTINGS": _env_json(settings),
             "HOOKSPOOL_DELTA_ROUTES": _env_json(outputs),
             ENV_SECRET_REFS: _env_json({k: secrets[k] for k in proc_secrets if k in secrets}),
@@ -649,7 +641,7 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
     hdecl = pkg.settings.get(HOOKS_SETTING)
     if isinstance(hdecl, dict) and hdecl.get("type") == "path" and settings.get(HOOKS_SETTING):
         hooks = settings[HOOKS_SETTING]
-    meta = {"package": pkg.name, "dir": pkg.dir, "origin": pkg.origin, "processor": proc is not None,
+    meta = {"bobbin": pkg.name, "dir": pkg.dir, "origin": pkg.origin, "processor": proc is not None,
             "source": inst, "destination": f"script:{inst}" if proc is not None else None,
             "routes": [r["name"] for r in routes], "processor_secrets": proc_secrets, "hooks": hooks,
             "outputs": dict(outputs)}
@@ -659,26 +651,26 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
 
 
 def expand(cfg: dict, *, cli_home: str | None = None) -> dict:
-    """``cfg`` with every ``[services.<instance>]`` expanded into ordinary tables (§14.3.3).
+    """``cfg`` with every ``[bobbins.<instance>]`` expanded into ordinary tables (§14.3.3).
 
-    Returns a new dict; raises ``PackageError`` listing every problem. A config without
-    ``[services]`` comes back unchanged (``_services`` is empty)."""
+    Returns a new dict; raises ``BobbinError`` listing every problem. A config without
+    ``[bobbins]`` comes back unchanged (``_bobbins`` is empty)."""
     errs = _packages_table_errors(cfg)
-    services = cfg.get("services")
+    services = cfg.get("bobbins")
     out = copy.deepcopy(cfg)
-    out["_services"] = {}
+    out["_bobbins"] = {}
     if services is None or services == {}:
         if errs:
-            raise PackageError(errs)
+            raise BobbinError(errs)
         return out
     if not isinstance(services, dict):
-        raise PackageError(errs + ["services: must be a table of [services.<instance>] tables"])
+        raise BobbinError(errs + ["bobbins: must be a table of [bobbins.<instance>] tables"])
     if errs:
-        raise PackageError(errs)
+        raise BobbinError(errs)
     pkgs, tagged = discover_tagged(cfg)
     # loading fails only on problems that concern a package in use (or the search path itself);
     # `check` reports the rest, so a broken unused package never stops a running deployment
-    used = {str(s.get("package", i)) if isinstance(s, dict) else str(i) for i, s in services.items()}
+    used = {str(s.get("bobbin", i)) if isinstance(s, dict) else str(i) for i, s in services.items()}
     errs.extend(m for names, m in tagged if names is None or names & used)
     home = _config.home_dir(cfg, cli_home)
     sources = out.get("sources") if isinstance(out.get("sources"), dict) else {}
@@ -688,7 +680,7 @@ def expand(cfg: dict, *, cli_home: str | None = None) -> dict:
     gen_routes: list[dict] = []
     for inst, spec in services.items():
         if inst in sources:
-            errs.append(f"sources.{inst}: also defined by [services.{inst}]; remove one (an expansion is never"
+            errs.append(f"sources.{inst}: also defined by [bobbins.{inst}]; remove one (an expansion is never"
                         " silently overridden)")
             continue
         res = _expand_one(cfg, inst, spec, pkgs, home, errs)
@@ -696,20 +688,20 @@ def expand(cfg: dict, *, cli_home: str | None = None) -> dict:
             continue
         src, dest, routes, meta = res
         if dest is not None and meta["destination"] in dests:
-            errs.append(f"destinations.\"{meta['destination']}\": also defined by [services.{inst}] (its processor);"
+            errs.append(f"destinations.\"{meta['destination']}\": also defined by [bobbins.{inst}] (its processor);"
                         " remove the table")
             continue
         clash = [r["name"] for r in routes if r["name"] in file_route_names]
         if clash:
-            errs.append(f"routes.{clash[0]}: also generated by [services.{inst}] for its output; rename the route")
+            errs.append(f"routes.{clash[0]}: also generated by [bobbins.{inst}] for its output; rename the route")
             continue
         sources[inst] = src
         if dest is not None:
             dests[meta["destination"]] = dest
         gen_routes.extend(routes)
-        out["_services"][inst] = meta
+        out["_bobbins"][inst] = meta
     if errs:
-        raise PackageError(errs)
+        raise BobbinError(errs)
     out["sources"] = sources
     out["destinations"] = dests
     out["routes"] = gen_routes + list(file_routes)
@@ -720,38 +712,38 @@ def expand(cfg: dict, *, cli_home: str | None = None) -> dict:
 def check(cfg: dict, rep) -> None:
     """The package rules of ``hookspool check`` (§14.3.2, 14.3.3, 14.3.6) on an expanded config.
     Adds to ``rep`` (a ``config.Report``)."""
-    services = cfg.get("services")
-    metas = cfg.get("_services")
+    services = cfg.get("bobbins")
+    metas = cfg.get("_bobbins")
     if services and metas is None:
         try:
             cfg = expand(cfg)
-        except PackageError as e:
+        except BobbinError as e:
             for m in e.errors:
                 rep.err(m)
             return
-        metas = cfg["_services"]
+        metas = cfg["_bobbins"]
     metas = metas or {}
-    if not services and not cfg.get("packages"):
+    if not services and not _path_list(cfg):
         return
     pkgs, errs = discover(cfg)
     for e in errs:
         rep.err(e)
 
-    # code loaded by path: the packages.path directories, the packages in use, hooks modules
+    # code loaded by path: the spool.bobbin_path directories, the packages in use, hooks modules
     for p in _path_list(cfg):
         problem = code_path_problem(p, want="dir") if os.path.isdir(p) else None
         if problem:
-            rep.err(f"packages.path: {problem}")
+            rep.err(f"spool.bobbin_path: {problem}")
     for inst, meta in metas.items():
         if meta.get("origin") != BUILTIN:
-            for p in [meta["dir"], *Package(meta["package"], meta["dir"], meta["origin"]).code_files()]:
+            for p in [meta["dir"], *Package(meta["bobbin"], meta["dir"], meta["origin"]).code_files()]:
                 problem = code_path_problem(p)
                 if problem:
-                    rep.err(f"services.{inst}: package code {problem}")
+                    rep.err(f"bobbins.{inst}: package code {problem}")
         if meta.get("hooks"):
             problem = code_path_problem(meta["hooks"], want="file")
             if problem:
-                rep.err(f"services.{inst}.settings.{HOOKS_SETTING}: {problem}")
+                rep.err(f"bobbins.{inst}.settings.{HOOKS_SETTING}: {problem}")
 
     for inst, meta in metas.items():
         if meta.get("routes"):
@@ -769,18 +761,18 @@ def check(cfg: dict, rep) -> None:
             d = r.get("destination")
             if d is not None and d != dname:
                 rep.err(f"routes.{r.get('name')}: sends {inst} events to {d}, bypassing the package's processor"
-                        f" ({dname}); route its outputs with [services.{inst}].outputs, or make it a tee")
+                        f" ({dname}); route its outputs with [bobbins.{inst}].outputs, or make it a tee")
         for et, d in (meta.get("outputs") or {}).items():
             e = _config._action_ok(cfg, d)
             if e is None and d.startswith("script:") and d not in (cfg.get("destinations") or {}):
                 e = f"no [destinations.\"{d}\"] table"
             if e:
-                rep.err(f"services.{inst}.outputs.{et}: {e}")
+                rep.err(f"bobbins.{inst}.outputs.{et}: {e}")
         sec = ((cfg.get("sources") or {}).get(inst) or {}).get("secrets") or {}
         for name in meta.get("processor_secrets") or ():
             ref = sec.get(name)
             if isinstance(ref, dict) and "env" in ref:
-                rep.err(f"services.{inst}.secrets.{name}: the processor needs this secret and does not inherit the"
+                rep.err(f"bobbins.{inst}.secrets.{name}: the processor needs this secret and does not inherit the"
                         " dispatcher's environment; use a file or env_file reference")
 
 
@@ -799,15 +791,15 @@ def _warn_no_event_type_attr(cfg: dict, inst: str, rep) -> None:
             return
         ok = getattr(getattr(plugin, "module", plugin), "attrs", None) is not None
     if not ok:
-        rep.warn(f"services.{inst}: its source does not expose event_type in attrs, so the generated routes"
+        rep.warn(f"bobbins.{inst}: its source does not expose event_type in attrs, so the generated routes"
                  " (one per output) never match and every event reaches the \"*\" output")
 
 
 def is_expanded_destination(cfg: dict, name: str) -> bool:
-    return any(m.get("destination") == name for m in (cfg.get("_services") or {}).values())
+    return any(m.get("destination") == name for m in (cfg.get("_bobbins") or {}).values())
 
 
-# ---- TOML output (service expand) ------------------------------------------------------------------------
+# ---- TOML output (bobbin expand) ------------------------------------------------------------------------
 _BARE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -850,14 +842,14 @@ def _table(header: str, t: dict, *, array: bool = False) -> list[str]:
 def render(cfg: dict, instance: str | None = None) -> str:
     """The expanded tables of one instance (or all), as TOML. Secret references stay
     references; ``HOOKSPOOL_SECRET_REFS`` is shown by secret name only. No value is read."""
-    metas = cfg.get("_services") or {}
+    metas = cfg.get("_bobbins") or {}
     names = [instance] if instance is not None else list(metas)
     out: list[str] = []
     for inst in names:
         meta = metas[inst]
         if out:
             out.append("")
-        out.append(f"# [services.{inst}]: package {meta['package']} ({meta['origin']})")
+        out.append(f"# [bobbins.{inst}]: package {meta['bobbin']} ({meta['origin']})")
         out.extend(_table(f"sources.{_key(inst)}", cfg["sources"][inst]))
         if meta.get("destination"):
             d = copy.deepcopy(cfg["destinations"][meta["destination"]])
@@ -874,7 +866,7 @@ def render(cfg: dict, instance: str | None = None) -> str:
     return "\n".join(out) + ("\n" if out else "")
 
 
-# ---- scaffold (service new) ------------------------------------------------------------------------------
+# ---- scaffold (bobbin new) ------------------------------------------------------------------------------
 SCAFFOLD_SECRET = "test-secret-scaffold"
 _SCAFFOLD_BODY = '{"id":"evt_1","type":"example","note":"made-up test payload"}'
 

@@ -66,7 +66,7 @@ RESERVED_DESTINATIONS = ("quarantine",)
 
 # Known keys per section. A value of None means "free-form table" (spans, match, headers).
 _SECTION_KEYS: dict[str, set[str]] = {
-    "spool": {"home", "db", "store_raw"},
+    "spool": {"home", "db", "store_raw", "bobbin_path"},
     "intake": {"listen", "max_body_bytes", "busy_timeout_s", "threads"},
     "dispatch": {"parallel", "poll_s", "heartbeat_s", "lease_grace_s", "max_attempts", "backoff_base_s",
                  "backoff_cap_s", "breaker"},
@@ -77,8 +77,8 @@ _SECTION_KEYS: dict[str, set[str]] = {
     "hermes": {"base_url", "subscriptions_path", "timeout_s", "max_body_bytes", "legacy_signature"},
 }
 _BREAKER_KEYS = {"trip_after", "cooldown_initial_s", "cooldown_max_s"}
-_TOP_KEYS = set(_SECTION_KEYS) | {"spans", "sources", "routes", "destinations", "packages", "services"}
-_INTERNAL_KEYS = {"_path", "_services"}          # set by load_config, never read from the file
+_TOP_KEYS = set(_SECTION_KEYS) | {"spans", "sources", "routes", "destinations", "bobbins"}
+_INTERNAL_KEYS = {"_path", "_bobbins"}          # set by load_config, never read from the file
 SOURCE_KEYS = {"module", "span", "secrets", "dedup_window_s", "expect_every_s", "max_body_bytes", "action",
                "keep_headers", "store_raw", "event_header", *WINDOW_FIELDS}
 ROUTE_KEYS = {"name", "source", "match", "destination", "tee", *WINDOW_FIELDS}
@@ -154,8 +154,8 @@ def merge(base: dict, over: dict) -> dict:
 
 
 def parse_toml(text: str, origin: str = "<config>", *, expand: bool = True, cli_home: str | None = None) -> dict:
-    """DEFAULTS merged with the TOML text, with ``[services]`` expanded (ARCHITECTURE §14.3.3)
-    unless ``expand`` is false. An expansion problem raises ``packages.PackageError`` (a
+    """DEFAULTS merged with the TOML text, with ``[bobbins]`` expanded (ARCHITECTURE §14.3.3)
+    unless ``expand`` is false. An expansion problem raises ``bobbin_loader.BobbinError`` (a
     ConfigError whose ``errors`` lists every one)."""
     try:
         data = tomllib.loads(text)
@@ -163,20 +163,20 @@ def parse_toml(text: str, origin: str = "<config>", *, expand: bool = True, cli_
         raise ConfigError(f"{origin} is not valid TOML: {e}") from None
     cfg = merge(DEFAULTS, data)
     if expand:
-        from . import packages      # lazy: packages imports this module
-        cfg = packages.expand(cfg, cli_home=cli_home)
+        from . import bobbin_loader      # lazy: bobbin_loader imports this module
+        cfg = bobbin_loader.expand(cfg, cli_home=cli_home)
     return cfg
 
 
 def load_config(path: str | None = None, *, cli_home: str | None = None, expand: bool = True) -> dict:
-    """DEFAULTS merged with the TOML file, with every ``[services.<instance>]`` expanded into
+    """DEFAULTS merged with the TOML file, with every ``[bobbins.<instance>]`` expanded into
     ordinary source, destination and route tables. A missing file means defaults (no sources).
 
     A file that exists but does not parse, or whose services do not expand, raises
     ConfigError: silently running with defaults would hide a broken deploy. Every caller that
     builds a config from a file (startup, ``check``, the intake's and the dispatcher's reload)
     comes through here, so manifests and package directories are re-read on every load. The
-    returned dict carries ``_path`` (the file that was read, or None) and ``_services``
+    returned dict carries ``_path`` (the file that was read, or None) and ``_bobbins``
     (what each instance expanded to).
     """
     p = path or config_path(None, cli_home)
@@ -186,7 +186,7 @@ def load_config(path: str | None = None, *, cli_home: str | None = None, expand:
     except FileNotFoundError:
         cfg = copy.deepcopy(DEFAULTS)
         cfg["_path"] = None
-        cfg["_services"] = {}
+        cfg["_bobbins"] = {}
         return cfg
     except OSError as e:
         raise ConfigError(f"cannot read config {p}: {e.__class__.__name__}") from None
@@ -484,10 +484,10 @@ def _num(report: Report, where: str, v: Any, *, minimum: float = 0, integer: boo
 
 def default_plugin_loader(name: str, module: str | None):
     """The source plugin module: ``module`` (or ``hookspool.sources.<name>``) by import, or, for a
-    package under ``packages.path``, its private module loaded by file path (never via sys.path)."""
-    from . import packages      # lazy: packages imports this module
-    if module and module.startswith(packages.PATH_MODULE_PREFIX):
-        return packages.load_path_module(module)
+    package under ``spool.bobbin_path``, its private module loaded by file path (never via sys.path)."""
+    from . import bobbin_loader      # lazy: bobbin_loader imports this module
+    if module and module.startswith(bobbin_loader.PATH_MODULE_PREFIX):
+        return bobbin_loader.load_path_module(module)
     return importlib.import_module(module or f"hookspool.sources.{name}")
 
 
@@ -787,8 +787,8 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
     for d in sorted(used_dests):
         if d.startswith("script:") and d not in dests:
             rep.err(f"destination {d}: no [destinations.\"{d}\"] table with argv")
-    from . import packages      # lazy: packages imports this module
-    packages.check(cfg, rep)
+    from . import bobbin_loader      # lazy: bobbin_loader imports this module
+    bobbin_loader.check(cfg, rep)
     for src, route, dest in feeds:
         w = window_for(cfg, src, route if route != src else None,
                        plugin_span=getattr(plugins.get(src), "span", None))
@@ -842,14 +842,14 @@ ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 def _check_script(rep: Report, cfg: dict, name: str, where: str, d: dict) -> None:
     """``argv`` or ``processor`` (exactly one), and the ``env`` table, of a script destination."""
-    from . import packages      # lazy: packages imports this module
-    expanded = packages.is_expanded_destination(cfg, name)
+    from . import bobbin_loader      # lazy: bobbin_loader imports this module
+    expanded = bobbin_loader.is_expanded_destination(cfg, name)
     proc = d.get("processor")
     if proc is not None:
         if "argv" in d:
             rep.err(f"{where}: argv and processor are exclusive (processor builds the argv)")
         if not expanded:
-            rep.err(f"{where}.processor: set only by a [services.<instance>] expansion")
+            rep.err(f"{where}.processor: set only by a [bobbins.<instance>] expansion")
         elif not (isinstance(proc, str) and proc):
             rep.err(f"{where}.processor: must be the instance name")
     else:
