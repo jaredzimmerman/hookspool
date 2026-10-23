@@ -33,7 +33,6 @@ import json
 import logging
 import os
 import sqlite3
-import tomllib
 import types
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -41,6 +40,7 @@ from typing import Any, Callable
 
 import pytest
 
+from hookspool import bobbin_loader as hs_bobbins
 from hookspool import config as hs_config
 from hookspool import intake as hs_intake
 from hookspool import logs as hs_logs
@@ -53,8 +53,8 @@ CAPTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BOBBINS = os.path.join(ROOT, "hookspool", "bobbins")
 TEMPLATE_MODULE = "hookspool.sources.template"
-# The instance settings a template bobbin needs for its sample instance. The loader does not yet map
-# [settings] into [source.template] (14.3.2a), so bobbin_source_cfg carries them across by hand.
+# The settings a template bobbin's sample instance is given: the table an operator writes under
+# [bobbins.<name>]. bobbin_source_cfg expands them through the loader (14.3.2a), like production does.
 SAMPLE_SETTINGS = {"trello": {"callback_url": "https://hooks.example.test/hooks/trello"}}
 
 
@@ -451,18 +451,12 @@ def bobbin_manifest(name: str) -> str:
 
 
 def bobbin_source_cfg(name: str) -> dict:
-    """The [sources.<name>] table a template bobbin expands to for its sample instance, built from the
-    manifest without running expansion. Secrets are a placeholder reference; callers drop them."""
-    with open(bobbin_manifest(name), "rb") as f:
-        m = tomllib.load(f)
-    src = m["source"]
-    cfg = {"module": TEMPLATE_MODULE, **src["template"], **SAMPLE_SETTINGS.get(name, {})}
-    for k in ("span", "sender_retries"):
-        if k in src:
-            cfg[k] = src[k]
-    cfg["action"] = f"hermes:{name}"
-    cfg["secrets"] = {"secret": {"file": f"/etc/hookspool/secrets/{name}"}}
-    return cfg
+    """The [sources.<name>] table a template bobbin expands to for its sample instance, produced by the
+    loader's own expansion (14.3.3). Secrets are a placeholder reference; callers drop them."""
+    spec = {"bobbin": name, "secrets": {"secret": {"file": f"/etc/hookspool/secrets/{name}"}},
+            "outputs": {"*": f"hermes:{name}"}, "settings": dict(SAMPLE_SETTINGS.get(name, {}))}
+    cfg = hs_bobbins.expand(hs_config.merge(hs_config.DEFAULTS, {"bobbins": {name: spec}}))
+    return cfg["sources"][name]
 
 
 def toml_value(v: Any) -> str:

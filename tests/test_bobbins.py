@@ -183,12 +183,33 @@ def test_manifest_name_must_match_its_directory_and_the_name_pattern():
 
 
 def test_a_required_setting_needs_no_default_and_a_missing_local_module_is_an_error(tmp_path):
-    m = MINIMAL.format(name="pkg") + '\n[settings.who]\ntype = "string"\nrequired = true\n'
+    m = MINIMAL.format(name="pkg").replace('template = { scheme = "url-token", key = "id" }', 'module = "source"')
+    m += '\n[settings.who]\ntype = "string"\nrequired = true\n'
     assert manifest_errors(m) == []
     root = tmp_path / "r"
-    make_pkg(root, "pkg", m.replace('template = { scheme = "url-token", key = "id" }', 'module = "source"'))
+    make_pkg(root, "pkg", m)
     pkg = PK.load_package(str(root / "pkg"), str(root), C.DEFAULTS["spans"])
     assert has(pkg.errors, "source.py is not in the bobbin")
+
+
+def test_a_template_bobbin_refuses_a_setting_it_would_drop():
+    # no processor: a setting must map to a template key, or it would be dropped at expansion
+    m = MINIMAL.format(name="pkg") + '\n[settings.who]\ntype = "string"\nrequired = true\n'
+    assert has(manifest_errors(m), "settings.who", "maps to no template key", "the value would be dropped")
+    # a processor reads its settings, so the same declaration is fine there
+    m_proc = m + '\n[processor]\nmodule = "processor"\n'
+    assert manifest_errors(m_proc) == []
+
+
+def test_a_setting_that_maps_to_a_template_key_has_that_keys_type_and_is_not_set_twice(tmp_path):
+    base = MINIMAL.format(name="pkg")
+    m = base + '\n[settings.callback_url]\ntype = "int"\nrequired = true\n'
+    assert has(manifest_errors(m), "settings.callback_url.type", "must be 'string'")
+    m = base.replace('key = "id" }', 'key = "id", callback_url = "https://x.example.test/a" }')
+    m += '\n[settings.callback_url]\ntype = "string"\nrequired = true\n'
+    assert has(manifest_errors(m), "settings.callback_url", "already sets callback_url")
+    m = base + '\n[settings.callback_url]\ntype = "string"\nrequired = true\n'
+    assert manifest_errors(m) == []
 
 
 # ---- discovery: names, shadowing, '-'/'_' ----------------------------------------------------------------

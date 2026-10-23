@@ -4,6 +4,7 @@ summary = "Trello board webhook: card and board actions, signed with HMAC-SHA1 o
 
 [source]
 span = "mail"
+sender_retries = true                  # Trello retries a failed callback 3 times (about 30, 60 and 120 seconds)
 
 [source.template]
 scheme = "hmac-sha1-base64-url"

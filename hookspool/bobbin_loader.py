@@ -56,6 +56,10 @@ _TEMPLATE_RESERVED = {"module", "action", "secrets", "span", "expect_every_s", "
                       *_config.WINDOW_FIELDS}
 HOOKS_SETTING = "hooks"
 ENV_SECRET_REFS = "HOOKSPOOL_SECRET_REFS"
+# [settings] names that are template keys (14.3.2a): a template bobbin without a processor may declare only
+# these, with this type. An instance that gives one copies its value into the expanded [sources.<i>].
+TEMPLATE_SETTINGS = {"scheme": "string", "header": "string", "prefix": "string", "param": "string",
+                     "callback_url": "string", "head_handshake": "bool"}
 
 
 class BobbinError(_config.ConfigError):
@@ -268,6 +272,23 @@ def validate_manifest(m: Any, dirname: str, spans: dict) -> list[str]:
         if proc is None and len(outputs) >= 2 and ALL_OUTPUTS not in outputs:
             errs.append('outputs: a bobbin with several outputs and no processor must declare "*"'
                         " (the source's action; an instance cannot be expanded without it)")
+    # a setting either maps into the fixed template (14.3.2a) or a processor reads it; a setting that is
+    # neither would be dropped silently at expansion, so it is refused here
+    tpl = src.get("template") if isinstance(src, dict) else None
+    if isinstance(tpl, dict) and isinstance(settings, dict):
+        for n, s in settings.items():
+            if not isinstance(s, dict):
+                continue
+            where = f"settings.{n}"
+            if n in TEMPLATE_SETTINGS:
+                if n in tpl:
+                    errs.append(f"{where}: [source.template] already sets {n}; a setting cannot map to it too")
+                elif s.get("type") not in (None, TEMPLATE_SETTINGS[n]):
+                    errs.append(f"{where}.type: maps to the template key {n}, so it must be"
+                                f" {TEMPLATE_SETTINGS[n]!r}")
+            elif proc is None:
+                errs.append(f"{where}: maps to no template key ({', '.join(sorted(TEMPLATE_SETTINGS))}) and the"
+                            " bobbin has no processor to read it; the value would be dropped")
     return errs
 
 
@@ -571,6 +592,12 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
         src.update(copy.deepcopy(msrc["template"]))
         if "sender_retries" in msrc:
             src["sender_retries"] = msrc["sender_retries"]
+        # a setting that names a template key is that key's value (14.3.2a): the instance's value, else the
+        # setting's default unless it is "" (unset). A required setting the instance leaves out is the error above.
+        given = spec.get("settings") if isinstance(spec.get("settings"), dict) else {}
+        for n in TEMPLATE_SETTINGS:
+            if n in settings and n not in msrc["template"] and (n in given or settings[n] != ""):
+                src[n] = copy.deepcopy(settings[n])
     else:
         mod = msrc["module"]
         if _is_local_module(mod):
