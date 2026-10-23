@@ -12,8 +12,10 @@ report:
 | debounce | in memory, per calendar | the `calendar` / `mail` coalescing span of the source |
 | settings | constants in the file | environment (the destination's `env_file`) |
 
-`hookspool_batch.py` is the shared helper (stdlib only): reads the document, builds and prints emits,
-stages state writes and keeps the journal. Copy the three files together.
+`hookspool_batch.py` re-exports `hookspool.processor` (the processor runtime of service packages,
+ARCHITECTURE 14.3.4), which reads the document, builds and prints emits, stages state writes and keeps the
+journal. The scripts need hookspool installed for the interpreter that runs them (or run from this checkout);
+the stand-alone "copy three files" mode is retired.
 
 ## Why the journal
 
