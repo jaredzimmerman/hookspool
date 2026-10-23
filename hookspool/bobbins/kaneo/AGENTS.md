@@ -32,7 +32,8 @@ the webhook secret: the person writes the secret file and creates the integratio
 4. **Goal:** a real event is queued. Ask the person to create or change a task, then run
    `hookspool list --source kaneo`. **Check:** one queued event with the project id. **If it fails:** `unverified`
    means the secret differs or a proxy changed the body.
-5. **Goal:** a request with a wrong signature is refused. Run:
+5. **Goal:** a request with a wrong signature is refused (`outward`: it sends one request over the public URL;
+   ask the person first). Run:
    `curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' -H 'X-Kaneo-Signature: 0000' --data '{"event":"task.created"}' <CALLBACK_URL>`
    **Check:** it prints `401`, and `hookspool list --source kaneo` shows no event for it. **If it does not:** the
    request is reaching something other than this instance; check the reverse proxy passes `/hooks/kaneo`.

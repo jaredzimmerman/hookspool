@@ -17,12 +17,13 @@ the secret file and creates the webhook in GitHub.
 1. **Goal:** the secret file exists. The person writes the secret to `/etc/hookspool/secrets/<INSTANCE>`.
    **Check:** `test -s /etc/hookspool/secrets/<INSTANCE> && ls -l /etc/hookspool/secrets/<INSTANCE>` shows mode
    `-rw-------`. **If it fails:** ask the person to write the file again.
-2. **Goal:** the instance table is in the config, loaded and valid. Add:
+2. **Goal:** the instance table is in the config, loaded and valid. Add this table, with `github-ci` replaced by
+   `<INSTANCE>` everywhere in it:
    ```toml
-   [bobbins.<INSTANCE>]
+   [bobbins.github-ci]
    bobbin = "github"
-   secrets.secret = { file = "/etc/hookspool/secrets/<INSTANCE>" }
-   outputs = { "*" = "hermes:<INSTANCE>" }
+   secrets.secret = { file = "/etc/hookspool/secrets/github-ci" }
+   outputs = { "*" = "hermes:github-ci" }
    ```
    Then run `hookspool bobbin expand <INSTANCE>` (it must succeed and show the secret as a reference only),
    `hookspool check`, and `hookspool reload`. **Check:** no error mentions `<INSTANCE>`. **If it fails:** fix the
