@@ -1,0 +1,18 @@
+name = "fanout"
+version = "2"
+summary = "Test package: a template source with several outputs and no processor"
+
+[source]
+template = { scheme = "hmac-sha256-hex", header = "X-Signature", prefix = "sha256=", key = "repo", event_type = "kind", attrs = { event_type = "kind" } }
+span = "burst"
+sender_retries = true
+
+[secrets.secret]
+description = "the signing secret"
+
+[outputs.build]
+description = "a build finished"
+[outputs.review]
+description = "a review was requested"
+[outputs."*"]
+description = "everything else"

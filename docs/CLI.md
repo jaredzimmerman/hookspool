@@ -23,6 +23,8 @@ other way round, fails the suite.
 | `HOOKSPOOL_DB` | path of the spool file, overriding `[spool] db` |
 | `HOOKSPOOL_LOG` | `json` for one JSON object per log line; anything else is the text form |
 | `HOOKSPOOL_ALERT_DRY` | set to anything but `0` to record alerts instead of running `alerts.argv` (tests, rehearsals) |
+| `HOOKSPOOL_SERVICE_PACKAGE`, `HOOKSPOOL_SERVICE_INSTANCE`, `HOOKSPOOL_SERVICE_DIR` | set for a service package's processor: the package, the instance and the package's directory (never read from the dispatcher's environment) |
+| `HOOKSPOOL_SETTINGS`, `HOOKSPOOL_DELTA_ROUTES`, `HOOKSPOOL_SECRET_REFS` | set for a processor: its typed settings, its output map and the references (never values) of the secrets it may read, each as JSON |
 
 Precedence for paths is always: option, then environment, then config file, then default.
 
@@ -244,6 +246,26 @@ events, attempts, dedup rows and issues it deleted. Dead batches are never prune
 | option | meaning |
 |---|---|
 | `--vacuum` | also run `VACUUM` to return space to the filesystem. Needs free space of about the size of the spool file |
+
+### hookspool service
+
+Service packages (see `docs/ARCHITECTURE.md` section 14.3). The subcommand is one of `list`, `show`, `expand` and
+`new`:
+
+| form | does |
+|---|---|
+| `service list` | the packages found (built in, then each `[packages] path` directory): name, version, where it comes from, summary, and the `[services.<instance>]` tables that use it |
+| `service show <package>` | one package: its secrets, settings (type, required, default), outputs, span, whether the sender retries, the reverse-proxy note |
+| `service expand [<instance>]` | the ordinary tables one instance (or every instance) expands to, as TOML. Secret references stay references and `HOOKSPOOL_SECRET_REFS` is shown by secret name only: no secret value is ever read or printed. Exit 2 with every problem when the services do not expand |
+| `service new <name>` | scaffold a new package directory: manifest, `source.py` (or a template source), optional `processor.py`, one capture and a README |
+
+`name` is the package for `show`, the instance for `expand` and the new package's name for `new`.
+
+| option | meaning |
+|---|---|
+| `--dir D` | `new`: the parent directory (default: the current directory) |
+| `--template` | `new`: a template source in the manifest instead of `source.py` |
+| `--processor` | `new`: include a `processor.py` and a `[processor]` table |
 
 ### hookspool source
 

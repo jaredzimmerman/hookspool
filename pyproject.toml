@@ -50,7 +50,7 @@ version = { attr = "hookspool.__version__" }
 include = ["hookspool*"]
 
 [tool.setuptools.package-data]
-hookspool = ["migrations/*.sql"]
+hookspool = ["migrations/*.sql", "services/*/service.toml", "services/*/README.md", "services/*/captures/*.http"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

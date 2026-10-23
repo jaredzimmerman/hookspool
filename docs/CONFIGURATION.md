@@ -225,9 +225,11 @@ table with a `type`.
 | `timeout_s` | all | 30 | per-attempt timeout, kill deadline for a script |
 | `max_body_bytes` | all | 1 MiB for `hermes` and `http`, unbounded for `script` | the largest document the receiver accepts. `max_bytes` of the routes feeding it must fit in 0.75 of it |
 | `max_inflight` | all | 2 for `hermes`, 1 for `script`, 4 for `http` | batches in flight to this destination at once |
-| `argv` | `script` | required | the command and its arguments, no shell. The batch document arrives on standard input |
+| `argv` | `script` | required (unless `processor`) | the command and its arguments, no shell. The batch document arrives on standard input |
 | `cwd` | `script` | none | working directory (absolute path) |
 | `env_file` | `script` | none | `KEY=value` file, re-read on every attempt, whose values become the script's environment (absolute path) |
+| `env` | `script` | none | `NAME = "value"` strings set over `env_file` in the script's environment. Names match `^[A-Z][A-Z0-9_]*$`; `HOOKSPOOL_*` names are set by hookspool only |
+| `processor` | `script` | none | set only by a `[services.<instance>]` expansion, in place of `argv`: the dispatcher runs its own interpreter as `python -I -m hookspool.processor <instance>` |
 | `state_dir` | `script` | none | a directory the script may keep state in (absolute path). Created if missing; passed as `HOOKSPOOL_STATE_DIR`. List it in the service unit's `ReadWritePaths` |
 | `url` | `http` | required | where to POST. Must be `https://` unless `allow_insecure` |
 | `secret` | `http` | required | secret reference used to sign each delivery |
