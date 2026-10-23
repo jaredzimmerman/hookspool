@@ -23,7 +23,9 @@ Status mapping (``Http``):
 any other 4xx                          ``Permanent``
 3xx                                    ``Permanent``: redirects are never followed, so a
                                        bearer token never travels to another host
-timeout, refused, reset, DNS, TLS      ``Retryable``
+timeout, refused, reset, DNS           ``Retryable``
+TLS certificate verification failed    ``Permanent`` (a configuration fault that needs a
+                                       person, as the dispatcher's own outbound table has it)
 2xx that is not JSON                   ``Retryable``
 a response over ``max_response_bytes`` ``Permanent``
 =====================================  ===============================================
@@ -45,6 +47,7 @@ import http.client
 import ipaddress
 import json as _json
 import re
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -173,8 +176,8 @@ class Http:
         self.allow_insecure = bool(allow_insecure)
         self.user_agent = user_agent or f"hookspool/{__version__}"
         self._clock = clock
-        # proxies from the environment only: the platform lookup (macOS SystemConfiguration)
-        # loads a framework that makes any later fork() of this process unsafe
+        # proxies come from the environment only (HTTPS_PROXY, HTTP_PROXY, NO_PROXY), never from the
+        # platform's own settings: a deployment sets them for a processor through its env table (14.3.3)
         self._opener = urllib.request.build_opener(
             _NoRedirect, urllib.request.ProxyHandler(urllib.request.getproxies_environment()))
 
@@ -199,7 +202,7 @@ class Http:
         to the query string; ``bearer`` is sent as ``Authorization: Bearer``. ``label`` (letters,
         digits and ``_.:/-``) names the call in error text, since the path never appears there."""
         method = str(method).upper()
-        host, prefix = self._target(method, url, label)
+        prefix = self._target(method, url, label)
         if json is not None and form is not None:
             raise Permanent(f"{prefix}: json and form are exclusive")
         if params:
@@ -233,7 +236,7 @@ class Http:
         raise Retryable(f"{prefix}: response is not JSON")
 
     # internals ----------------------------------------------------------------------------------
-    def _target(self, method: str, url: str, label: str | None) -> tuple[str, str]:
+    def _target(self, method: str, url: str, label: str | None) -> str:
         tag = f" {label}" if isinstance(label, str) and _LABEL_RE.match(label) else ""
         try:
             parts = urllib.parse.urlsplit(str(url))
@@ -245,7 +248,7 @@ class Http:
             raise Permanent(f"{prefix}: only http and https URLs with a host are allowed")
         if parts.scheme == "http" and not (self.allow_insecure or _is_loopback(host)):
             raise Permanent(f"{prefix}: plain http is allowed only to a loopback address")
-        return host, prefix
+        return prefix
 
     def _left(self, deadline: float) -> float:
         return deadline - self._clock()
@@ -265,12 +268,14 @@ class Http:
             try:
                 resp = self._opener.open(req, timeout=left)
             except urllib.error.HTTPError as e:
-                return self._http_error(e, prefix), b""
+                return self._http_error(e, prefix, deadline), b""
             return self._read(resp, deadline, prefix)
         except (TimeoutError, ConnectionError) as e:
             return Retryable(f"{prefix}: {'timed out' if isinstance(e, TimeoutError) else e.__class__.__name__}"), b""
         except urllib.error.URLError as e:
             reason = e.reason
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                return Permanent(f"{prefix}: TLS certificate verification failed"), b""
             what = "timed out" if isinstance(reason, TimeoutError) else (
                 reason.__class__.__name__ if isinstance(reason, BaseException) else "connection failed")
             return Retryable(f"{prefix}: {what}"), b""
@@ -285,17 +290,27 @@ class Http:
                 except Exception:  # noqa: BLE001,S110 - closing a failed response
                     pass
 
-    def _http_error(self, e: urllib.error.HTTPError, prefix: str) -> NetError:
+    def _http_error(self, e: urllib.error.HTTPError, prefix: str, deadline: float) -> NetError:
         status = int(e.code)
+        chunks, total = [], 0
         try:
-            raw = e.read(MAX_ERROR_BYTES) or b""
+            while total < MAX_ERROR_BYTES:           # bounded by the request's own deadline, like _read
+                left = self._left(deadline)
+                if left <= 0:
+                    break
+                self._set_socket_timeout(e, left)
+                b = e.read1(MAX_ERROR_BYTES - total) if hasattr(e, "read1") else e.read(MAX_ERROR_BYTES - total)
+                if not b:
+                    break
+                chunks.append(b)
+                total += len(b)
         except Exception:  # noqa: BLE001 - an unreadable error body just has no code
-            raw = b""
-        finally:
-            try:
-                e.close()
-            except Exception:  # noqa: BLE001,S110
-                pass
+            pass
+        raw = b"".join(chunks)
+        try:
+            e.close()
+        except Exception:  # noqa: BLE001,S110
+            pass
         code = _safe_code(raw)
         cls = classify_status(status) or Permanent
         if 300 <= status < 400:
@@ -305,6 +320,20 @@ class Http:
         if 300 <= status < 400:
             msg += " (redirects are not followed)"
         return cls(msg, status=status, code=code, retry_after_s=retry_after if cls is Retryable else None)
+
+    @staticmethod
+    def _set_socket_timeout(resp, left: float) -> None:
+        sock, obj = None, resp
+        for _ in range(3):       # a response, or an HTTPError wrapping one
+            sock = getattr(getattr(getattr(obj, "fp", None), "raw", None), "_sock", None)
+            if sock is not None:
+                break
+            obj = getattr(obj, "fp", None)
+        if sock is not None:
+            try:
+                sock.settimeout(left)
+            except OSError:
+                pass
 
     def _read(self, resp, deadline, prefix) -> tuple[NetError | None, bytes]:
         status = getattr(resp, "status", 200) or 200
@@ -316,12 +345,7 @@ class Http:
             left = self._left(deadline)
             if left <= 0:
                 return Retryable(f"{prefix}: timed out reading the response"), b""
-            sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
-            if sock is not None:
-                try:
-                    sock.settimeout(left)
-                except OSError:
-                    pass
+            self._set_socket_timeout(resp, left)
             b = resp.read1(min(_READ_CHUNK, cap + 1 - total)) if hasattr(resp, "read1") else resp.read(
                 min(_READ_CHUNK, cap + 1 - total))
             if not b:
@@ -337,7 +361,8 @@ class Http:
 class SecretAccess:
     """``ctx.secret(name)``: the secret's value, read now. An unknown name is ``Permanent`` (the
     package asked for a secret its manifest does not give the processor); a reference that
-    cannot be read now is ``Retryable``. Neither message contains a value."""
+    cannot be read now is ``Retryable``. Neither message contains a value (a ``SecretError`` text
+    may name the variable or file that could not be read, never its content)."""
 
     def __init__(self, resolver: Callable[[str], str]):
         self._resolver = resolver
@@ -396,20 +421,29 @@ class OAuth:
     credential it came from. When the credential's refresh token or client id changes (someone
     re-authorised), the entry is dropped and the new credential is used.
 
-    The credential file is never written. A rotated refresh token lives only in ``state``, so
-    the runtime should persist that mapping whatever the batch outcome (``changed`` is set when
-    it needs saving): a provider that invalidates the old token on rotation would otherwise
-    leave only a dead one."""
+    The credential file is never written. A rotated refresh token lives only in ``state`` (and
+    whatever the runtime does with it), so it must reach disk before anything can kill the process:
+    ``persist`` is called, with no arguments, right after a rotation is recorded in ``state`` and
+    before the access token is used, so the runtime can write its state file atomically at that
+    moment rather than after the batch (a worker killed at its deadline, or a crash, between the
+    rotation and the end of the batch would otherwise lose the new token while the provider may
+    already have invalidated the old one). A failing ``persist`` is logged (its class only) and
+    does not fail the request: ``changed`` stays set for the runtime's final save.
+
+    The mapping then holds bearer tokens and a refresh token in the clear: the directory the runtime
+    keeps it in must be private (the processor runtime writes it 0600 inside a 0700 directory; an
+    operator-set state directory needs the same)."""
 
     def __init__(self, http: Http, secret: Callable[[str], str], state: MutableMapping, *,
                  now: Callable[[], float] = time.time, log: Callable[[str], None] | None = None,
-                 skew_s: float = TOKEN_SKEW_S):
+                 skew_s: float = TOKEN_SKEW_S, persist: Callable[[], None] | None = None):
         self.http = http
         self.secret = secret
         self.state = state
         self.now = now
         self.log = log or (lambda line: None)
         self.skew_s = float(skew_s)
+        self.persist = persist
         self.changed = False
         self._clients: dict[str, OAuthClient] = {}
 
@@ -516,6 +550,11 @@ class OAuth:
         self.changed = True
         self.log(f"oauth {name}: access token refreshed (expires in {int(expires_in)}s)"
                  + ("; rotated refresh token kept in state" if rotated else ""))
+        if rotated and self.persist is not None:
+            try:
+                self.persist()
+            except Exception as x:  # noqa: BLE001 - the batch goes on; the runtime saves again at the end
+                self.log(f"oauth {name}: persisting the rotated refresh token failed ({x.__class__.__name__})")
         return access
 
 
@@ -560,13 +599,22 @@ class OAuthClient:
 # ---- the processor runtime's entry point ----------------------------------------------------------
 def make_context_extras(state: MutableMapping, secret_resolver: Callable[[str], str], *,
                         log: Callable[[str], None] | None = None, now: Callable[[], float] = time.time,
-                        http: Http | None = None) -> dict:
+                        http: Http | None = None, persist: Callable[[], None] | None = None) -> dict:
     """``{"http", "oauth", "secret"}`` for a processor ``Context``.
 
     ``state`` is a mutable mapping the runtime owns and persists (OAuth keeps its tokens under
     ``state["oauth"]``; see ``OAuth``). ``secret_resolver(name)`` returns a secret's value or
     raises ``KeyError`` for a name the processor may not use (``resolver_from_refs`` builds one
-    from the secret references the runtime is given, 14.3.3). ``log`` receives safe one-line messages."""
+    from the secret references the runtime is given, 14.3.3). ``log`` receives safe one-line messages.
+
+    ``persist()`` is optional and is called right after a rotated refresh token is recorded in
+    ``state`` (see ``OAuth``); the runtime passes its atomic state writer so the token survives a
+    kill or crash before the batch ends.
+
+    The ``KeyError`` convention is the resolver's: ``resolver_from_refs`` raises it for a name the
+    processor was not given, which becomes ``Permanent``. A resolver that raises ``SecretError`` for
+    an undeclared name instead (as the plugin ``Secrets`` mapping does) gets ``Retryable``, so a
+    runtime that wants the permanent class must wrap its mapping to raise ``KeyError`` for that case."""
     secret = SecretAccess(secret_resolver)
     h = http if http is not None else Http()
-    return {"http": h, "oauth": OAuth(h, secret, state, now=now, log=log), "secret": secret}
+    return {"http": h, "oauth": OAuth(h, secret, state, now=now, log=log, persist=persist), "secret": secret}

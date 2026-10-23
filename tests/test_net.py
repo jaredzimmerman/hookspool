@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import email.utils
 import socket
+import ssl
 import threading
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.error
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -69,7 +72,7 @@ class Stub:
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
-            do_GET = do_POST = do_PUT = do_DELETE = _handle
+            do_GET = do_POST = do_PUT = do_DELETE = do_CONNECT = _handle
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
         self.server.daemon_threads = True
@@ -207,10 +210,24 @@ def test_refused_urls(url):
         Http(timeout_s=0.5).get(url)
 
 
-def test_insecure_http_opt_in_reaches_the_network():
-    # allow_insecure lifts the loopback-only rule (the address is unroutable: a transport error)
+def test_insecure_http_opt_in_reaches_the_network(monkeypatch):
+    # allow_insecure lifts the loopback-only rule. The test must not connect to a non-loopback address:
+    # on macOS a process that has done so can no longer fork (Network.framework's fork handler crashes
+    # the child), which broke every later child-process test of the suite. The opener is faked instead.
+    seen = []
+
+    def fake_open(self, req, timeout=None):
+        seen.append(req.full_url)
+        raise urllib.error.URLError(ConnectionRefusedError())
+
+    monkeypatch.setattr(type(Http()._opener), "open", fake_open)
     with pytest.raises(Retryable):
         Http(timeout_s=0.3, allow_insecure=True).get("http://192.0.2.1/x")
+    assert seen == ["http://192.0.2.1/x"]
+    seen.clear()
+    with pytest.raises(Permanent):                           # without the opt-in it never gets that far
+        Http(timeout_s=0.3).get("http://192.0.2.1/x")
+    assert seen == []
 
 
 def test_errors_never_carry_path_query_body_or_headers(stub):
@@ -274,9 +291,9 @@ def _token(n: int, *, expires_in=3600, refresh_token=None, status=200):
     return {"status": status, "body": body}
 
 
-def _extras(tmp_path, cred_path, state, clock, lines):
+def _extras(tmp_path, cred_path, state, clock, lines, persist=None):
     return net.make_context_extras(state, net.resolver_from_refs({"cred_owner": {"file": cred_path}}),
-                                   log=lines.append, now=clock)
+                                   log=lines.append, now=clock, persist=persist)
 
 
 def _form(req) -> dict:
@@ -539,3 +556,163 @@ def test_jwks_fetcher_against_stub(stub):
     assert len(stub.hits("/jwks")) == 2
     stub.on("/jwks", {"body": {"not": "a set"}})
     assert kc.lookup("zz", 40) is None
+
+
+# ---- rotated refresh token is persisted at once (a kill before the batch ends must not lose it) -------------
+def test_persist_is_called_right_after_a_rotation_and_a_restart_uses_the_new_token(tmp_path, stub):
+    cred = _cred(tmp_path, stub)
+    stub.on("/token", _token(1, refresh_token="rt-1-" + SECRET_MARK), _token(2))
+    stub.on("/api", {"body": {}})
+    state, clock, lines = {}, Clock(), []
+    disk = tmp_path / "runtime.json"
+    calls = []
+
+    def persist():                                             # the runtime's atomic writer, in miniature
+        calls.append(json.loads(json.dumps(state)))
+        disk.write_text(json.dumps(state))
+
+    ex = _extras(tmp_path, cred, state, clock, lines, persist=persist)
+    ex["oauth"]("cred_owner").get(stub.base + "/api")
+    assert len(calls) == 1                                     # once, at the rotation
+    assert calls[0]["oauth"]["cred_owner"]["refresh_token"] == "rt-1-" + SECRET_MARK
+    assert calls[0]["oauth"]["cred_owner"]["access_token"] == f"at-1-{SECRET_MARK}"
+    # the worker is killed here: nothing after the rotation ran. A new runtime starts from the file alone.
+    state2 = json.loads(disk.read_text())
+    clock.t += 3600
+    ex2 = _extras(tmp_path, cred, state2, clock, [], persist=persist)
+    ex2["oauth"]("cred_owner").get(stub.base + "/api")
+    assert [_form(r)["refresh_token"] for r in stub.hits("/token")] == ["rt-0-" + SECRET_MARK,
+                                                                           "rt-1-" + SECRET_MARK]
+    assert len(calls) == 1                                     # the second refresh rotated nothing
+
+
+def test_persist_is_not_called_without_a_rotation_and_its_failure_is_survivable(tmp_path, stub):
+    cred = _cred(tmp_path, stub)
+    stub.on("/token", _token(1), _token(2, refresh_token="rt-1-" + SECRET_MARK))
+    stub.on("/api", {"body": {"ok": 1}})
+    state, clock, lines, calls = {}, Clock(), [], []
+
+    def persist():
+        calls.append(1)
+        raise OSError(f"disk full {SECRET_MARK}")
+
+    ex = _extras(tmp_path, cred, state, clock, lines, persist=persist)
+    assert ex["oauth"]("cred_owner").get(stub.base + "/api") == {"ok": 1}
+    assert calls == []
+    clock.t += 3600
+    assert ex["oauth"]("cred_owner").get(stub.base + "/api") == {"ok": 1}     # the failing write did not fail it
+    assert calls == [1]
+    assert state["oauth"]["cred_owner"]["refresh_token"] == "rt-1-" + SECRET_MARK
+    assert ex["oauth"].changed                                  # the runtime's final save still has work to do
+    assert any("persisting the rotated refresh token failed (OSError)" in ln for ln in lines)
+    for ln in lines:
+        assert SECRET_MARK not in ln
+
+
+# ---- proxies come from the environment (a deployment sets them through the processor env table) ---------
+def test_http_proxy_from_the_environment_is_honoured_and_no_proxy_suppresses_it(monkeypatch):
+    proxy, target = Stub(), Stub()
+    try:
+        proxy.on("/x", {"body": {"via": "proxy"}})
+        target.on("/x", {"body": {"via": "direct"}})
+        monkeypatch.setenv("HTTP_PROXY", proxy.base)
+        assert Http().get(target.base + "/x") == {"via": "proxy"}       # a request to another loopback port
+        assert len(proxy.hits("/x")) == 1 and target.hits("/x") == []
+        assert proxy.hits("/x")[0]["headers"]["Host"] == target.base.split("//")[1]
+        monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+        assert Http().get(target.base + "/x") == {"via": "direct"}
+        assert len(proxy.hits("/x")) == 1 and len(target.hits("/x")) == 1
+        monkeypatch.delenv("HTTP_PROXY")
+        monkeypatch.delenv("NO_PROXY")
+        assert Http().get(target.base + "/x") == {"via": "direct"}      # no proxy configured: direct
+        assert len(proxy.hits("/x")) == 1 and len(target.hits("/x")) == 2
+    finally:
+        proxy.close()
+        target.close()
+
+
+def test_https_proxy_from_the_environment_is_used_for_https_and_no_proxy_suppresses_it(monkeypatch):
+    proxy = Stub()
+    try:
+        monkeypatch.setenv("HTTPS_PROXY", proxy.base)
+        with pytest.raises(Retryable):                                  # the stub refuses the tunnel
+            Http(timeout_s=2).get("https://127.0.0.1:9/x")
+        assert [r["method"] for r in proxy.requests] == ["CONNECT"]
+        monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+        with pytest.raises(Retryable):                                  # direct: connection refused
+            Http(timeout_s=2).get("https://127.0.0.1:9/x")
+        assert len(proxy.requests) == 1
+    finally:
+        proxy.close()
+
+
+# ---- small edges ------------------------------------------------------------------------------------------
+def test_retry_after_as_an_http_date(stub):
+    when = email.utils.formatdate(time.time() + 30, usegmt=True)
+    stub.on("/d", {"status": 503, "headers": {"Retry-After": when}})
+    with pytest.raises(Retryable) as ei:
+        Http().get(stub.base + "/d")
+    assert 20 <= ei.value.retry_after_s <= 31
+    stub.on("/p", {"status": 503, "headers": {"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}})
+    with pytest.raises(Retryable) as ei:
+        Http().get(stub.base + "/p")
+    assert ei.value.retry_after_s == 0.0                                # a date in the past: retry now
+    stub.on("/j", {"status": 503, "headers": {"Retry-After": "soon"}})
+    with pytest.raises(Retryable) as ei:
+        Http().get(stub.base + "/j")
+    assert ei.value.retry_after_s is None
+
+
+@pytest.mark.parametrize("junk", ["a string", ["a", "list"], 7, {"cred_owner": "not a dict"},
+                                  {"cred_owner": ["x"]}, {"cred_owner": None}])
+def test_corrupt_oauth_state_is_replaced_not_a_crash(tmp_path, stub, junk):
+    cred = _cred(tmp_path, stub)
+    stub.on("/token", _token(1))
+    stub.on("/api", {"body": {}})
+    state = {"oauth": junk}
+    ex = _extras(tmp_path, cred, state, Clock(), [])
+    ex["oauth"]("cred_owner").get(stub.base + "/api")
+    assert state["oauth"]["cred_owner"]["access_token"] == f"at-1-{SECRET_MARK}"
+
+
+def test_the_callers_own_bearer_is_stripped_on_an_oauth_request(tmp_path, stub):
+    cred = _cred(tmp_path, stub)
+    stub.on("/token", _token(1))
+    stub.on("/api", {"body": {}})
+    ex = _extras(tmp_path, cred, {}, Clock(), [])
+    ex["oauth"]("cred_owner").get(stub.base + "/api", bearer="caller-supplied-token")
+    assert stub.hits("/api")[0]["headers"]["Authorization"] == f"Bearer at-1-{SECRET_MARK}"
+
+
+def test_a_tls_certificate_failure_is_permanent(monkeypatch):
+    def fake_open(self, req, timeout=None):
+        raise urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed"))
+
+    monkeypatch.setattr(type(Http()._opener), "open", fake_open)
+    with pytest.raises(Permanent) as ei:
+        Http().get("https://api.example.test/x?token=" + SENTINEL, label="probe")
+    assert "certificate" in str(ei.value) and SENTINEL not in str(ei.value)
+    assert ei.value.__cause__ is None and ei.value.__context__ is None
+
+
+def test_a_dripping_error_body_is_bounded_by_the_request_deadline(stub):
+    stub.on("/slow", {"status": 500, "body": b"x" * 4000, "drip": 0.2})
+    t0 = time.monotonic()
+    with pytest.raises(Retryable) as ei:
+        Http(timeout_s=0.6).get(stub.base + "/slow")
+    assert time.monotonic() - t0 < 3
+    assert ei.value.status == 500
+
+
+def test_secret_access_forwards_a_secret_error_text_but_never_a_value():
+    from hookspool.config import SecretError
+
+    def res(name):
+        raise SecretError("env var NAME is not set")
+
+    with pytest.raises(Retryable) as ei:
+        net.SecretAccess(res)("tok")
+    assert "NAME" in str(ei.value)                                      # names the variable, as documented
+    # an undeclared name through a mapping that raises SecretError (not KeyError) is Retryable, documented
+    with pytest.raises(Permanent):
+        net.SecretAccess(lambda n: (_ for _ in ()).throw(KeyError(n)))("tok")
