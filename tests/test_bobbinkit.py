@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
@@ -685,7 +686,10 @@ def test_the_command_needs_no_config(tmp_path, monkeypatch, capsys):
 
 
 # ---- bobbin new passes, except for its TODOs ------------------------------------------------------------------------------
-@pytest.mark.parametrize("flags", [[], ["--template"], ["--processor"]], ids=["code", "template", "processor"])
+@pytest.mark.parametrize("flags", [[], ["--code"], ["--processor"], ["--set", "scheme=url-token", "--set", "header="],
+                                   ["--set", "scheme=hmac-sha256-base64", "--set", "prefix="],
+                                   ["--set", "scheme=shared-secret-header"], ["--set", "scheme=hmac-sha1-base64-url"]],
+                         ids=["webhook", "code", "processor", "url-token", "base64", "shared-secret", "sha1-url"])
 def test_bobbin_new_passes_every_check_but_the_todos(tmp_path, capsys, flags):
     assert cli(["bobbin", "new", "acme-hooks", "--dir", str(tmp_path), *flags]) == 0
     capsys.readouterr()
@@ -702,6 +706,30 @@ def test_bobbin_new_passes_every_check_but_the_todos(tmp_path, capsys, flags):
             text = open(p).read()
             open(p, "w").write(re.sub(r"\bTODO\b:? ?", "", text))
     assert K.check_bobbin(d).ok
+
+
+def test_the_webhook_bobbin_passes_the_conformance_kit():
+    card = K.check_bobbin(os.path.join(ROOT, "hookspool", "bobbins", "webhook"))
+    assert card.ok, K.render_text(card.as_dict())
+    assert [c.result for c in card.checks if c.name in ("captures", "source-kit", "docs")] == ["pass"] * 3
+
+
+def test_bobbin_new_with_frozen_settings_passes_every_check_but_the_todos(tmp_path, capsys):
+    assert cli(["bobbin", "new", "acme-hooks", "--dir", str(tmp_path), "--set", 'key=["id", "type"]',
+                "--set", "dedup=header:X-Delivery-Id", "--set", 'ignore=["type=ping"]']) == 0
+    capsys.readouterr()
+    d = os.path.join(str(tmp_path), "acme-hooks")
+    card = K.check_bobbin(d)
+    assert [c.name for c in card.checks if c.result == "fail"] == ["todos"], K.render_text(card.as_dict())
+    for base, _dirs, files in os.walk(d):
+        for f in files:
+            p = os.path.join(base, f)
+            text = open(p).read()
+            open(p, "w").write(re.sub(r"\bTODO\b:? ?", "", text))
+    assert K.check_bobbin(d).ok
+    with open(os.path.join(d, "bobbin.toml"), "rb") as f:
+        tpl = tomllib.load(f)["source"]["template"]
+    assert tpl["key"] == ["id", "type"] and tpl["dedup"] == "header:X-Delivery-Id" and tpl["ignore"] == ["type=ping"]
 
 
 def test_the_default_test_secret_is_the_scaffolds():

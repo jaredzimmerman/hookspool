@@ -79,7 +79,7 @@ _STATE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 _MODULE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 EMIT_KEYS = ("source", "key", "action", "payload", "route", "event_type", "dedup_id", "quiet_s", "max_s",
              "max_events", "max_bytes", "not_before")
-SETTING_TYPES = {"string": (str,), "path": (str,), "int": (int,), "bool": (bool,), "list": (list,)}
+SETTING_TYPES = {"string": (str,), "path": (str,), "int": (int,), "bool": (bool,), "list": (list,), "table": (dict,)}
 LOCK_FILE, RUNTIME_FILE = ".lock", ".runtime.json"
 
 __all__ = ["Batch", "Context", "Settings", "Retryable", "Permanent", "BatchError", "run", "main",

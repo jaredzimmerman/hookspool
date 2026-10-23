@@ -30,7 +30,7 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 INSTANCE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 EVENT_TYPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 ENV_NAME_RE = _config.ENV_NAME_RE
-SETTING_TYPES = ("string", "int", "bool", "list", "path")
+SETTING_TYPES = ("string", "int", "bool", "list", "table", "path")
 ALL_OUTPUTS = "*"
 MANIFEST = "bobbin.toml"
 BUILTIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bobbins")
@@ -60,10 +60,15 @@ _TEMPLATE_RESERVED = {"module", "action", "secrets", "span", "expect_every_s", "
                       *_config.WINDOW_FIELDS}
 HOOKS_SETTING = "hooks"
 ENV_SECRET_REFS = "HOOKSPOOL_SECRET_REFS"
-# [settings] names that are template keys (14.3.2a): a template bobbin without a processor may declare only
-# these, with this type. An instance that gives one copies its value into the expanded [sources.<i>].
-TEMPLATE_SETTINGS = {"scheme": "string", "header": "string", "prefix": "string", "param": "string",
-                     "callback_url": "string", "head_handshake": "bool"}
+# The template-settings rule (14.3.2a), one rule for both template forms: a [settings] name that is a template
+# key is that key's value in the expanded template source. The manifest's `[source] template` is either a fixed
+# table (the settings supply the keys it leaves out) or the string "settings" (no fixed table: every key comes
+# from settings). The value is each key's allowed setting types.
+SETTINGS_TEMPLATE = "settings"
+TEMPLATE_KEYS = {"scheme": ("string",), "header": ("string",), "prefix": ("string",), "param": ("string",),
+                 "callback_url": ("string",), "head_handshake": ("bool",), "key": ("string", "list"),
+                 "dedup": ("string",), "ignore": ("string", "list"), "event_type": ("string",),
+                 "attrs": ("table",), "sender_retries": ("bool",)}
 
 
 class BobbinError(_config.ConfigError):
@@ -161,13 +166,15 @@ def setting_type_ok(t: str, v: Any) -> bool:
         return isinstance(v, bool)
     if t == "list":
         return isinstance(v, list)
+    if t == "table":
+        return isinstance(v, dict)
     if t == "path":
         return isinstance(v, str) and (v == "" or os.path.isabs(v))
     return False
 
 
 def _type_hint(t: str) -> str:
-    return {"string": "a string", "int": "an integer", "bool": "true or false", "list": "a list",
+    return {"string": "a string", "int": "an integer", "bool": "true or false", "list": "a list", "table": "a table",
             "path": "an absolute path (or \"\" for none)"}.get(t, t)
 
 
@@ -212,8 +219,11 @@ def validate_manifest(m: Any, dirname: str, spans: dict) -> list[str]:
                         " runs another bobbin (name this bobbin's own source.py, or a core module)")
         if has_tpl:
             t = src["template"]
-            if not isinstance(t, dict):
-                errs.append("source.template: must be a table of template source keys")
+            if t == SETTINGS_TEMPLATE:
+                pass
+            elif not isinstance(t, dict):
+                errs.append("source.template: must be a table of template source keys, or"
+                            f" {SETTINGS_TEMPLATE!r} (every key comes from the settings)")
             else:
                 for k in sorted(set(t) & _TEMPLATE_RESERVED):
                     errs.append(f"source.template.{k}: set by the instance or by [source], not the template")
@@ -301,22 +311,25 @@ def validate_manifest(m: Any, dirname: str, spans: dict) -> list[str]:
         if proc is None and len(outputs) >= 2 and ALL_OUTPUTS not in outputs:
             errs.append('outputs: a bobbin with several outputs and no processor must declare "*"'
                         " (the source's action; an instance cannot be expanded without it)")
-    # a setting either maps into the fixed template (14.3.2a) or a processor reads it; a setting that is
-    # neither would be dropped silently at expansion, so it is refused here
+    # a setting either names a template key (14.3.2a) or a processor reads it; a setting that is neither would be
+    # dropped silently at expansion, so it is refused here
     tpl = src.get("template") if isinstance(src, dict) else None
-    if isinstance(tpl, dict) and isinstance(settings, dict):
+    if (isinstance(tpl, dict) or tpl == SETTINGS_TEMPLATE) and isinstance(settings, dict):
+        fixed = tpl if isinstance(tpl, dict) else {}
         for n, s in settings.items():
             if not isinstance(s, dict):
                 continue
             where = f"settings.{n}"
-            if n in TEMPLATE_SETTINGS:
-                if n in tpl:
+            if n in TEMPLATE_KEYS:
+                if n in fixed:
                     errs.append(f"{where}: [source.template] already sets {n}; a setting cannot map to it too")
-                elif s.get("type") not in (None, TEMPLATE_SETTINGS[n]):
+                elif n == "sender_retries" and "sender_retries" in src:
+                    errs.append(f"{where}: [source] already sets sender_retries; a setting cannot map to it too")
+                elif s.get("type") not in (None, *TEMPLATE_KEYS[n]) and s.get("type") in SETTING_TYPES:
                     errs.append(f"{where}.type: maps to the template key {n}, so it must be"
-                                f" {TEMPLATE_SETTINGS[n]!r}")
+                                f" {' or '.join(repr(t) for t in TEMPLATE_KEYS[n])}")
             elif proc is None:
-                errs.append(f"{where}: maps to no template key ({', '.join(sorted(TEMPLATE_SETTINGS))}) and the"
+                errs.append(f"{where}: maps to no template key ({', '.join(sorted(TEMPLATE_KEYS))}) and the"
                             " bobbin has no processor to read it; the value would be dropped")
     return errs
 
@@ -569,6 +582,12 @@ def _secrets_for(pkg: Package, given: Any, where: str, errs: list[str]) -> dict:
     return {k: copy.deepcopy(v) for k, v in given.items() if k in pkg.secrets}
 
 
+def _open_outputs(pkg: Package) -> bool:
+    """A bobbin whose template comes from settings (14.3.2a) cannot list the sender's event types: an instance
+    may map any event type next to ``"*"``, and each becomes a route on ``event_type`` (14.3.3 step 3)."""
+    return pkg.source.get("template") == SETTINGS_TEMPLATE and ALL_OUTPUTS in pkg.outputs
+
+
 def _outputs_for(pkg: Package, given: Any, where: str, errs: list[str]) -> dict:
     if given is None:
         given = {}
@@ -577,7 +596,7 @@ def _outputs_for(pkg: Package, given: Any, where: str, errs: list[str]) -> dict:
         return {}
     out = {}
     for k, v in given.items():
-        if k not in pkg.outputs:
+        if k not in pkg.outputs and not (_open_outputs(pkg) and EVENT_TYPE_RE.match(k)):
             errs.append(f"{where}.outputs.{k}: bobbin {pkg.name!r} has no such output")
             continue
         if not isinstance(v, str) or not v:
@@ -618,14 +637,16 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
     src: dict[str, Any] = {}
     if "template" in msrc:
         src["module"] = TEMPLATE_MODULE
-        src.update(copy.deepcopy(msrc["template"]))
+        fixed = msrc["template"] if isinstance(msrc["template"], dict) else {}
+        src.update(copy.deepcopy(fixed))
         if "sender_retries" in msrc:
             src["sender_retries"] = msrc["sender_retries"]
-        # a setting that names a template key is that key's value (14.3.2a): the instance's value, else the
-        # setting's default unless it is "" (unset). A required setting the instance leaves out is the error above.
-        given = spec.get("settings") if isinstance(spec.get("settings"), dict) else {}
-        for n in TEMPLATE_SETTINGS:
-            if n in settings and n not in msrc["template"] and (n in given or settings[n] != ""):
+        # the template-settings rule (14.3.2a): a setting that names a template key is that key's value, the
+        # instance's, else the setting's default; an empty value (``""``, ``[]``, ``{}``), given or default,
+        # means unset. The result goes through the template source's own checks, so a bad value fails `check`
+        # with the template's message.
+        for n in TEMPLATE_KEYS:
+            if n in settings and n not in fixed and settings[n] not in ("", [], {}, None):
                 src[n] = copy.deepcopy(settings[n])
     else:
         mod = msrc["module"]
@@ -681,7 +702,7 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
             if k in spec:
                 errs.append(f"{where}.{k}: only for a bobbin with a processor")
         declared = list(pkg.outputs)
-        if len(declared) == 1:
+        if len(declared) == 1 and not _open_outputs(pkg):
             only = declared[0]
             if only not in outputs:
                 errs.append(f"{where}.outputs.{only}: required (the bobbin's only output is the source's action)")
@@ -808,7 +829,8 @@ def check(cfg: dict, rep) -> None:
 
     for inst, meta in metas.items():
         if meta.get("routes"):
-            _warn_no_event_type_attr(cfg, inst, rep)
+            pkg = pkgs.get(meta["bobbin"])
+            _warn_no_event_type_attr(cfg, inst, rep, error=pkg is not None and _open_outputs(pkg))
 
     routes = cfg.get("routes") if isinstance(cfg.get("routes"), list) else []
     for inst, meta in metas.items():
@@ -837,10 +859,11 @@ def check(cfg: dict, rep) -> None:
                         " dispatcher's environment; use a file or env_file reference")
 
 
-def _warn_no_event_type_attr(cfg: dict, inst: str, rep) -> None:
+def _warn_no_event_type_attr(cfg: dict, inst: str, rep, *, error: bool = False) -> None:
     """The routes generated for a multi-output bobbin match ``event_type`` in ``attrs`` (§14.3.3 step 3);
     a source that does not expose it sends every event to the ``"*"`` output. Warn, since the plugin's
-    ``attrs`` can only be judged by running it."""
+    ``attrs`` can only be judged by running it. For a template source the attrs are in the table, so an
+    instance of a ``"settings"`` bobbin (``error``) that maps an event type without them is an error."""
     s = (cfg.get("sources") or {}).get(inst) or {}
     if s.get("module") == TEMPLATE_MODULE:
         attrs = s.get("attrs")
@@ -851,9 +874,17 @@ def _warn_no_event_type_attr(cfg: dict, inst: str, rep) -> None:
         except Exception:  # noqa: BLE001 - check reports an unloadable plugin itself
             return
         ok = getattr(getattr(plugin, "module", plugin), "attrs", None) is not None
-    if not ok:
-        rep.warn(f"bobbins.{inst}: its source does not expose event_type in attrs, so the generated routes"
-                 " (one per output) never match and every event reaches the \"*\" output")
+    if ok:
+        return
+    if error and s.get("module") == TEMPLATE_MODULE:
+        sel = s.get("event_type")
+        hint = (f'attrs = {{ event_type = "{sel}" }}' if isinstance(sel, str) and sel else
+                'event_type = "<where the type is>" and attrs = { event_type = "<the same>" }')
+        rep.err(f"bobbins.{inst}: outputs are mapped per event type, but settings.attrs does not copy event_type;"
+                f" set {hint}, or every event reaches the \"*\" output")
+        return
+    rep.warn(f"bobbins.{inst}: its source does not expose event_type in attrs, so the generated routes"
+             " (one per output) never match and every event reaches the \"*\" output")
 
 
 def is_expanded_destination(cfg: dict, name: str) -> bool:
@@ -929,45 +960,142 @@ def render(cfg: dict, instance: str | None = None) -> str:
 
 # ---- scaffold (bobbin new) ------------------------------------------------------------------------------
 SCAFFOLD_SECRET = "test-secret-bobbin"            # the bobbin kit's default test secret
+WEBHOOK_BOBBIN = "webhook"                        # the built-in bobbin `bobbin new` copies (14.3.2a)
+_WEBHOOK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bobbins", WEBHOOK_BOBBIN)
 _SCAFFOLD_BODY = '{"id":"evt_1","type":"example","note":"made-up test payload"}'
+# example settings per scheme; the scaffold freezes them (with --set values over them) into [source] template
+_SCHEME_EXAMPLES: dict[str, dict[str, Any]] = {
+    "hmac-sha256-hex": {"header": "X-Signature", "prefix": "sha256="},
+    "hmac-sha256-base64": {"header": "X-Signature"},
+    "hmac-sha1-base64-url": {"header": "X-Signature", "callback_url": "https://hooks.example.test/hooks/{name}"},
+    "shared-secret-header": {"header": "X-Webhook-Token"},
+    "url-token": {"param": "token"},
+}
+_COMMON_EXAMPLE: dict[str, Any] = {"key": "id", "event_type": "type", "attrs": {"event_type": "type"}}
+_DEFAULT_SCHEME = "hmac-sha256-hex"
 
 
-def scaffold(name: str, parent: str, *, template: bool = False, processor: bool = False) -> str:
-    """Write a new bobbin directory ``<parent>/<name>`` and return its path. Refuses an
-    invalid name or an existing directory (``ValueError`` / ``FileExistsError``)."""
+def webhook_manifest() -> dict:
+    """The built-in ``webhook`` bobbin's manifest: what ``bobbin new`` copies."""
+    with open(os.path.join(_WEBHOOK_DIR, MANIFEST), "rb") as f:
+        return tomllib.load(f)
+
+
+def freeze_settings(name: str, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The ``webhook`` bobbin's settings frozen into a fixed template table (14.3.2a): the example values for the
+    scheme, with ``settings`` over them (an empty string, list or table removes a key). Every key is checked
+    with the template source's own checks; a bad value raises ``ValueError`` with the template's message."""
+    given = dict(settings or {})
+    for k, v in given.items():
+        types = TEMPLATE_KEYS.get(k)
+        if types is None:
+            raise ValueError(f"{k}: not a template key ({', '.join(sorted(TEMPLATE_KEYS))})")
+        if not any(setting_type_ok(t, v) for t in types):
+            raise ValueError(f"{k}: must be {' or '.join(_type_hint(t) for t in types)}")
+    scheme = given.get("scheme", _DEFAULT_SCHEME)
+    if scheme not in _SCHEME_EXAMPLES:
+        raise ValueError(f"scheme: required, one of {', '.join(_SCHEME_EXAMPLES)}")
+    frozen: dict[str, Any] = {"scheme": scheme}
+    frozen.update({k: v.format(name=name) if isinstance(v, str) else v for k, v in _SCHEME_EXAMPLES[scheme].items()})
+    frozen.update(copy.deepcopy(_COMMON_EXAMPLE))
+    frozen.update(copy.deepcopy(given))
+    frozen = {k: frozen[k] for k in TEMPLATE_KEYS if k in frozen and frozen[k] not in ("", [], {}, None)}
+    from .sources import template as _template
+    spec = _template.Spec(name, frozen)
+    if spec.errors:
+        raise ValueError("; ".join(spec.errors))
+    return frozen
+
+
+def _scaffold_requests(name: str, frozen: dict[str, Any]) -> tuple[str, str]:
+    """The text of an accepted and a rejected capture (start line to body) for the frozen template."""
+    from . import verify as _verify
+    body = _SCAFFOLD_BODY.encode()
+
+    # a selector that reads a header (a delivery id, say) needs that header in the capture
+    sels = [*([frozen["key"]] if isinstance(frozen["key"], str) else frozen["key"]), frozen.get("dedup"),
+            frozen.get("event_type"), *(frozen.get("attrs") or {}).values()]
+    extra = "".join(f"{sel[7:]}: example-1\n" for sel in dict.fromkeys(s for s in sels if isinstance(s, str))
+                    if sel.startswith("header:"))
+
+    def request(secret: str) -> str:
+        scheme, hdr, pre = frozen["scheme"], frozen.get("header", ""), frozen.get("prefix", "")
+        target, headers = f"/hooks/{name}", extra
+        if scheme == "hmac-sha256-hex":
+            headers += f"{hdr}: {pre}{_verify.hmac_hex_sign(secret, body)}\n"
+        elif scheme == "hmac-sha256-base64":
+            headers += f"{hdr}: {pre}{_verify.hmac_b64_sign(secret, body)}\n"
+        elif scheme == "hmac-sha1-base64-url":
+            headers += f"{hdr}: {_verify.hmac_b64_sign(secret, body + frozen['callback_url'].encode(), 'sha1')}\n"
+        elif scheme == "shared-secret-header":
+            headers += f"{hdr}: {pre}{secret}\n"
+        else:
+            target += f"?{frozen.get('param', 'token')}={secret}"
+        return (f"POST {target} HTTP/1.1\nContent-Type: application/json\n{headers}"
+                f"Content-Length: {len(_SCAFFOLD_BODY)}\n\n{_SCAFFOLD_BODY}\n")
+    return request(SCAFFOLD_SECRET), request("wrong-test-secret")
+
+
+def scaffold(name: str, parent: str, *, code: bool = False, processor: bool = False,
+             settings: dict[str, Any] | None = None) -> str:
+    """Write a new bobbin directory ``<parent>/<name>`` and return its path: a copy of the ``webhook`` bobbin with
+    its settings frozen into a fixed ``[source] template`` (``settings`` over the example values), or, with
+    ``code``, a ``source.py`` bobbin. Refuses an invalid name, an invalid setting or an existing directory
+    (``ValueError`` / ``FileExistsError``)."""
     if not NAME_RE.match(name):
         raise ValueError(f"bobbin name {name!r} must match {NAME_RE.pattern}")
-    from . import verify as _verify
+    if code and settings:
+        raise ValueError("--set freezes template settings; a code bobbin has none")
+    frozen = freeze_settings(name, None if code else settings)
+    wm = webhook_manifest()
+    wsrc = wm.get("source", {})
+    wsecrets = wm.get("secrets", {})
+    wouts = wm.get("outputs", {})
     d = os.path.join(os.path.abspath(parent), name)
     os.makedirs(d)
     os.makedirs(os.path.join(d, "captures"))
-    sig = "sha256=" + _verify.hmac_hex_sign(SCAFFOLD_SECRET, _SCAFFOLD_BODY.encode())
-    if template:
-        src = ('[source]\ntemplate = { scheme = "hmac-sha256-hex", header = "X-Signature", prefix = "sha256=",'
-               ' key = "id", event_type = "type", attrs = { event_type = "type" } }\n')
+    good, bad = _scaffold_requests(name, frozen)
+    # a value only the deployment knows stays a setting, as a fixed template does for Trello (14.3.2a): the
+    # example is used for the captures and the kit instance (captures/kit.toml), never frozen into the template
+    callback = frozen.pop("callback_url", None) if not code else None
+    # the manifest: the webhook's span, secret and output, the frozen template in place of `template = "settings"`
+    src_lines = ['[source]']
+    if code:
+        src_lines.append('module = "source"')
     else:
-        src = '[source]\nmodule = "source"\n'
+        sender_retries = frozen.pop("sender_retries", False)
+        src_lines.append("template = " + _val(frozen))
+    src_lines.append(f'span = {_val(wsrc.get("span", "burst"))}')
+    src_lines.append(f"sender_retries = {_val(False if code else sender_retries)}")
+    if not code and frozen["scheme"] == "url-token":
+        src_lines.append(f'proxy = {_val("keep the query string (?" + frozen.get("param", "token") + "=...)")}')
     outputs = ('[outputs.changed]\ndescription = "TODO: what the processor produces"\n' if processor else
-               '[outputs."*"]\ndescription = "every accepted event"\n')
-    manifest = (f'name = "{name}"\nversion = "1"\nsummary = "TODO: one line on what the outside service sends"\n\n'
-                f'{src}span = "burst"\nsender_retries = false\n\n'
-                '[secrets.secret]\ndescription = "TODO: the signing secret the provider shows for the webhook"\n\n')
+               "".join(f'[outputs.{_key(k)}]\ndescription = "every accepted event"\n' for k in wouts))
+    secret_desc = wsecrets.get("secret", {}).get("description", "the signing secret")
+    manifest = (f'name = {_val(name)}\nversion = "1"\nsummary = "TODO: one line on what the outside service sends"\n\n'
+                + "\n".join(src_lines) + "\n\n"
+                f'[secrets.secret]\ndescription = "TODO: {secret_desc}"\n\n')
+    if callback:
+        manifest += ('[settings.callback_url]\ndescription = "TODO: the exact URL the sender was given for this webhook'
+                     ' (it is part of the signed input)"\ntype = "string"\nrequired = true\n\n')
     if processor:
         manifest += '[processor]\nmodule = "processor"\ntimeout_s = 300\nstate = true\n\n'
     manifest += outputs
-    bad = "sha256=" + _verify.hmac_hex_sign("wrong-test-secret", _SCAFFOLD_BODY.encode())
     out_line = (f'outputs = {{ changed = "hermes:{name}-changed" }}' if processor else
                 f'outputs = {{ "*" = "hermes:{name}" }}')
     table = (f'[bobbins.{name}]\nsecrets.secret = {{ file = "/etc/hookspool/secrets/{name}_secret" }}\n{out_line}\n')
+    if callback:
+        table += f'settings = {{ callback_url = "https://<HOOKS_HOST>/hooks/{name}" }}\n'
+    url_note = (f"Proxy: forward `/hooks/{name}` to the intake and keep the query string (the token is in it)"
+                if frozen["scheme"] == "url-token" else f"Proxy: forward `/hooks/{name}` to the intake")
+    callback_note = ("\nSet `callback_url` to the exact URL given to the sender (its signature covers it); a delivery"
+                     " signed over another URL is refused.\n" if callback else "")
     files = {MANIFEST: manifest,
              os.path.join("captures", "example.http"):
                  "# capture: TODO describe the request; signed with " + SCAFFOLD_SECRET + "\n# expect: queued\n"
-                 f"POST /hooks/{name} HTTP/1.1\nContent-Type: application/json\nX-Signature: {sig}\n"
-                 f"Content-Length: {len(_SCAFFOLD_BODY)}\n\n{_SCAFFOLD_BODY}\n",
+                 + good,
              os.path.join("captures", "bad_signature.http"):
-                 "# capture: the same request signed with another secret\n# expect: unverified\n"
-                 f"POST /hooks/{name} HTTP/1.1\nContent-Type: application/json\nX-Signature: {bad}\n"
-                 f"Content-Length: {len(_SCAFFOLD_BODY)}\n\n{_SCAFFOLD_BODY}\n",
+                 "# capture: the same request signed with another secret\n# expect: unverified\n" + bad,
              "SETUP.md": f"# Set up {name}\n\nTODO: what to create at the provider (the webhook and its signing"
                          " secret), with a link to the provider's webhook documentation.\n\n"
                          "## Secrets\n\n"
@@ -975,7 +1103,7 @@ def scaffold(name: str, parent: str, *, template: bool = False, processor: bool 
                          f" `/etc/hookspool/secrets/{name}_secret`, mode 0600, owned by the hookspool user.\n\n"
                          "## Config\n\nAdd to `config.toml`, then run `hookspool check` and `hookspool reload`:\n\n"
                          f"```toml\n{table}```\n\n"
-                         f"Proxy: forward `/hooks/{name}` to the intake (see `deploy/nginx.example.conf`).\n\n"
+                         f"{url_note} (see `deploy/nginx.example.conf`).\n{callback_note}\n"
                          "## Verify\n\nSend a test delivery from the provider, then"
                          f" `hookspool list --source {name}` shows a batch.\n\n"
                          "## Roll back\n\nDelete the webhook at the provider, remove the table and run"
@@ -1001,9 +1129,14 @@ def scaffold(name: str, parent: str, *, template: bool = False, processor: bool 
                           "   Check: a batch is listed. If not: run `hookspool status` and report it.\n",
              "README.md": f"# {name}\n\nTODO: what the outside service sends and what this bobbin does with it.\n\n"
                           "## Setup at the provider\n\nTODO\n\n## Secrets\n\n- `secret`: TODO\n\n"
-                          "## Settings\n\nNone yet.\n\n## Outputs\n\nTODO\n\n"
+                          + ("## Settings\n\n- `callback_url`: TODO the exact URL given to the sender (required)\n\n"
+                             if callback else "## Settings\n\nNone yet.\n\n") + "## Outputs\n\nTODO\n\n"
                           f"The capture in `captures/` is signed with the test secret `{SCAFFOLD_SECRET}`.\n"}
-    if not template:
+    if callback:
+        files[os.path.join("captures", "kit.toml")] = (
+            "# test values for `hookspool bobbin check`: the URL the captures are signed over\n"
+            f"[settings]\ncallback_url = {_val(callback)}\n")
+    if code:
         files["source.py"] = (
             f'"""{name} webhooks: verify the signature and choose the coalescing key."""\n'
             "from hookspool.plugin import BadPayload, Request, Secrets, verify as v\n\n"

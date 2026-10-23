@@ -1,0 +1,10 @@
+# capture: a ping is verified, acknowledged and not queued
+# now: 1800000000
+# expect: ignored
+POST /hooks/webhook HTTP/1.1
+Content-Type: application/json
+X-Delivery-Id: d-2
+X-Signature: sha256=6b98bb344769d3ad20d5d5e6c9e0c27c58a82950b0845a0fb52351046b54a6a2
+Content-Length: 80
+
+{"id":"evt_2","type":"ping","note":"made-up test payload PAYLOAD-SENTINEL-7f3a"}

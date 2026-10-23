@@ -1,0 +1,10 @@
+# capture: the hmac-sha256-hex scheme, signed with the test secret (settings: tests/bobbins/test_webhook.py)
+# now: 1800000000
+# expect: queued
+# scheme: hmac-sha256-hex
+POST /hooks/webhook HTTP/1.1
+Content-Type: application/json
+X-Signature: sha256=8959cef499284d22cff94fb13ad849f641c10ce16bea449258ee24090a15f4ea
+Content-Length: 89
+
+{"id":"evt_1","type":"order.created","note":"made-up test payload PAYLOAD-SENTINEL-7f3a"}
