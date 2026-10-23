@@ -558,6 +558,81 @@ def test_jwks_fetcher_against_stub(stub):
     assert kc.lookup("zz", 40) is None
 
 
+def test_keycache_lookup_takes_its_own_fetch_and_needs_one():
+    f = Fetch(_jwk("a"))
+    kc = V.KeyCache(cooldown_s=0)
+    with pytest.raises(ValueError):
+        kc.lookup("a", 0)
+    assert kc.lookup("a", 0, fetch=f)["kid"] == "a"
+    assert kc.lookup("a", 1)["kid"] == "a"               # cached: no fetch needed any more
+    assert f.calls == ["a"]
+
+
+def test_keycache_logs_a_failed_fetch_once_without_a_body(caplog):
+    caplog.set_level("WARNING", logger="hookspool.verify")
+    kc = V.KeyCache(cooldown_s=0, name="acme sandbox")
+    kc.lookup("a", 0, fetch=Fetch(OSError("down " + SECRET_MARK)))
+    kc.lookup("b", 1, fetch=Fetch(net.Permanent("POST acme.test: HTTP 400 BAD_KEY", status=400, code="BAD_KEY")))
+    lines = [r.getMessage() for r in caplog.records]
+    assert lines == ["acme sandbox key fetch failed: OSError",
+                     "acme sandbox key fetch failed: Permanent http=400 error_code=BAD_KEY"]
+    assert SECRET_MARK not in caplog.text
+
+
+def test_keycache_does_not_log_the_status_or_code_of_a_caller_supplied_exception(caplog):
+    """Only ``net.NetError`` carries a sanitised code; a free-text ``.code`` on any other exception stays out."""
+    class Odd(Exception):
+        status = 500
+        code = "free text " + SECRET_MARK
+    caplog.set_level("WARNING", logger="hookspool.verify")
+    kc = V.KeyCache(cooldown_s=0, name="acme sandbox")
+    kc.lookup("a", 0, fetch=Fetch(Odd("boom")))
+    assert [r.getMessage() for r in caplog.records] == ["acme sandbox key fetch failed: Odd"]
+    assert SECRET_MARK not in caplog.text
+
+
+def test_shared_key_cache_is_one_per_name_and_resets_by_prefix():
+    V.reset_shared_key_caches("unit-test ")
+    a = V.shared_key_cache("unit-test one", ttl_s=5)
+    assert V.shared_key_cache("unit-test one", ttl_s=99) is a and a.ttl_s == 5
+    b = V.shared_key_cache("unit-test two")
+    assert b is not a
+    V.reset_shared_key_caches("unit-test one")
+    assert V.shared_key_cache("unit-test one") is not a
+    assert V.shared_key_cache("unit-test two") is b
+    V.reset_shared_key_caches("unit-test ")
+
+
+def test_key_fetcher_posts_a_body_and_maps_unknown_key_refusals(stub):
+    jwk = _jwk("k1")
+    stub.on("/key", {"body": {"key": jwk, "request_id": "r"}}, {"status": 400, "body": {"error_code": "NO_SUCH_KEY"}},
+            {"status": 404, "body": {}}, {"status": 400, "body": {"error_code": "BAD_CREDENTIALS"}},
+            {"status": 503}, {"body": {"nothing": 1}})
+
+    def unknown(status, code):
+        return status == 404 or (status == 400 and code == "NO_SUCH_KEY")
+    fetch = V.key_fetcher(stub.base + "/key", method="POST", body=lambda kid: {"key_id": kid, "k": SECRET_MARK},
+                          field="key", unknown=unknown)
+    assert fetch("k1") == jwk
+    assert json.loads(stub.hits("/key")[0]["body"]) == {"key_id": "k1", "k": SECRET_MARK}
+    assert fetch("k2") is None                                   # 400 NO_SUCH_KEY: the sender does not know it
+    assert fetch("k3") is None                                   # 404
+    with pytest.raises(Permanent) as e:
+        fetch("k4")                                              # any other refusal is an error, not "unknown"
+    assert (e.value.status, e.value.code) == (400, "BAD_CREDENTIALS") and SECRET_MARK not in str(e.value)
+    with pytest.raises(Retryable):
+        fetch("k5")
+    assert fetch("k6") is None                                   # a 200 without the key member
+
+
+def test_key_fetcher_without_a_field_wants_a_jwks_set(stub):
+    stub.on("/set", {"body": {"keys": [_jwk("k1")]}}, {"body": {"key": _jwk("k1")}})
+    fetch = V.key_fetcher(stub.base + "/set")
+    assert fetch("k1")["keys"][0]["kid"] == "k1"
+    with pytest.raises(ValueError):
+        fetch("k1")
+
+
 # ---- rotated refresh token is persisted at once (a kill before the batch ends must not lose it) -------------
 def test_persist_is_called_right_after_a_rotation_and_a_restart_uses_the_new_token(tmp_path, stub):
     cred = _cred(tmp_path, stub)

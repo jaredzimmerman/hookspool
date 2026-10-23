@@ -432,7 +432,7 @@ Quarantine exists because of this table: with GitHub, a plugin bug that answered
 - **Handshakes never enqueue.** `challenge()` returns a response and stops; the handler cannot fall through to enqueue.
 - **Constant-time compares everywhere**: `hookspool.verify` wraps `hmac.compare_digest` and is the only comparison API plugins are given (`hmac_hex`, `hmac_b64`, `hmac_prefixed`, `timestamped` (`t=…,v1=…` schemes), `standard_webhooks`, `static_token`, `jwt_es256` via PyJWT). Every timestamped scheme takes `tolerance_s` (default 300) and the check is two-sided, `abs(now - t) <= tolerance_s`: future-dated requests are rejected too, and the test vectors include one.
 - **Replay windows differ per scheme.** GitHub's scheme has no timestamp, so a captured legitimate delivery can be replayed after the dedup window (TLS termination at the proxy makes capture unlikely, and the dedup window makes it a duplicate for 24 h). Zoom, Standard Webhooks and Plaid (`iat`) carry timestamps. hookspool adds no replay check of its own that would reject a legitimate provider retry.
-- **Plaid key fetches are guarded.** The verifier checks the JWT's structure and `alg == ES256` before touching the network, caches known keys, negative-caches unknown `kid`s for 10 min, and allows at most one key fetch per minute per source, so unauthenticated requests with random `kid`s cannot amplify against Plaid's API or tie up intake threads.
+- **Plaid key fetches are guarded.** The verifier checks the JWT's structure and `alg == ES256` before touching the network, caches known keys, negative-caches unknown `kid`s for 10 min, and allows at most one key fetch per minute per environment for the whole process (`verify.shared_key_cache`), so unauthenticated requests with random `kid`s cannot amplify against Plaid's API or tie up intake threads.
 - **Secrets are references, not values.** Config holds `{file = "…"}`, `{env = "NAME"}` or `{env_file = "…", key = "NAME"}`; values are read at use time, never cached across requests, never logged, never written to the database. `file` and `env_file` refs pick up a rotation without a restart; `env` refs do not (a process's environment does not change under it) and `check` says so. Files are checked for mode `0o600`-ish (group/other readable → warning in `hookspool check`).
 - **No secrets, bodies or headers in logs.** Log records carry ids, names, sizes, states, codes and durations. The test suite plants a sentinel in every payload and secret and fails if any log line contains it. Query strings are never logged (Pub/Sub tokens live there).
 - **Headers stored** are only those a source lists in `keep_headers`; every source also declares `auth_headers` (signature, token, authorization headers), which are refused from `keep_headers` at config check and stripped before a quarantined request is stored.
@@ -668,6 +668,7 @@ module = "source"                                # source.py in this bobbin, or 
 # template = "settings"                          # the `webhook` bobbin only: the template keys come from the instance's
 #                                                # settings of the same names (14.3.2a)
 span = "mail"                                    # default span preset name
+# config = ["env"]                               # settings that become keys of the source's own table (its `config_keys`)
 sender_retries = true
 expect_every_s = 345600                          # recommended; applied only when the instance sets expect = true
 proxy = "keep the query string (?token=...)"     # one line for the reverse-proxy recipe, optional
@@ -864,7 +865,7 @@ Everything that is the same for two services is core, and a bobbin calls it:
 | need | core API (the only allowed way) |
 |---|---|
 | signature / token / timestamp checks | `hookspool.verify` (via `hookspool.plugin.verify`), or the `template` source |
-| a sender's published verification keys (JWKS) | `hookspool.verify` key fetch and cache (moved out of the plaid source) |
+| a sender's published verification keys (JWKS, or one key per request) | `hookspool.verify`: `key_fetcher` / `jwks_fetcher` build the fetch (through `hookspool/net.py`), `KeyCache` and `shared_key_cache` hold and guard the keys (moved out of the plaid source, which now only names its URL, body and "unknown key" refusals) |
 | JSON paths, headers, dedup ids, body hashes | `hookspool.plugin` (`get_path`, `Request`, `dedup`) |
 | durable state, journal, replay, atomic writes, locking | `ctx.load_state` / `ctx.save_state` (the runtime holds the lock for the batch) |
 | results to the agent or another destination | return items from `process`; the runtime emits them |

@@ -286,7 +286,7 @@ secrets.webhook_secret = {{ file = "{sec}" }}
 def test_source_test_cli_with_the_default_loader(tmp_path, capsys, name, expect, rc):
     from hookspool.__main__ import main
     code = main(["--config", _config(tmp_path), "source", "test", "zoom", "--request",
-                 os.path.join(sourcekit.CAPTURES, "zoom", name)])
+                 os.path.join(sourcekit.capture_dir("zoom"), name)])
     out = capsys.readouterr().out
     assert json.loads(out)["result"] == expect and code == rc and SECRET not in out and SENTINEL not in out
 
@@ -299,7 +299,7 @@ def test_config_check_accepts_the_example(tmp_path):
 
 # ---- capture generation (maintenance) ------------------------------------------------------------------------
 def write_captures() -> None:
-    d = os.path.join(sourcekit.CAPTURES, "zoom")
+    d = sourcekit.capture_dir("zoom")
     os.makedirs(d, exist_ok=True)
     hdr = [("Content-Type", "application/json"), ("User-Agent", "Zoom Marketplace/1.0a")]
 

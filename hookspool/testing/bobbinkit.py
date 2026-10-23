@@ -33,7 +33,8 @@ Test values and stub answers for a bobbin live in ``captures/kit.toml`` (optiona
     body_signed = true           # false for a static token that does not cover the body
     timestamped = true           # default: found by replaying the accepted capture a week later
     tolerance_s = 300            # the timestamp window, when there is one
-    [[http]]                     # what ctx.http answers (method + URL prefix); anything else gets {}
+    [[http]]                     # what ctx.http answers (method + URL prefix); anything else gets {}.
+                                 # The source's own HTTP calls (its verification-key fetch) are answered the same way
     method = "GET"
     url = "https://api.example.com/v1/items"
     status = 200
@@ -964,6 +965,29 @@ def _load_module(b: Bobbin, module: str):
     return mod
 
 
+@contextlib.contextmanager
+def _stub_http(b: Bobbin) -> Iterator[None]:
+    """Answer the source's own HTTP calls (a sender's published verification keys, say) from the kit's
+    ``[[http]]`` stubs, the way a processor's ``ctx.http`` is answered; with none, calls are left to the
+    network block."""
+    stubs = b.kit.get("http") or []
+    if not stubs:
+        yield
+        return
+    from .. import net
+    from ._procrun import StubHttp
+    stub = StubHttp(list(stubs), {"http_calls": 0, "http_hosts": []})
+    orig = net.Http.request
+
+    def request(self, method, url, **kw):
+        return stub.request(method, url, **kw)
+    net.Http.request = request
+    try:
+        yield
+    finally:
+        net.Http.request = orig
+
+
 def _source_kit_base(b: Bobbin) -> tuple[_KitSource | None, str]:
     cfg, errs = b.instance()
     if cfg is None:
@@ -1031,7 +1055,7 @@ def _source_test(b: Bobbin, ks: _KitSource, raw: RawRequest, now: float | None =
     _kit, make = _env(b, ks, _unsigned(raw, ks.auth_headers), lambda r, s, a: r, work, clock)
     env = make()
     try:
-        with block_network():
+        with block_network(), _stub_http(b):
             from .. import intake as I
             out = I.source_test(env.cfg, b.name, raw, now=t, loader=env._load)
         return str(out.get("result"))
@@ -1095,7 +1119,7 @@ def check_source_kit(b: Bobbin) -> Result:
             kit, _make = _env(b, ks, sample, _ReplaySigner(clock, table), work, clock, handshake=handshake,
                               unauth=unauth, timestamped=stamped)
             try:
-                with block_network() as attempts:
+                with block_network() as attempts, _stub_http(b):
                     SK.run(case, kit, work, clock)
                 network += attempts
                 tally["pass"] += 1
@@ -1151,7 +1175,8 @@ def _stage(b: Bobbin, ks: _KitSource, raw: RawRequest) -> tuple[dict, str, str] 
         src = load_source(b.name, C.source_cfg(env.cfg, b.name), env._load)
         req = Request(raw.method, raw.target, raw.headers, raw.body, now=t, config=src.public_config(),
                       remote_addr="capture")
-        st = I.run_stages(src, req, env.cfg)
+        with _stub_http(b):
+            st = I.run_stages(src, req, env.cfg)
         if st.kind != "ready":
             return None
         f = st.fields

@@ -182,11 +182,18 @@ never raises on what a sender controls. A test greps the code for any other way 
 Pass `now=req.now` to timestamped helpers so tests can drive the clock, and keep the window two-sided: a request dated in
 the future is as wrong as a stale one.
 
-A sender that publishes its verification keys (a JWKS) is verified through `hookspool.verify.KeyCache`, not a private fetch.
-It caches keys for a TTL, refetches once per cooldown on an unknown key id, and when the sender's key endpoint fails it keeps
-serving the last keys it had rather than refusing every webhook. That is a deliberate choice of availability over
-revocation: a key the sender withdrew during an outage of its key endpoint is still accepted until the next successful fetch.
-Pass `usable=` to refuse keys the sender marks expired.
+A sender that publishes its verification keys (a JWKS, or one key per request) is verified through
+`hookspool.verify.KeyCache`, not a private fetch. It caches keys for a TTL, refetches once per cooldown on an unknown key id,
+and when the sender's key endpoint fails it keeps serving the last keys it had rather than refusing every webhook. That is a
+deliberate choice of availability over revocation: a key the sender withdrew during an outage of its key endpoint is still
+accepted until the next successful fetch. Pass `usable=` to refuse keys the sender marks expired.
+
+The fetch is built, not written: `v.jwks_fetcher(url)` for a JWKS URL, or `v.key_fetcher(url, method="POST", body=...,
+field="key", unknown=...)` for a per-key endpoint that wants credentials (`unknown(status, code)` says which refusals mean
+"the sender has no such key"; both go through `hookspool/net.py`, so errors carry no URL, query or body). A cache that every
+source of one sender shares is `v.shared_key_cache(name, ...)`; `cache.lookup(kid, req.now, fetch=...)` takes a fetch of its
+own for credentials that are read per request. A failed fetch leaves one log line (`<name> key fetch failed: <class>`, with
+the HTTP status and the sender's short error code for a `net` error, never a body). The Plaid bobbin is the model.
 
 ### A worked example
 
@@ -280,8 +287,8 @@ tampered-body case then does not apply), `break_stage` (the plugin function the 
 `tests/test_sources_gcal.py` (a token and a payload built from headers) and `tests/test_sources_plaid.py` (a JWT) are the
 fuller models.
 
-Captures for a code plugin sit in `tests/captures/<name>/*.http` and are run with `sourcekit.run_capture`; the Zoom test
-shows the loop. Sign them at the time the capture says (`# now:`).
+Captures for a code plugin sit in `tests/captures/<name>/*.http` (or in `captures/` of its bobbin) and are run with
+`sourcekit.run_capture`; the Zoom test shows the loop. Sign them at the time the capture says (`# now:`).
 
 ## The conformance kit
 

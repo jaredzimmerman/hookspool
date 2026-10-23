@@ -80,14 +80,14 @@ action = "hermes:github-prs"           # a request that names no route goes here
 expect_every_s = 0                     # 0 = no liveness expectation
 secrets.secret = { file = "/etc/hookspool/secrets/github" }
 
-# Plaid: ES256 JWT verified against Plaid's published keys. The client id and secret are used only to
-# fetch those keys. Plaid retries for hours.
-[sources.plaid]
-span = "sync"
-env = "production"                     # or "sandbox" / "development"
-action = "hermes:plaid"
+# Plaid, as the `plaid` bobbin (hookspool/bobbins/plaid/README.md): ES256 JWT verified against Plaid's published
+# keys. The client id and secret are used only to fetch those keys. Plaid retries for hours.
+[bobbins.plaid]
+bobbin = "plaid"
+settings = { env = "production" }      # or "sandbox" / "development"
 secrets.client_id = { env_file = "/etc/hookspool/plaid.env", key = "PLAID_CLIENT_ID" }
 secrets.secret = { env_file = "/etc/hookspool/plaid.env", key = "PLAID_SECRET" }
+outputs = { "*" = "hermes:plaid" }
 
 # Gmail through Cloud Pub/Sub push, as the `gmail` bobbin (hookspool/bobbins/gmail/README.md). One batch per
 # mailbox; the processor reads the mailbox once for all the pushes in it. The URL is /hooks/gmail?token=...
@@ -114,11 +114,12 @@ settings = { tz = "America/New_York", own = ["owner@example.com", "assistant@exa
 outputs = { conflict = "hermes:calendar-conflict", brief = "hermes:calendar-brief", changed = "script:calendar-refresh" }
 expect = false                         # true: 2 days of silence opens a source_silent issue
 
-# Zoom event subscriptions. The URL-validation handshake is answered only after the signature checks out.
-[sources.zoom]
-span = "immediate"
-action = "hermes:zoom"
-secrets.webhook_secret = { file = "/etc/hookspool/secrets/zoom" }
+# Zoom event subscriptions, as the `zoom` bobbin (hookspool/bobbins/zoom/README.md). The URL-validation handshake is
+# answered only after the signature checks out.
+[bobbins.zoom]
+bobbin = "zoom"
+secrets.webhook_secret = { file = "/etc/hookspool/secrets/zoom_webhook_secret" }
+outputs = { "*" = "hermes:zoom" }
 
 # Trello: base64 HMAC-SHA1 over the body plus the callback URL (byte for byte what the webhook was
 # registered with). Trello's unsigned HEAD handshake is answered with an empty 200.

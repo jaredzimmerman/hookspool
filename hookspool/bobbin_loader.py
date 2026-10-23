@@ -43,7 +43,7 @@ PROCESSOR_MODULE = "hookspool.processor"
 DEFAULT_PROCESSOR_TIMEOUT_S = 300
 
 MANIFEST_KEYS = {"name", "version", "summary", "source", "secrets", "settings", "processor", "outputs"}
-SOURCE_KEYS = {"module", "template", "span", "sender_retries", "expect_every_s", "proxy"}
+SOURCE_KEYS = {"module", "template", "span", "sender_retries", "expect_every_s", "proxy", "config"}
 SECRET_KEYS = {"description", "processor", "required"}
 SETTING_KEYS = {"description", "type", "required", "default"}
 PROCESSOR_KEYS = {"module", "timeout_s", "state"}
@@ -51,6 +51,9 @@ OUTPUT_KEYS = {"description"}
 # window, liveness, dedup and body overrides copied onto the expanded source table
 SOURCE_OVERRIDES = ("span", *_config.WINDOW_FIELDS, "expect_every_s", "dedup_window_s", "max_body_bytes")
 PROCESSOR_OVERRIDES = ("timeout_s", "state_dir")
+# names a setting copied by [source] config can never take: they are keys of the expanded source table that
+# the loader or the instance sets (an instance setting must not choose the module or overwrite an override)
+RESERVED_SOURCE_NAMES = frozenset(_config.SOURCE_KEYS | SOURCE_KEYS | set(SOURCE_OVERRIDES))
 INSTANCE_KEYS = {"bobbin", "secrets", "settings", "outputs", "expect", *SOURCE_OVERRIDES, *PROCESSOR_OVERRIDES}
 # keys of a manifest's source template that the instance or the manifest's own [source] sets
 _TEMPLATE_RESERVED = {"module", "action", "secrets", "span", "expect_every_s", "dedup_window_s", "max_body_bytes",
@@ -223,6 +226,20 @@ def validate_manifest(m: Any, dirname: str, spans: dict) -> list[str]:
             errs.append("source.expect_every_s: must be a number > 0")
         if "proxy" in src and not isinstance(src["proxy"], str):
             errs.append("source.proxy: must be a string")
+        cfg_keys = src.get("config")
+        if "config" in src:
+            decl = m.get("settings") if isinstance(m.get("settings"), dict) else {}
+            if has_tpl:
+                errs.append("source.config: only a code source has config keys (a template reads its settings by name)")
+            elif not (isinstance(cfg_keys, list) and all(isinstance(k, str) for k in cfg_keys)):
+                errs.append("source.config: must be a list of setting names")
+            else:
+                for k in cfg_keys:
+                    if k not in decl:
+                        errs.append(f"source.config: {k!r} is not a declared setting")
+                    elif k in RESERVED_SOURCE_NAMES:
+                        errs.append(f"source.config: {k!r} is a source table key the runtime sets; name the"
+                                    " setting something else")
 
     secrets = m.get("secrets", {})
     if unknown("secrets", secrets, set(secrets) if isinstance(secrets, dict) else set()):
@@ -618,6 +635,11 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
                 register_path_module(src["module"], pkg.local_file(mod), pkg.dir)
         else:
             src["module"] = mod
+        # the settings the source module reads from its own table (its ``config_keys``): the instance's value,
+        # else the setting's default
+        for n in msrc.get("config") or ():
+            if n in settings:
+                src[n] = copy.deepcopy(settings[n])
     if msrc.get("span") is not None:
         src["span"] = msrc["span"]
     expect = spec.get("expect")
