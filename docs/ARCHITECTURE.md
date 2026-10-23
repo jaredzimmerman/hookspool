@@ -854,7 +854,7 @@ Everything that is the same for two services is core, and a bobbin calls it:
 | retries, backoff, timeouts, dead-letter | the dispatcher: raise `Retryable` / `Permanent` (or `ctx.fail_permanent`); never loop or sleep |
 | HTTP to the provider's API | `ctx.http` (`hookspool/net.py`): timeouts, JSON, status → `Retryable`/`Permanent`, no bodies or query strings in errors or logs |
 | OAuth 2 refresh-token flows | `ctx.oauth(<secret name>)` (`hookspool/net.py`): reads the credential through `ctx.secret`, caches access tokens in runtime state, refreshes on expiry or one 401, and **never rewrites the credential file** (a rotated refresh token is kept in runtime state and used from then on) |
-| secrets | `ctx.secret(name)` (processor) / the source's `Secrets` (source) |
+| secrets | `ctx.secret(name)` (processor, through `net.make_context_extras`: a name the processor was not given is `Permanent`, an unreadable reference `Retryable`) / the source's `Secrets` (source) |
 | settings | `ctx.settings`; a bobbin never reads the environment |
 | logging | `ctx.log` (processor) / the intake's logger (source); a bobbin never opens log files |
 | time | `ctx.now()` / `req.now` |
