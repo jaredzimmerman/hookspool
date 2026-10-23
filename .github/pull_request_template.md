@@ -20,7 +20,7 @@ hookspool bobbin check hookspool/bobbins/<name> --base origin/main
 
 **Summary line:** <!-- e.g. bobbin check acme: PASS, 8 of 9 required checks pass, 1 not applicable; scope: bobbin-only -->
 
-Only a person can answer these (see [docs/BOBBIN_REVIEW.md](../docs/BOBBIN_REVIEW.md)):
+Only a person can answer these (see [docs/bobbins/review.md](../docs/bobbins/review.md)):
 
 - [ ] The provider's documentation for the signature scheme is linked here, and the bobbin implements what it says: <!-- link -->
 - [ ] The captures came from a real delivery and were redacted (test secrets, example.com addresses, no real ids or names)

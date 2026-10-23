@@ -488,7 +488,8 @@ SECRET_PATTERNS = _scan.SECRET_PATTERNS          # one set of patterns for this 
 HOST_OK_SUFFIX = (".example", ".test", ".invalid", ".localhost", ".example.com", ".example.org", ".example.net",
                   "googleapis.com", "google.com", "github.com", "githubusercontent.com", "zoom.us", "plaid.com",
                   "atlassian.com", "trello.com", "standardwebhooks.com", "python.org", "pypi.org",
-                  "readthedocs.io", "shields.io", "mermaid.js.org")
+                  "readthedocs.io", "shields.io", "mermaid.js.org",
+                  "w3.org", "hairline.lucasmarkes.com")      # the SVG namespace, and the style the banners follow
 HOST_OK_EXACT = {"localhost", "example.com", "example.org", "example.net", "127.0.0.1", "0.0.0.0", "[::1]"}
 URL_RE = re.compile(r"""\b(?:https?|wss?)://(?:[^/\s'"<>@]*@)?(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)""")
 # A bare host name (``server_name hooks.example.com;``, a path under /etc/nginx/sites-available/): labels, then a

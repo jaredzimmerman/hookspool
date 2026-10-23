@@ -2,7 +2,7 @@
 # <HOOKSPOOL_HOME>/config.toml (or deploy/local/config.toml, which is gitignored) and replace every
 # placeholder: the /etc/hookspool/... secret files, the /opt/hookspool/... script paths, the
 # callback URL and the alert command. `hookspool check` is the judge; both services run it before
-# they start. Reference: docs/ARCHITECTURE.md section 15.
+# they start. Reference: docs/architecture/ARCHITECTURE.md section 15.
 #
 # Layout assumed below (change it freely, but keep the unit files' ReadWritePaths in step):
 #   /var/lib/hookspool                 state dir: config.toml, spool.db, dispatch.lock
@@ -18,7 +18,7 @@ store_raw = true                       # keep original bodies so replay and `sou
 [intake]
 listen = "127.0.0.1:8650"              # loopback only; the reverse proxy is the only client
 max_body_bytes = 1048576               # 413 above this. Raise it together with the source, route and
-                                       # destination limits below (see the GitHub row in deploy/README.md)
+                                       # destination limits below (see the GitHub row in docs/operations/sweeps.md)
 
 [dispatch]
 parallel = 4
@@ -61,7 +61,7 @@ immediate = { quiet_s = 0, max_s = 0 }     # meetings, security
 
 # GitHub, as config only (examples/sources/github.toml explains each line). The path chooses the
 # route: the proxy sets X-Hookspool-Route to "ci" or "prs" and the routes below match it.
-# GitHub does not retry a failed delivery: the sweep in deploy/README.md redelivers.
+# GitHub does not retry a failed delivery: the sweep in docs/operations/sweeps.md redelivers.
 [sources.github]
 module = "hookspool.sources.template"
 scheme = "hmac-sha256-hex"
@@ -101,7 +101,7 @@ secrets.cred_agent = { file = "/etc/hookspool/google/assistant.json" }
 settings = { owner = "owner@example.com", agent = "assistant@example.com", tz = "America/New_York" }
 outputs = { scheduling = "hermes:mail-scheduling", agent-mail = "hermes:assistant-mail", mailbox-changed = "hermes:mail-changed" }
 # expect = true applies the bobbin's recommended expect_every_s (4 days of silence opens a source_silent issue:
-# the watch lapsed?). Leave it off until the sender points here (deploy/README.md, section 2).
+# the watch lapsed?). Leave it off until the sender points here (docs/operations/running.md, rollout order).
 expect = false
 
 # Google Calendar, as the `gcal` bobbin (hookspool/bobbins/gcal/README.md). Watch channels expire (at most a
@@ -175,7 +175,7 @@ max_inflight = 2
 # A receiver that expects the sender's original payload, one request per event (a Hermes route whose
 # prompt template reads {pull_request.title}): unwrap. Give the routes that feed it span = "immediate"
 # (quiet_s = max_s = 0) so each event is its own batch; the gateway route may then keep its own
-# `events` filter. See docs/CONFIGURATION.md, "Unwrap: one request per event".
+# `events` filter. See docs/configuration/README.md, "Unwrap: one request per event".
 # [destinations."hermes:github-releases"]
 # unwrap = true
 # event_header = "X-GitHub-Event"

@@ -1,6 +1,6 @@
 # Reviewing a bobbin
 
-A bobbin is the plugin for one outside service ([ARCHITECTURE.md](ARCHITECTURE.md#143-bobbins-service-plugins)). This
+A bobbin is the plugin for one outside service ([Architecture](../architecture/ARCHITECTURE.md#143-bobbins-service-plugins)). This
 page says how a pull request that adds or changes one is judged, so that a contributor knows before opening it what will
 be asked, and a maintainer can decide quickly. The short version: **a bobbin-only pull request with a green scorecard and
 the three boxes of the template ticked is the expected merge.**
@@ -20,6 +20,10 @@ value from the bobbin's `captures/kit.toml` (or the default `test-secret-bobbin`
 CI runs exactly this command, through `.github/scripts/plugin_ci.py bobbins`, on every bobbin a pull request adds or
 changes. There is no check that only CI knows about.
 
+On every pull request CI also runs ruff and the whole test suite on Python 3.11, 3.12 and 3.13, checks that the core
+contains no per-source code, scans for secrets and hostnames, and writes the result as a table in the job summary. Run the
+same things locally before you push (see [Contributing](../../CONTRIBUTING.md)).
+
 ## What green means
 
 | check | it proves |
@@ -27,7 +31,7 @@ changes. There is no check that only CI knows about.
 | `manifest` | `bobbin.toml` is valid, its name is its directory, its `source.module` is not another bobbin's code, and the bobbin covers one service: it reads no other bobbin's signature header and calls no other bobbin's API host |
 | `files` | `bobbin.toml`, `README.md`, `SETUP.md`, `AGENTS.md` and at least one capture are there |
 | `todos` | no `TODO` placeholder is left (a fresh `hookspool bobbin new` fails only this check) |
-| `core-only` | no module re-implements core: no `hmac`, `urllib`, `socket`, `subprocess`, `threading`, `logging`, files, environment, sleeping, `sys.path` or another bobbin (the full list is ARCHITECTURE.md 14.3.7). The bobbin's own `tests/` directory is not walked: tests are not modules the runtime loads, and they may open files and run a loopback stub server |
+| `core-only` | no module re-implements core: no `hmac`, `urllib`, `socket`, `subprocess`, `threading`, `logging`, files, environment, sleeping, `sys.path` or another bobbin (the full list is Architecture 14.3.7). The bobbin's own `tests/` directory is not walked: tests are not modules the runtime loads, and they may open files and run a loopback stub server |
 | `docs` | SETUP.md and AGENTS.md name every secret and required setting, AGENTS.md opens with **Needs from the human** and has numbered steps, a step that changes something at the provider is marked `outward`, and the `[bobbins.<instance>]` table in each expands |
 | `captures` | at least one accepted and one rejected (bad signature) capture, every `# expect:` holds, and no capture carries a secret-looking value or real-looking personal data (an address outside example.com, a phone number, a public address) |
 | `source-kit` | with each accepted capture, the source passes the shared source kit: signed, unsigned, tampered, stale and future timestamps, oversized, chunked, duplicate, the handshakes, quarantine, spool failures, and nothing secret in the spool or the logs |

@@ -133,7 +133,7 @@ def comment_body(cards: list[dict], label: str | None, missing: list[str] = ()) 
             lines.append(f"| {k['name']}{'' if k['required'] else ' (advisory)'} | {res} | {detail} |")
         lines.append("")
     lines.append("A green scorecard, `bobbin-only`, and the three boxes in the pull request ticked is the expected"
-                 " merge (docs/BOBBIN_REVIEW.md).")
+                 " merge (docs/bobbins/review.md).")
     return "\n".join(lines) + "\n"
 
 

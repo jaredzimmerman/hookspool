@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GitHub redelivery sweep (docs/ARCHITECTURE.md section 13, point 5).
+"""GitHub redelivery sweep (docs/architecture/ARCHITECTURE.md section 13, point 5).
 
 GitHub does not retry a webhook delivery that failed (a 5xx while the proxy or intake was down, a 429,
 a timeout). This script lists the repository webhook's recent deliveries and asks GitHub to redeliver
@@ -22,7 +22,7 @@ Safe to run from cron once or twice a day, and safe to run twice in a row:
   deliveries for three days, so 48 is the default). A delivery without a usable ``delivered_at`` or
   ``id`` is skipped and counted, never guessed at;
 * a delivery whose newest attempt got **413** is not redelivered: it would be refused again until the
-  body limit is raised end to end (deploy/README.md, Known limits). It is counted in the summary so the
+  body limit is raised end to end (docs/operations/sweeps.md, Known limits). It is counted in the summary so the
   operator sees it.
 
 Output is one summary line on stdout. Exit 0 when the sweep ran (even if some redeliveries were
@@ -150,7 +150,7 @@ def main(argv: list[str] | None = None, *, now: float | None = None) -> int:
     left = max(0, len(todo) - a.max)
     extra = f", {len(unusable)} skipped (no usable delivered_at or id)" if unusable else ""
     if too_large:
-        extra += f", {len(too_large)} not redelivered (413: raise the body limit, deploy/README.md Known limits)"
+        extra += f", {len(too_large)} not redelivered (413: raise the body limit, docs/operations/sweeps.md Known limits)"
     print(f"{a.repo} hook {a.hook_id}: {len(deliveries)} deliveries, {len(todo)} without a 2xx, "
           f"{sent} {'listed' if a.dry_run else 'redelivered'}, {refused} refused, {left} left for the next run{extra}")
     return 0

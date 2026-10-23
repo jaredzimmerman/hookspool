@@ -1,4 +1,4 @@
-# hookspool-intake.service: the loopback HTTP intake (docs/ARCHITECTURE.md section 2).
+# hookspool-intake.service: the loopback HTTP intake (docs/architecture/ARCHITECTURE.md section 2).
 # Install as /etc/systemd/system/hookspool-intake.service, then `systemctl daemon-reload`.
 # Replace User/Group (a dedicated account is best; on a host that runs the agent as root, set root and
 # drop nothing else), the hookspool path, and the state dir if you moved it. Keep ReadWritePaths equal
@@ -12,7 +12,7 @@ StartLimitIntervalSec=0
 # The intake never applies a schema migration: on an older database `hookspool check` exits 2 and systemd
 # keeps retrying every 2 s until `hookspool migrate` has run. The dispatch unit's ExecStartPre runs the
 # same check, so after a package upgrade the dispatcher does NOT fix the schema on its own: follow
-# "Upgrading" in deploy/README.md (stop dispatch, migrate, start). On a new install `migrate` creates the
+# docs/operations/upgrading.md (stop dispatch, migrate, start). On a new install `migrate` creates the
 # spool before either service starts. There is no hard dependency, so neither service can block the other.
 Wants=hookspool-dispatch.service
 

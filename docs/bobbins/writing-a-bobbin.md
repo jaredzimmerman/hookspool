@@ -1,4 +1,52 @@
-# Adding a source
+# Writing a bobbin
+
+A **bobbin** is the plugin for one outside service: a directory that holds everything hookspool needs to take that
+service's webhooks and turn them into work. A deployment turns it on with one `[bobbins.<instance>]` table in the config
+(see [the configuration reference](../configuration/README.md#bobbinsinstance)). This page is for the person writing a new one.
+
+## What goes in a bobbin
+
+```
+hookspool/bobbins/<name>/
+    bobbin.toml        the manifest: name, secrets, typed settings, outputs, and which source and processor it uses
+    source.py          a code source, only when the template cannot express the sender (optional)
+    processor.py       work done after the event is committed, such as asking the service what changed (optional)
+    captures/*.http    sample requests the checks replay: one accepted, one rejected
+    README.md          what it does, its settings, outputs and limits
+    SETUP.md           the steps for a person: provider side, secrets, config table, verify, roll back
+    AGENTS.md          the same procedure as numbered steps an agent can follow
+```
+
+The rules that keep a bobbin small:
+
+- One bobbin per service. `gmail`, `gcal` and `drive` are three bobbins, not one "google" bobbin. Two deployments of
+  the same service are two instances in the config, not two bobbins.
+- A bobbin never imports another bobbin. Code two bobbins both need moves into hookspool core and both call it.
+- A bobbin calls core and never re-implements it. Signatures go through `hookspool.verify`, HTTP and OAuth through
+  the context a processor receives, state through `ctx.load_state` and `ctx.save_state`, retries through the dispatcher.
+  The full table of what to call is in [Architecture](../architecture/ARCHITECTURE.md#1437-bobbins-call-core-they-never-re-implement-it-and-never-each-other).
+
+## Start from the scaffold
+
+```sh
+hookspool bobbin new acme --dir hookspool/bobbins --set scheme=hmac-sha256-hex --set header=X-Acme-Signature --set key=id
+```
+
+That copies the [`webhook` bobbin](webhook.md) with your settings frozen into a fixed template, writes an accepted and a
+rejected capture signed for the scheme, and writes `README.md`, `SETUP.md` and `AGENTS.md` with `TODO` placeholders.
+Add `--code` for a `source.py` instead of the template, and `--processor` for a `processor.py`. Then:
+
+1. Replace the captures with a redacted real delivery from the sender (the capture format is [below](#capture-files)).
+2. Fill in the three documents. Every declared secret and required setting must appear in both setup documents, and the
+   config table they show must expand without errors.
+3. Run `hookspool bobbin check hookspool/bobbins/acme`. It prints a scorecard; fix each `file:line` it lists until every
+   required check passes. [Reviewing a bobbin](review.md) says what each check proves and what a maintainer still looks at.
+4. Open a pull request that touches only the bobbin directory and its tests. With a green scorecard and the template's
+   three boxes ticked, that is the expected merge.
+
+The rest of this page is about the part that is different for every sender: the source.
+
+## The source of a bobbin
 
 A source is one sender of webhooks: GitHub, a billing system, your own app. Every source behaves identically once a
 request is verified. Spooling, dedup, coalescing, retries, breakers, issues, alerts, metrics and the CLI are shared code
@@ -101,7 +149,7 @@ There is deliberately no expression language. If a `key` cannot be read from a r
 answered 202, an issue opened) rather than lost, and `hookspool replay <batch>` re-runs it once the table is fixed. If
 the sender needs more than the table can say, use a code plugin.
 
-The standard source keys in [CONFIGURATION.md](CONFIGURATION.md) (`span`, `action`, `expect_every_s`, `keep_headers`,
+The standard source keys in [the configuration reference](../configuration/README.md) (`span`, `action`, `expect_every_s`, `keep_headers`,
 `dedup_window_s`, the window fields) work on a template source like any other. `secrets.secret` is the one secret.
 
 ### Steps
@@ -343,13 +391,13 @@ real customer's payload.
 
 ## Wiring and the sweep
 
-1. Add `[sources.<name>]` to the config, with `secrets.*` pointing at files (see [CONFIGURATION.md](CONFIGURATION.md)).
+1. Add `[sources.<name>]` to the config, with `secrets.*` pointing at files (see [the configuration reference](../configuration/README.md)).
 2. Add an nginx `location /hooks/<name>` with its own `limit_req`; the pattern is in `deploy/nginx.example.conf`.
 3. Run `hookspool check`, then `hookspool reload`.
 4. Register the URL with the sender and send its test event. `hookspool list --source <name>` shows it.
 
 A webhook replaces a poll but never completely: channels expire, subscriptions get disabled after failures, and some
-senders never retry. So every source states, in its pull request and in the sweep table of `deploy/README.md`:
+senders never retry. So every source states, in its pull request and in the sweep table of [Sweeps](../operations/sweeps.md):
 
 - **the sweep**: a cheap, idempotent job that reconciles what the push might have missed, run once or twice a day, or the
   reason none is needed. It should go through hookspool (`hookspool enqueue`, or a script's emitted events) so it is

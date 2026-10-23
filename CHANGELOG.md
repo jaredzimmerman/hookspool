@@ -29,7 +29,7 @@ The changes below will ship as 0.2.0.
   capture, the processor through the real runtime with stub HTTP and the network blocked, the bobbin's own tests, and the
   advisory scope. CI runs the same command on every changed bobbin (`.github/workflows/bobbin.yml`); a separate
   `bobbin-label.yml` run labels the pull request `bobbin-only` or `touches-core` and keeps one scorecard comment.
-  `docs/BOBBIN_REVIEW.md` gives the merge criteria. `hookspool bobbin new` now also writes SETUP.md, AGENTS.md and a
+  `docs/bobbins/review.md` gives the merge criteria. `hookspool bobbin new` now also writes SETUP.md, AGENTS.md and a
   rejected capture, and passes the kit once its TODOs are filled in. The source kit moved to `hookspool.testing.sourcekit`
   (`tests/sourcekit.py` re-exports it).
 - `hookspool.processor`: the runtime for service-package processors (`python -m hookspool.processor <instance>`): a
@@ -96,10 +96,17 @@ The changes below will ship as 0.2.0.
   lists the old variable for every setting). `hookspool.sources.gmail` and `.gcal` still import, but declare no `action`: an
   instance's `outputs` choose it. Their captures moved to the bobbins' `captures/`.
 - Spool schema 2 (migration `0002_unwrap.sql` adds the two attempt columns). Stop the dispatcher and run `hookspool migrate`
-  (deploy/README.md, Upgrading): both services run `hookspool check` before they start and refuse a schema 1 spool, so a
+  (docs/operations/upgrading.md): both services run `hookspool check` before they start and refuse a schema 1 spool, so a
   restart alone does not migrate it.
 - The message for an old or missing spool now says to stop the dispatcher and run `hookspool migrate`, and points to
-  deploy/README.md; a Hermes 413 under `unwrap` says to exclude the event or raise `max_body_bytes` (one event, not a batch).
+  `deploy/README.md`, which now links to the upgrade page; a Hermes 413 under `unwrap` says to exclude the event or raise `max_body_bytes` (one event, not a batch).
+- The documentation is organised into folders (`docs/getting-started/`, `configuration/`, `bobbins/`, `operations/` and
+  `architecture/`, each with an index page), and the README is a short front page that links into them. The old pages moved:
+  `ARCHITECTURE.md` to `architecture/`, `CONFIGURATION.md` to `configuration/README.md`, `ADDING_A_SOURCE.md` to
+  `bobbins/writing-a-bobbin.md`, `ADDING_A_DESTINATION.md` to `configuration/destinations.md`, `BOBBIN_REVIEW.md` to
+  `bobbins/review.md`, `CLI.md` to `operations/cli.md`, and `OPERATIONS.md` and the body of `deploy/README.md` to pages under
+  `operations/`. `docs/ARCHITECTURE.md` stays as a pointer. Each section of the README and two of the folders carry a banner
+  drawing (`docs/assets/banners/`), and the configuration reference now documents `[bobbins.<instance>]`.
 
 ### Fixed
 
@@ -130,7 +137,7 @@ The changes below will ship as 0.2.0.
 - Sources: `github`, `trello` and `kaneo` as config-only templates (`examples/sources/`), and `zoom`, `plaid`, `gmail` and
   `gcal` as code plugins. The `template` source builds a source from a TOML table (five verification schemes, dotted-path
   and header selectors, no expression language).
-- The extension model: [docs/ADDING_A_SOURCE.md](docs/ADDING_A_SOURCE.md), [docs/ADDING_A_DESTINATION.md](docs/ADDING_A_DESTINATION.md),
+- The extension model: [docs/bobbins/writing-a-bobbin.md](docs/bobbins/writing-a-bobbin.md), [docs/configuration/destinations.md](docs/configuration/destinations.md),
   a conformance kit (`tests/sourcekit.py`) that exercises every source the same way, and `hookspool source test` to run a
   captured request through a source offline.
 - The command line: `status`, `list`, `show`, `replay`, `retry`, `split`, `exclude`, `drop`, `pause`, `resume`, `issues`,
