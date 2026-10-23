@@ -18,8 +18,9 @@ Secrets used below: `client_id`, `secret`. Setting: `env` (not required; default
 ## Steps
 
 1. **Goal:** the `plaid` extra (PyJWT and cryptography, which check the ES256 signature) is installed in the
-   Python environment hookspool runs from: `pip install 'hookspool[plaid]'` (or the same extra of your install
-   method). Without it every webhook answers 503 and `hookspool check` does not notice.
+   Python environment hookspool runs from: `pip install '.[plaid]'` in the hookspool checkout (with pipx:
+   `pipx install '.[plaid]'` or `pipx inject hookspool cryptography PyJWT`). Without it every webhook answers
+   503 and `hookspool check` does not notice.
    **Check:** `python -c "import jwt, cryptography"` (with that environment's `python`) exits 0.
    **If it fails:** install the extra, then repeat the check.
 2. **Goal:** the secret files exist. The person writes the client id and the secret to the two files with mode

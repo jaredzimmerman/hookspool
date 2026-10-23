@@ -13,7 +13,8 @@ keys Plaid publishes, fetched with your client id and secret.
 ## Install the signature libraries
 
 Plaid's signature is an ES256 JWT, checked with PyJWT and cryptography, which are the `plaid` extra:
-`pip install 'hookspool[plaid]'` in the Python environment hookspool runs from. Check with that environment's
+`pip install '.[plaid]'` from the hookspool checkout, in the Python environment hookspool runs from (with pipx:
+`pipx install '.[plaid]'`, or `pipx inject hookspool cryptography PyJWT`). Check with that environment's
 `python -c "import jwt, cryptography"`; it must print nothing and exit 0. Without the extra every webhook
 answers 503 and `hookspool check` does not warn.
 

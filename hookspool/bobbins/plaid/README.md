@@ -35,7 +35,8 @@ the destination is what goes and reads the data.
 
 ## Requirements
 
-The `plaid` extra of hookspool (`pip install 'hookspool[plaid]'`: PyJWT and cryptography). Without it every
+The `plaid` extra of hookspool (PyJWT and cryptography): `pip install '.[plaid]'` in the hookspool checkout, or with
+pipx `pipx install '.[plaid]'` or `pipx inject hookspool cryptography PyJWT`. Without it every
 webhook answers 503 and `hookspool check` does not warn; test with `python -c "import jwt, cryptography"`.
 
 ## Settings
