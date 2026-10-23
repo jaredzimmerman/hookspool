@@ -1,0 +1,15 @@
+# test values and stub API answers for `hookspool bobbin check`
+body_signed = false            # a static token does not cover the body
+
+[secrets]
+token = "test-secret-kitproc"
+api_key = "test-api-key-kitproc"
+
+[settings]
+owner = "owner@example.com"
+
+[[http]]
+method = "GET"
+url = "https://api.example.com/v1/items"
+status = 200
+json = { items = [{ id = "i1" }, { id = "i2" }] }

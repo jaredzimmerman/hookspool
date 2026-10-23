@@ -89,12 +89,17 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("name")
     p.add_argument("--request", required=True, help=".http capture (start line, headers, blank line, body)")
     p.add_argument("--now", type=float, help="unix seconds to verify at (default: the capture's '# now:' or now)")
-    p = sub.add_parser("bobbin", help="bobbins: list | show <bobbin> | expand [<instance>] | new <name>")
-    p.add_argument("subcmd", choices=("list", "show", "expand", "new"))
-    p.add_argument("name", nargs="?", help="the bobbin (show), the instance (expand) or the new bobbin's name")
+    p = sub.add_parser("bobbin", help="bobbins: list | show <bobbin> | expand [<instance>] | new <name> | check <dir>")
+    p.add_argument("subcmd", choices=("list", "show", "expand", "new", "check"))
+    p.add_argument("name", nargs="?", help="the bobbin (show), the instance (expand), the new bobbin's name (new) or"
+                                           " the bobbin directory (check)")
     p.add_argument("--dir", default=".", help="new: the parent directory (default: the current directory)")
     p.add_argument("--template", action="store_true", help="new: a template source instead of source.py")
     p.add_argument("--processor", action="store_true", help="new: include a processor.py")
+    p.add_argument("--report", choices=("text", "md", "json"), default="text",
+                   help="check: the scorecard format (default text)")
+    p.add_argument("--strict", action="store_true", help="check: advisory checks fail too")
+    p.add_argument("--base", help="check: the git ref the change is compared with (for the scope check)")
     sub.add_parser("check", help="validate config, secrets, plugins and the spool")
     sub.add_parser("reload", help="check, then touch the config so both processes reload")
     p = sub.add_parser("migrate", help="apply pending schema migrations")
@@ -117,6 +122,12 @@ def _out(a, obj, text: str | None = None) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     a = _parser().parse_args(argv)
+    if a.cmd == "bobbin" and a.subcmd == "check":
+        if not a.name:
+            _err("bobbin check: give the bobbin directory")
+            return EXIT_NOTHING
+        from .testing import bobbinkit       # needs no config: it checks one directory
+        return bobbinkit.main(a.name, report=a.report, strict=a.strict, base=a.base)
     try:
         cfg_path = _config.config_path(a.config, a.home)
         cfg = _config.load_config(cfg_path, cli_home=a.home, expand=a.cmd != "bobbin")

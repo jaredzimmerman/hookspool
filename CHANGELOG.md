@@ -10,6 +10,15 @@ The changes below will ship as 0.2.0.
 
 ### Added
 
+- `hookspool bobbin check <dir>`: the bobbin conformance kit (`hookspool.testing.bobbinkit`) on one directory, printed as a
+  scorecard (`--report text|md|json`, `--strict`, `--base`): manifest and one service per bobbin, files, TODOs, the 14.3.7
+  core-only rules, SETUP.md / AGENTS.md, captures (including a scan for secrets and personal data), the source kit per
+  capture, the processor through the real runtime with stub HTTP and the network blocked, the bobbin's own tests, and the
+  advisory scope. CI runs the same command on every changed bobbin (`.github/workflows/bobbin.yml`); a separate
+  `bobbin-label.yml` run labels the pull request `bobbin-only` or `touches-core` and keeps one scorecard comment.
+  `docs/BOBBIN_REVIEW.md` gives the merge criteria. `hookspool bobbin new` now also writes SETUP.md, AGENTS.md and a
+  rejected capture, and passes the kit once its TODOs are filled in. The source kit moved to `hookspool.testing.sourcekit`
+  (`tests/sourcekit.py` re-exports it).
 - `hookspool.processor`: the runtime for service-package processors (`python -m hookspool.processor <instance>`): a
   per-batch state lock, a journal so a retried batch replays without calling `process` again, staged state writes, emits
   addressed through the deployment's routes, typed settings, and exit codes 0 (done), 75 (retry), 65 (permanent). The

@@ -7,7 +7,24 @@
 - [ ] New source as a config template (`examples/sources/<name>.toml` + `tests/captures/<name>/`)
 - [ ] New source as a code plugin (`hookspool/sources/<name>.py` + `tests/test_sources_<name>.py`)
 - [ ] Change to an existing source
+- [ ] New or changed bobbin (`hookspool/bobbins/<name>/`)
 - [ ] Core, destinations, deploy or docs
+
+## New or changed bobbin
+
+Run the conformance kit, the same check CI runs, and paste its first line (the summary):
+
+```sh
+hookspool bobbin check hookspool/bobbins/<name> --base origin/main
+```
+
+**Summary line:** <!-- e.g. bobbin check acme: PASS, 8 of 9 required checks pass, 1 not applicable; scope: bobbin-only -->
+
+Only a person can answer these (see [docs/BOBBIN_REVIEW.md](../docs/BOBBIN_REVIEW.md)):
+
+- [ ] The provider's documentation for the signature scheme is linked here, and the bobbin implements what it says: <!-- link -->
+- [ ] The captures came from a real delivery and were redacted (test secrets, example.com addresses, no real ids or names)
+- [ ] I can maintain this bobbin, or accept it being removed if it breaks and nobody fixes it
 
 ## For a new or changed source
 

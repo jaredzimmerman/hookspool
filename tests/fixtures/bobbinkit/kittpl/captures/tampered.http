@@ -1,0 +1,8 @@
+# capture: body changed after signing
+# expect: unverified
+POST /hooks/kittpl HTTP/1.1
+Content-Type: application/json
+X-Kittpl-Signature: sha256=fefa10353eb89651f91c00c9e219f833e4e5d35c33ab519be532dc7b65a5aac9
+Content-Length: 69
+
+{"repo":"octo/widgetz","kind":"build","note":"PAYLOAD-SENTINEL-7f3a"}

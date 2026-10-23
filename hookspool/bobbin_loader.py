@@ -867,7 +867,7 @@ def render(cfg: dict, instance: str | None = None) -> str:
 
 
 # ---- scaffold (bobbin new) ------------------------------------------------------------------------------
-SCAFFOLD_SECRET = "test-secret-scaffold"
+SCAFFOLD_SECRET = "test-secret-bobbin"            # the bobbin kit's default test secret
 _SCAFFOLD_BODY = '{"id":"evt_1","type":"example","note":"made-up test payload"}'
 
 
@@ -894,11 +894,48 @@ def scaffold(name: str, parent: str, *, template: bool = False, processor: bool 
     if processor:
         manifest += '[processor]\nmodule = "processor"\ntimeout_s = 300\nstate = true\n\n'
     manifest += outputs
+    bad = "sha256=" + _verify.hmac_hex_sign("wrong-test-secret", _SCAFFOLD_BODY.encode())
+    out_line = (f'outputs = {{ changed = "hermes:{name}-changed" }}' if processor else
+                f'outputs = {{ "*" = "hermes:{name}" }}')
+    table = (f'[bobbins.{name}]\nsecrets.secret = {{ file = "/etc/hookspool/secrets/{name}_secret" }}\n{out_line}\n')
     files = {MANIFEST: manifest,
              os.path.join("captures", "example.http"):
                  "# capture: TODO describe the request; signed with " + SCAFFOLD_SECRET + "\n# expect: queued\n"
                  f"POST /hooks/{name} HTTP/1.1\nContent-Type: application/json\nX-Signature: {sig}\n"
                  f"Content-Length: {len(_SCAFFOLD_BODY)}\n\n{_SCAFFOLD_BODY}\n",
+             os.path.join("captures", "bad_signature.http"):
+                 "# capture: the same request signed with another secret\n# expect: unverified\n"
+                 f"POST /hooks/{name} HTTP/1.1\nContent-Type: application/json\nX-Signature: {bad}\n"
+                 f"Content-Length: {len(_SCAFFOLD_BODY)}\n\n{_SCAFFOLD_BODY}\n",
+             "SETUP.md": f"# Set up {name}\n\nTODO: what to create at the provider (the webhook and its signing"
+                         " secret), with a link to the provider's webhook documentation.\n\n"
+                         "## Secrets\n\n"
+                         f"- `secret`: TODO the signing secret the provider shows. Save it to"
+                         f" `/etc/hookspool/secrets/{name}_secret`, mode 0600, owned by the hookspool user.\n\n"
+                         "## Config\n\nAdd to `config.toml`, then run `hookspool check` and `hookspool reload`:\n\n"
+                         f"```toml\n{table}```\n\n"
+                         f"Proxy: forward `/hooks/{name}` to the intake (see `deploy/nginx.example.conf`).\n\n"
+                         "## Verify\n\nSend a test delivery from the provider, then"
+                         f" `hookspool list --source {name}` shows a batch.\n\n"
+                         "## Roll back\n\nDelete the webhook at the provider, remove the table and run"
+                         " `hookspool reload`.\n",
+             "AGENTS.md": f"# Set up {name} (for an agent)\n\nThe same procedure as SETUP.md, as steps.\n\n"
+                          "## Needs from the human\n\n"
+                          "- TODO: an account at the provider that may create webhooks\n"
+                          f"- the signing secret `secret`, written by the human to"
+                          f" `/etc/hookspool/secrets/{name}_secret` (never pass its value to the agent)\n\n"
+                          "## Steps\n\n"
+                          "1. **Add the config table.** Goal: hookspool accepts the deliveries. Add to"
+                          " `config.toml`:\n\n"
+                          f"   ```toml\n" + "".join("   " + ln + "\n" for ln in table.splitlines()) + "   ```\n\n"
+                          "   Check: `hookspool check` exits 0. If not: fix what it names, then run it again.\n"
+                          "2. **Register the webhook at the provider** (`outward`: ask the human first). Goal: the"
+                          f" provider sends to `https://<HOOKS_HOST>/hooks/{name}`. TODO: the provider's API call"
+                          " or console page.\n"
+                          "   Check: the provider shows the webhook as active. If not: report what it shows.\n"
+                          "3. **Verify.** Goal: one delivery arrives. Ask the provider for a test delivery, then run"
+                          f" `hookspool list --source {name}`.\n"
+                          "   Check: a batch is listed. If not: run `hookspool status` and report it.\n",
              "README.md": f"# {name}\n\nTODO: what the outside service sends and what this bobbin does with it.\n\n"
                           "## Setup at the provider\n\nTODO\n\n## Secrets\n\n- `secret`: TODO\n\n"
                           "## Settings\n\nNone yet.\n\n## Outputs\n\nTODO\n\n"

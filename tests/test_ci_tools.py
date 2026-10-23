@@ -344,7 +344,7 @@ def workflow(name):
         return f.read()
 
 
-@pytest.mark.parametrize("name", ["ci.yml", "plugins.yml"])
+@pytest.mark.parametrize("name", ["ci.yml", "plugins.yml", "bobbin.yml"])
 def test_workflows_are_safe_for_public_pull_requests(name):
     text = workflow(name)
     assert "pull_request_target" not in text
@@ -399,3 +399,163 @@ def test_pull_request_template_asks_for_the_signature_docs_link():
     assert "signature documentation (link)" in text
     assert "plugin_ci.py kit" in text
     assert kinds(text, rel=".github/pull_request_template.md") == []
+
+
+# ---- bobbins ---------------------------------------------------------------------------------------------
+import json  # noqa: E402
+import shutil  # noqa: E402
+
+import _miniyaml  # noqa: E402
+
+FIX_BOBBINS = "tests/fixtures/bobbinkit"
+
+
+@pytest.fixture
+def brepo(repo):
+    """The tiny repo plus two built-in bobbins, a contributed one elsewhere and a kit fixture."""
+    root, env = repo
+    for rel in ("hookspool/bobbins/__init__.py", "hookspool/bobbins/alpha/bobbin.toml", "hookspool/bobbins/alpha/source.py",
+                "hookspool/bobbins/web-hook/bobbin.toml", "hookspool/providers/acme.py", "contrib/acme/bobbin.toml",
+                "contrib/acme/captures/event.http", "tests/fixtures/bobbinkit/broken/bobbin.toml",
+                "tests/bobbins/test_web_hook.py", "hookspool/net.py"):
+        write(root, rel, "x = 1\n")
+    commit(root, env)
+    return root, env
+
+
+@pytest.mark.parametrize("touched,expected", [
+    (["hookspool/bobbins/alpha/source.py"], ["hookspool/bobbins/alpha"]),
+    (["contrib/acme/captures/event.http"], ["contrib/acme"]),               # a bobbin added anywhere
+    (["tests/bobbins/test_web_hook.py"], ["hookspool/bobbins/web-hook"]),
+    (["tests/fixtures/bobbinkit/broken/bobbin.toml"], []),                  # the kit's own fixtures: never
+    (["README.md", "hookspool/store.py"], []),
+    (["hookspool/net.py"], ["hookspool/bobbins/alpha", "hookspool/bobbins/web-hook"]),
+    (["hookspool/testing/bobbinkit.py", "contrib/acme/bobbin.toml"],
+     ["contrib/acme", "hookspool/bobbins/alpha", "hookspool/bobbins/web-hook"]),
+])
+def test_discover_bobbins(brepo, touched, expected):
+    assert P.discover_bobbins(touched) == expected
+
+
+def test_core_guard_skips_bobbins_and_providers_but_knows_their_names(brepo):
+    files = P.core_files()
+    assert "hookspool/bobbins/__init__.py" in files and "hookspool/net.py" in files
+    assert not any(f.startswith(("hookspool/bobbins/alpha/", "hookspool/providers/")) for f in files)
+    assert {"alpha", "web-hook"} <= P.source_names()
+    assert "webhook" in P.GENERIC_BOBBINS
+
+
+def test_run_bobbin_writes_the_scorecards(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    report = P.Report()
+    doc = P.run_bobbin(f"{FIX_BOBBINS}/kitcode", report, report_dir=str(tmp_path / "out"))
+    row, = report.rows
+    assert row.ok and row.check == "bobbin" and row.detail.startswith("bobbin check kitcode: PASS")
+    assert doc["ok"] and json.loads((tmp_path / "out" / "kitcode.json").read_text())["schema"] == "hookspool.bobbin-check/1"
+    assert (tmp_path / "out" / "kitcode.md").read_text().startswith("### Bobbin `kitcode`: PASS")
+    report.emit("Bobbin scorecards")
+    summary = (tmp_path / "summary.md").read_text()
+    assert "| bobbin | `tests/fixtures/bobbinkit/kitcode` | pass |" in summary and "### Bobbin `kitcode`" in summary
+
+
+def test_the_bobbins_command_fails_for_a_failing_bobbin(tmp_path):
+    bad = tmp_path / "kitcode"
+    shutil.copytree(os.path.join(ROOT, FIX_BOBBINS, "kitcode"), bad)
+    (bad / "README.md").write_text("# kitcode\n\nTODO\n")
+    out = tmp_path / "reports"
+    env = dict(os.environ, GITHUB_STEP_SUMMARY=str(tmp_path / "s.md"))
+    p = subprocess.run([sys.executable, SCRIPT, "bobbins", str(bad), os.path.join(FIX_BOBBINS, "kittpl"),
+                        "--report-dir", str(out), "--pr", "42"], cwd=ROOT, env=env, capture_output=True, text=True)
+    assert p.returncode == 1, p.stdout + p.stderr
+    assert json.loads((out / "meta.json").read_text()) == {"pr": 42, "bobbins": ["kitcode", "kittpl"]}
+    assert json.loads((out / "kitcode.json").read_text())["ok"] is False
+    assert json.loads((out / "kittpl.json").read_text())["ok"] is True
+    summary = (tmp_path / "s.md").read_text()
+    assert "**FAIL**" in summary and "1 of 9 required checks fail (todos)" in summary
+
+
+def test_the_bobbins_command_with_nothing_changed_writes_meta(tmp_path, repo):
+    out = tmp_path / "reports"
+    assert P.main(["bobbins", "--base", "HEAD", "--report-dir", str(out)]) == 0
+    assert json.loads((out / "meta.json").read_text()) == {"pr": None, "bobbins": []}
+
+
+def _wf(name):
+    return _miniyaml.load(workflow(name))
+
+
+def test_bobbin_workflow_jobs_and_permissions():
+    doc = _wf("bobbin.yml")
+    assert doc["on"] == {"pull_request": None}
+    assert doc["permissions"] == {"contents": "read"}
+    assert list(doc["jobs"]) == ["bobbin-check"]
+    job = doc["jobs"]["bobbin-check"]
+    assert job["permissions"] == {"contents": "read"}, "the PR job has a read-only token"
+    steps = job["steps"]
+    co = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
+    assert co["with"] == {"fetch-depth": 0, "persist-credentials": False}
+    run = next(s for s in steps if "plugin_ci.py bobbins" in str(s.get("run", "")))
+    assert run["run"] == ('python .github/scripts/plugin_ci.py bobbins --base "$BASE_SHA" --pr "$PR_NUMBER"'
+                          " --report-dir bobbin-reports")
+    assert run["env"] == {"BASE_SHA": "${{ github.event.pull_request.base.sha }}",
+                          "PR_NUMBER": "${{ github.event.pull_request.number }}"}
+    up = next(s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact@"))
+    assert up["if"] == "always()" and up["with"]["name"] == "bobbin-reports" and up["with"]["path"] == "bobbin-reports/"
+
+
+def test_label_workflow_runs_only_trusted_code_with_the_least_write_access():
+    text = workflow("bobbin-label.yml")
+    doc = _wf("bobbin-label.yml")
+    assert doc["on"] == {"workflow_run": {"workflows": ["bobbin"], "types": ["completed"]}}
+    assert "pull_request_target" not in text and "${{ secrets." not in text
+    assert doc["permissions"] == {"contents": "read"}
+    assert list(doc["jobs"]) == ["label"]
+    job = doc["jobs"]["label"]
+    assert job["if"] == "github.event.workflow_run.event == 'pull_request'"
+    assert job["permissions"] == {"actions": "read", "contents": "read", "issues": "write", "pull-requests": "write"}
+    steps = job["steps"]
+    co = steps[0]
+    assert str(co["uses"]).startswith("actions/checkout@") and co["with"] == {"persist-credentials": False}, \
+        "the default branch only: no ref, so never the pull request's head"
+    dl = next(s for s in steps if str(s.get("uses", "")).startswith("actions/download-artifact@"))
+    assert dl["with"]["run-id"] == "${{ github.event.workflow_run.id }}" and dl["with"]["name"] == "bobbin-reports"
+    runs = [s for s in steps if "run" in s]
+    assert len(runs) == 1, "one step runs code: the default branch's label script, nothing installed"
+    assert runs[0]["run"] == ('python3 .github/scripts/bobbin_label.py --reports bobbin-reports --repo "$REPO"'
+                              ' --head-sha "$HEAD_SHA"')
+    assert "${{" not in runs[0]["run"]
+    assert runs[0]["env"]["HEAD_SHA"] == "${{ github.event.workflow_run.head_sha }}"
+
+
+@pytest.mark.parametrize("name", ["ci.yml", "plugins.yml", "bobbin.yml", "bobbin-label.yml"])
+def test_workflows_parse_with_the_reader(name):
+    doc = _wf(name)
+    assert doc["name"] and doc["jobs"] and "permissions" in doc
+
+
+@pytest.mark.parametrize("name", ["ci.yml", "plugins.yml", "bobbin.yml", "bobbin-label.yml"])
+def test_actionlint(name):
+    exe = shutil.which("actionlint")
+    if exe is None:
+        pytest.skip("actionlint is not installed")
+    p = subprocess.run([exe, os.path.join(WORKFLOWS, name)], capture_output=True, text=True)
+    assert p.returncode == 0, p.stdout + p.stderr
+
+
+def test_miniyaml_refuses_what_it_cannot_read():
+    with pytest.raises(ValueError):
+        _miniyaml.load("a: {b: 1}\n")
+    with pytest.raises(ValueError):
+        _miniyaml.load("a: 1\na: 2\n")
+    assert _miniyaml.load("a:\n  - x\n  - k: v\n    j: [1, 2]\nb: |\n  one\n  two\n") == \
+        {"a": ["x", {"k": "v", "j": [1, 2]}], "b": "one\ntwo\n"}
+
+
+def test_pull_request_template_has_the_bobbin_section():
+    with open(os.path.join(ROOT, ".github", "pull_request_template.md"), encoding="utf-8") as f:
+        text = f.read()
+    sec = text[text.index("## New or changed bobbin"):]
+    assert "hookspool bobbin check hookspool/bobbins/<name> --base origin/main" in sec
+    boxes = re.findall(r"^- \[ \] (.+)$", sec.split("\n## ")[0], re.M)
+    assert len(boxes) == 3, boxes
+    assert "provider's documentation" in boxes[0] and "real delivery" in boxes[1] and "maintain" in boxes[2]
