@@ -195,7 +195,9 @@ def test_every_real_destination_ends_by_its_deadline_through_the_dispatcher(tmp_
     assert time.monotonic() - t1 < 3.0, "the dispatcher did not stop promptly"
     # the group kill reached everything in the script's process group
     pids = [int(x) for line in pidlog.read_text().splitlines() for x in line.split()]
-    hang_pids = [int(x) for x in pidlog.read_text().splitlines()[0].split()] if pidlog.exists() else []
+    # the hang script writes "leader child"; the escape scripts write one pid each, in any order
+    hang_pids = [int(x) for line in pidlog.read_text().splitlines() if len(line.split()) == 2 for x in line.split()]
+    assert hang_pids, "the hang script never recorded its group"
     end = time.monotonic() + 3
     while time.monotonic() < end and any(alive(p) for p in hang_pids):
         time.sleep(0.05)
