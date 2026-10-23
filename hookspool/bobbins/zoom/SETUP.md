@@ -36,9 +36,9 @@ unchanged.
 
 ## Add the endpoint at Zoom
 
-3. In the app's Event Subscriptions, add a subscription with the endpoint URL from step 3 above, choose the
-   events to receive, and press **Validate**. Zoom sends `endpoint.url_validation` and enables the subscription
-   when the answer is right. Save.
+In the app's Event Subscriptions, add a subscription with the endpoint URL chosen in step 3 of "What to create
+at Zoom", choose the events to receive, and press **Validate**. Zoom sends `endpoint.url_validation` and enables
+the subscription when the answer is right. Save.
 
 ## Verify
 

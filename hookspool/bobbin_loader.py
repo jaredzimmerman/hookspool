@@ -51,6 +51,9 @@ OUTPUT_KEYS = {"description"}
 # window, liveness, dedup and body overrides copied onto the expanded source table
 SOURCE_OVERRIDES = ("span", *_config.WINDOW_FIELDS, "expect_every_s", "dedup_window_s", "max_body_bytes")
 PROCESSOR_OVERRIDES = ("timeout_s", "state_dir")
+# names a setting copied by [source] config can never take: they are keys of the expanded source table that
+# the loader or the instance sets (an instance setting must not choose the module or overwrite an override)
+RESERVED_SOURCE_NAMES = frozenset(_config.SOURCE_KEYS | SOURCE_KEYS | set(SOURCE_OVERRIDES))
 INSTANCE_KEYS = {"bobbin", "secrets", "settings", "outputs", "expect", *SOURCE_OVERRIDES, *PROCESSOR_OVERRIDES}
 # keys of a manifest's source template that the instance or the manifest's own [source] sets
 _TEMPLATE_RESERVED = {"module", "action", "secrets", "span", "expect_every_s", "dedup_window_s", "max_body_bytes",
@@ -234,6 +237,9 @@ def validate_manifest(m: Any, dirname: str, spans: dict) -> list[str]:
                 for k in cfg_keys:
                     if k not in decl:
                         errs.append(f"source.config: {k!r} is not a declared setting")
+                    elif k in RESERVED_SOURCE_NAMES:
+                        errs.append(f"source.config: {k!r} is a source table key the runtime sets; name the"
+                                    " setting something else")
 
     secrets = m.get("secrets", {})
     if unknown("secrets", secrets, set(secrets) if isinstance(secrets, dict) else set()):

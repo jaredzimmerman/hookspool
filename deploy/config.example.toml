@@ -118,7 +118,7 @@ expect = false                         # true: 2 days of silence opens a source_
 # answered only after the signature checks out.
 [bobbins.zoom]
 bobbin = "zoom"
-secrets.webhook_secret = { file = "/etc/hookspool/secrets/zoom" }
+secrets.webhook_secret = { file = "/etc/hookspool/secrets/zoom_webhook_secret" }
 outputs = { "*" = "hermes:zoom" }
 
 # Trello: base64 HMAC-SHA1 over the body plus the callback URL (byte for byte what the webhook was

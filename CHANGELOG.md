@@ -65,7 +65,11 @@ The changes below will ship as 0.2.0.
 - `hookspool.verify.key_fetcher` (a key fetch for a per-key endpoint or a JWKS URL, with the "sender has no such key" refusals
   mapped to None), `verify.shared_key_cache` and `reset_shared_key_caches`, and `KeyCache.lookup(..., fetch=)` for a fetch that
   needs the request's credentials; a failed key fetch is logged once by `KeyCache` (class, HTTP status and the sender's short
-  error code, never a body).
+  error code, never a body; only a `net` error's status and code, so a caller's own exception adds nothing).
+- A bad Plaid `env` is refused when the config loads (`hookspool check` reports it) and not by a 503 on every webhook; a source
+  module's `bind` may return None to keep the module and only validate the config.
+- A bobbin manifest's `[source] config` refuses the names of source table keys the runtime sets (`module`, `action`, `secrets`,
+  `span`, the window overrides and so on).
 - A bobbin manifest's `[source] config = ["env", ...]` names the settings that become keys of the source's own table (the
   source module's `config_keys`), for a code source that reads them.
 - The conformance kit answers a source's own HTTP calls (a sender's verification keys) from `captures/kit.toml` `[[http]]`,

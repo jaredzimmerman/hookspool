@@ -10,6 +10,13 @@ keys Plaid publishes, fetched with your client id and secret.
 2. Choose the public webhook URL, for example `https://hooks.example.test/hooks/plaid`. It must be reachable
    over HTTPS and end in `/hooks/<instance>`.
 
+## Install the signature libraries
+
+Plaid's signature is an ES256 JWT, checked with PyJWT and cryptography, which are the `plaid` extra:
+`pip install 'hookspool[plaid]'` in the Python environment hookspool runs from. Check with that environment's
+`python -c "import jwt, cryptography"`; it must print nothing and exit 0. Without the extra every webhook
+answers 503 and `hookspool check` does not warn.
+
 ## Secrets to save
 
 - Write the client id to `/etc/hookspool/secrets/plaid_client_id` and the secret to

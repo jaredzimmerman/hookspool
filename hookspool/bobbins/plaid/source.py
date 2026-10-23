@@ -41,7 +41,7 @@ answers 503 rather than 401, once the header has a valid structure).
 """
 from __future__ import annotations
 
-from hookspool.plugin import Request, Secrets, dedup
+from hookspool.plugin import PluginError, Request, Secrets, dedup
 from hookspool.plugin import verify as v
 
 name = "plaid"
@@ -94,6 +94,23 @@ def _cache_name(env: str) -> str:
 def reset() -> None:
     """Forget every cached key (tests)."""
     v.reset_shared_key_caches("plaid ")
+
+
+class PlaidConfigError(PluginError):
+    """The source table is not a valid Plaid configuration; ``errors`` lists every problem (``check`` prints them)."""
+
+    def __init__(self, errors: list[str]):
+        super().__init__("; ".join(errors))
+        self.errors = list(errors)
+
+
+def bind(name: str, cfg) -> None:
+    """Called once per configured source, when the config is loaded: refuse a bad ``env`` there, so ``hookspool
+    check`` reports it and a wrong value cannot sit unnoticed while every webhook answers 503. Returns None:
+    the module itself is the plugin."""
+    env = cfg.get("env")
+    if env is not None and env not in ENVS:
+        raise PlaidConfigError([f"env: must be one of {', '.join(ENVS)}"])
 
 
 def _env(req: Request) -> str:

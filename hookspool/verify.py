@@ -437,7 +437,10 @@ class KeyCache:
         if self.on_error is not None:
             self.on_error(e)
             return
-        status, code = getattr(e, "status", None), getattr(e, "code", None)
+        from .net import NetError         # lazy, as key_fetcher does
+        status = code = None
+        if isinstance(e, NetError):           # only net's errors carry a status and a sanitised code
+            status, code = e.status, e.code
         extra = f" http={status} error_code={code or '-'}" if status is not None or code is not None else ""
         log.warning("%s key fetch failed: %s%s", self.name, e.__class__.__name__, extra)
 

@@ -579,6 +579,18 @@ def test_keycache_logs_a_failed_fetch_once_without_a_body(caplog):
     assert SECRET_MARK not in caplog.text
 
 
+def test_keycache_does_not_log_the_status_or_code_of_a_caller_supplied_exception(caplog):
+    """Only ``net.NetError`` carries a sanitised code; a free-text ``.code`` on any other exception stays out."""
+    class Odd(Exception):
+        status = 500
+        code = "free text " + SECRET_MARK
+    caplog.set_level("WARNING", logger="hookspool.verify")
+    kc = V.KeyCache(cooldown_s=0, name="acme sandbox")
+    kc.lookup("a", 0, fetch=Fetch(Odd("boom")))
+    assert [r.getMessage() for r in caplog.records] == ["acme sandbox key fetch failed: Odd"]
+    assert SECRET_MARK not in caplog.text
+
+
 def test_shared_key_cache_is_one_per_name_and_resets_by_prefix():
     V.reset_shared_key_caches("unit-test ")
     a = V.shared_key_cache("unit-test one", ttl_s=5)

@@ -494,9 +494,13 @@ def default_plugin_loader(name: str, module: str | None):
 def bind_plugin(module: Any, name: str, source_cfg: dict | None):
     """A plugin module may define ``bind(name, source_cfg)`` and return the module-like object
     to use for that one source. This is how a configurable plugin (the ``template`` source)
-    gets per-source attributes such as ``auth_headers``. Plain plugins have no ``bind``."""
+    gets per-source attributes such as ``auth_headers``. Plain plugins have no ``bind``. A ``bind`` that
+    only validates the config (raising an error with ``errors``) returns None, and the module is used."""
     b = getattr(module, "bind", None)
-    return b(name, dict(source_cfg or {})) if callable(b) else module
+    if not callable(b):
+        return module
+    bound = b(name, dict(source_cfg or {}))
+    return module if bound is None else bound
 
 
 def _check_secret(report: Report, where: str, ref: Any) -> None:

@@ -89,6 +89,26 @@ def test_source_config_must_name_declared_settings(tmp_path):
     assert any("only a code source" in e for e in PK.validate_manifest(base, "x", spans))
 
 
+@pytest.mark.parametrize("reserved", ["module", "action", "secrets", "span", "max_events", "dedup_window_s",
+                                      "expect_every_s", "max_body_bytes", "template", "proxy", "config"])
+def test_source_config_refuses_the_reserved_source_table_keys(reserved):
+    base = {"name": "x", "version": "1", "source": {"module": "source", "config": [reserved]},
+            "settings": {reserved: {"type": "string"}}, "outputs": {"*": {"description": "d"}}}
+    errs = PK.validate_manifest(base, "x", {"sync": {}})
+    assert any("source.config" in e and repr(reserved) in e and "source table key" in e for e in errs), errs
+    base["source"]["config"] = ["env"]
+    base["settings"] = {"env": {"type": "string", "default": "production"}}
+    assert PK.validate_manifest(base, "x", {"sync": {}}) == []
+
+
+def test_a_bad_env_is_reported_by_check_at_load(tmp_path):
+    cfg = load(tmp_path, instance(tmp_path, 'settings = { env = "prod" }'))
+    errs = [e for e in C.check(cfg).errors if "bank" in e]
+    assert errs and any("env: must be one of production, development, sandbox" in e for e in errs), errs
+    good = load(tmp_path, instance(tmp_path, 'settings = { env = "sandbox" }'))
+    assert [e for e in C.check(good).errors if "bank" in e] == []
+
+
 @pytest.mark.parametrize("doc", ["SETUP.md", "AGENTS.md"])
 def test_the_configuration_shown_in_the_document_expands(doc, tmp_path):
     text = open(os.path.join(DIR, doc), encoding="utf-8").read()

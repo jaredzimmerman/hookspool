@@ -356,14 +356,45 @@ def test_unreadable_secret_answers_503_not_401(env, clock, fetcher):
     assert post(env, "garbage").status == 401
 
 
-def test_bad_env_config_answers_503(tmp_path, clock):
+def test_a_bad_env_is_refused_when_the_config_loads(tmp_path, clock):
+    """``bind`` runs when the source is loaded (and in ``check``), so a bad ``env`` never reaches a webhook."""
     kit = plaidkit.kit(plaid)
     kit.source_cfg = {"env": "staging"}
-    e = Env(kit, tmp_path, clock)
+    with pytest.raises(plaid.PlaidConfigError) as e:
+        Env(kit, tmp_path, clock)
+    assert e.value.errors == ["env: must be one of production, development, sandbox"]
+
+
+def test_a_bad_env_that_reaches_verify_answers_503():
+    """Defence in depth: a request that carries a bad ``env`` is a configuration fault (retry), not a 401."""
+    from hookspool.plugin import Request
+    req = Request("POST", "/hooks/plaid", [("Plaid-Verification", plaidkit.make_jwt(BODY, 1_000_000.0))], BODY,
+                  now=1_000_000.0, config={"env": "staging"})
+    with pytest.raises(ValueError):
+        plaid.verify(req, {"client_id": "c", "secret": "s"})
+
+
+def test_two_instances_in_one_env_share_the_one_fetch_a_minute(tmp_path, clock, fetcher):
+    """The reason the key cache is shared: a second Plaid instance in the same ``env`` cannot be used to
+    get round the one-fetch-per-minute guard, and it reuses the keys the first one fetched."""
+    first = Env(KIT, tmp_path / "a", clock)
+    second = Env(KIT, tmp_path / "b", clock)
     try:
-        assert post(e, plaidkit.make_jwt(BODY, clock())).status == 503
+        assert post(first, plaidkit.make_jwt(BODY, clock(), kid="unknown-1")).status == 401
+        assert len(fetcher.calls) == 1
+        assert post(second, plaidkit.make_jwt(BODY, clock(), kid="unknown-2")).status == 401
+        assert len(fetcher.calls) == 1                       # the guard is shared: no second fetch inside a minute
+        assert post(second, plaidkit.make_jwt(BODY, clock(), kid="unknown-1")).status == 401
+        assert len(fetcher.calls) == 1                       # and the negative cache is shared too
+        clock.advance(61)
+        assert post(second, plaidkit.make_jwt(BODY, clock())).status == 200      # the known key, fetched now
+        assert len(fetcher.calls) == 2
+        assert post(first, plaidkit.make_jwt(BODY, clock(), kid=plaidkit.KID), BODY + b" ").status == 401
+        assert post(first, plaidkit.make_jwt(BODY, clock())).status == 200       # cached by the other instance
+        assert len(fetcher.calls) == 2
     finally:
-        e.close()
+        first.close()
+        second.close()
 
 
 def test_default_fetch_rejects_a_bad_env():

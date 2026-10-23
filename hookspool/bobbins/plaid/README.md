@@ -33,11 +33,16 @@ the destination is what goes and reads the data.
 - **Event type and attributes.** The event type is `<webhook_type>.<webhook_code>`. Route `match` tables can
   use `webhook_type`, `webhook_code` and `environment`.
 
+## Requirements
+
+The `plaid` extra of hookspool (`pip install 'hookspool[plaid]'`: PyJWT and cryptography). Without it every
+webhook answers 503 and `hookspool check` does not warn; test with `python -c "import jwt, cryptography"`.
+
 ## Settings
 
 | name | type | required | meaning |
 |---|---|---|---|
-| `env` | string | no (default `production`) | `production`, `development` or `sandbox`: which Plaid host the keys are fetched from |
+| `env` | string | no (default `production`) | `production`, `development` or `sandbox`: which Plaid host the keys are fetched from; any other value is refused by `hookspool check` |
 
 ## Secrets
 
