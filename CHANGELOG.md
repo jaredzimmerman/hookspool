@@ -33,6 +33,14 @@ The changes below will ship as 0.2.0.
   more than 8 tee routes per source. The intake logs one `queued` line per copy (`tee: true` on the copies), and
   `hookspool source test` lists the `tees` a request would feed.
 
+- `hookspool/net.py`, the network module for service processors: `Http` (JSON over HTTP with a total timeout, statuses and
+  failures mapped to `Retryable` or `Permanent`, a TLS certificate failure `Permanent`, no bodies or query strings in
+  errors or logs, redirects never followed, proxies from the environment), `OAuth` refresh-token flows with the access
+  token cached in the runtime's state (the credential file is never written; a rotated refresh token is kept in state and
+  handed to an optional `persist` callback at once), `SecretAccess` and `make_context_extras(state, secret_resolver)`.
+- `hookspool.verify.KeyCache` and `jwks_fetcher`: a shared cache of a sender's verification keys (TTL, negative TTL, one
+  fetch per cooldown, stale keys served while the sender is unreachable).
+
 ### Changed
 
 - Spool schema 2 (migration `0002_unwrap.sql` adds the two attempt columns). Stop the dispatcher and run `hookspool migrate`

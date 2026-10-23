@@ -182,6 +182,12 @@ never raises on what a sender controls. A test greps the code for any other way 
 Pass `now=req.now` to timestamped helpers so tests can drive the clock, and keep the window two-sided: a request dated in
 the future is as wrong as a stale one.
 
+A sender that publishes its verification keys (a JWKS) is verified through `hookspool.verify.KeyCache`, not a private fetch.
+It caches keys for a TTL, refetches once per cooldown on an unknown key id, and when the sender's key endpoint fails it keeps
+serving the last keys it had rather than refusing every webhook. That is a deliberate choice of availability over
+revocation: a key the sender withdrew during an outage of its key endpoint is still accepted until the next successful fetch.
+Pass `usable=` to refuse keys the sender marks expired.
+
 ### A worked example
 
 A sender, `acme`, signs `"<timestamp>.<body>"` with HMAC-SHA256 and sends `t=<timestamp>,v1=<hex>` in `Acme-Signature`.
