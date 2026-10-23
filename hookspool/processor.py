@@ -24,9 +24,20 @@ One batch, with the state lock (``<state_dir>/.lock``) held throughout:
 3. the staged writes are applied (a state file that changed since the pass read it is left alone, so an
    old journal can never move state backwards), the emits are printed, exit 0.
 
-``Permanent`` (also raised by ``ctx.fail_permanent``) exits 65, the dispatcher's permanent class.
-``Retryable`` or any other exception exits 75 (retry), with only the exception class in the log. Nothing
-but emit lines ever reaches stdout: while the runtime runs, file descriptor 1 is the standard error.
+``Permanent`` (also raised by ``ctx.fail_permanent``) exits 65, the dispatcher's permanent class. Its
+reason IS logged (whitespace collapsed, first 300 characters) and the script destination keeps the tail
+of the standard error as the attempt's error, so the reason is persisted in the spool and shown by
+``show``: pass a short fixed phrase, never a response body or a secret. The text of a chained exception
+is never logged. ``Retryable`` or any other exception exits 75 (retry), with only the exception class in
+the log. Nothing but emit lines ever reaches stdout: while the runtime runs, file descriptor 1 is the
+standard error.
+
+Limits worth knowing. A package that keeps no state (no ``HOOKSPOOL_STATE_DIR``) has no journal, so a
+retried batch calls ``process`` again and the stable emit dedup id is the only guard against duplicates.
+The runtime trusts ``HOOKSPOOL_SERVICE_DIR`` from the dispatcher (``hookspool check`` verifies the
+directory; only the ``hooks`` file is path-checked here, 14.3.6). Settings that the manifest does not
+declare pass through unchanged, and ``hooks`` loads even when ``[settings.hooks]`` is not declared:
+the config expansion and ``check`` are the validators, not this runtime.
 
 The module also keeps the helpers that the stand-alone delta scripts in ``deploy/scripts`` use
 (``read_document``, ``make_emit``, ``save``/``staging``, ``run_batch``, the journal);
@@ -397,11 +408,12 @@ def _secret_refs(env: Mapping[str, str]) -> dict[str, Any]:
 
 
 def _code_path_ok(path: str) -> bool:
-    """14.3.6: an absolute path to a regular file, not group/other writable, owned by root or us."""
+    """14.3.6: an absolute path to a regular file (not a symlink), not group/other writable, owned by root
+    or us."""
     if not os.path.isabs(path):
         return False
     try:
-        st = os.stat(path)
+        st = os.lstat(path)
     except OSError:
         return False
     return stat.S_ISREG(st.st_mode) and not st.st_mode & (stat.S_IWGRP | stat.S_IWOTH) \
@@ -541,6 +553,8 @@ class Context:
         return self._clock()
 
     def fail_permanent(self, reason: str) -> NoReturn:
+        """Stop for good (exit 65). The reason is logged and persisted with the attempt: a short fixed
+        phrase, never a response body or a secret."""
         raise Permanent(reason)
 
 

@@ -166,7 +166,7 @@ max_inflight = 2
 # would both report the same changes. Every state_dir below must also be in the dispatch unit's
 # ReadWritePaths (deploy/hookspool-dispatch.service).
 [destinations."script:gcal_delta"]
-argv = ["/usr/bin/python3", "/opt/hookspool/scripts/gcal_delta.py", "--batch"]
+argv = ["/opt/hookspool/venv/bin/python", "/opt/hookspool/scripts/gcal_delta.py", "--batch"]
 cwd = "/opt/hookspool/scripts"
 env_file = "/etc/hookspool/gcal_delta.env"
 state_dir = "/var/lib/hookspool/scripts/gcal"
@@ -174,7 +174,7 @@ timeout_s = 300
 max_inflight = 1
 
 [destinations."script:gmail_delta"]
-argv = ["/usr/bin/python3", "/opt/hookspool/scripts/gmail_delta.py", "--batch"]
+argv = ["/opt/hookspool/venv/bin/python", "/opt/hookspool/scripts/gmail_delta.py", "--batch"]
 cwd = "/opt/hookspool/scripts"
 env_file = "/etc/hookspool/gmail_delta.env"
 state_dir = "/var/lib/hookspool/scripts/gmail"

@@ -773,7 +773,10 @@ through `HOOKSPOOL_DELTA_ROUTES` (`source` = instance, `key` = the item's `key` 
 dedup id derived from the batch id and item index), journals emits and staged state under
 `HOOKSPOOL_BATCH_ID`, applies the state, prints the emits and exits 0. A retry of the same batch replays
 the journal without calling `process`. `Retryable` or any other exception → exit 75 (retry), with the
-exception class only in the log; `Permanent` → exit 65 (the dispatcher's permanent class). Nothing but
+exception class only in the log; `Permanent` → exit 65 (the dispatcher's permanent class); its reason is
+logged (300 characters) and kept with the attempt by the script destination, so it must be a short fixed phrase,
+never a body or a secret. A package without state has no journal: a retry calls `process` again and the
+stable dedup id is the only duplicate guard. Nothing but
 emit lines ever reaches stdout. Unmapped event types are dropped with one log line.
 
 #### 14.3.5 Tooling

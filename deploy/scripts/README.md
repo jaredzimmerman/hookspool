@@ -34,7 +34,7 @@ identical on every attempt.
 
 ```toml
 [destinations."script:gcal_delta"]
-argv      = ["/usr/bin/python3", "/opt/hookspool/scripts/gcal_delta.py", "--batch"]
+argv      = ["/opt/hookspool/venv/bin/python", "/opt/hookspool/scripts/gcal_delta.py", "--batch"]
 cwd       = "/opt/hookspool/scripts"
 env_file  = "/etc/hookspool/gcal_delta.env"
 state_dir = "/var/lib/hookspool/scripts/gcal"     # journal; also the default data dir; add to ReadWritePaths

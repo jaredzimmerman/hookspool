@@ -37,7 +37,7 @@ Order matters only where noted. Nothing here touches the gateway.
    no secret change. `hookspool check` warns about files readable by group or other. Env refs (`{ env = "…" }`) do not rotate
    without a restart; prefer `file` or `env_file`.
 4. **Scripts.** Copy `deploy/scripts/{hookspool_batch,gcal_delta,gmail_delta}.py` to
-   `/opt/hookspool/scripts/`, run them with the interpreter hookspool is installed in (`hookspool_batch.py`
+   `/opt/hookspool/scripts/`, run them with the interpreter hookspool is installed in (the examples use `/opt/hookspool/venv/bin/python`; `hookspool_batch.py`
    re-exports `hookspool.processor`), and write the two env files (`scripts/README.md` lists every variable). Copy `deploy/sweeps/github_redeliver.py` to
    `/opt/hookspool/sweeps/` for the GitHub redelivery sweep (section 4).
 5. **Config.** Copy `config.example.toml` to `/var/lib/hookspool/config.toml`, replace every placeholder, then:

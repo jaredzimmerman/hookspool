@@ -246,6 +246,22 @@ def test_exit_codes(rig, body, code):
         assert "the mailbox is gone" in err
 
 
+def test_a_permanent_reason_is_capped_and_its_cause_is_not_logged(rig):
+    rig.processor(f"""\
+        from hookspool.processor import Permanent
+
+        def process(batch, ctx):
+            try:
+                raise ValueError("{SENTINEL}")
+            except ValueError as e:
+                raise Permanent("gone " + "x" * 400 + "{SENTINEL}") from e
+    """)
+    rc, emits, err = rig.run()
+    assert (rc, emits) == (65, [])
+    assert "gone xxx" in err, "the (short) reason is kept, and documented as persisted"
+    assert SENTINEL not in err, "neither the chained cause nor the tail past the cap reaches the log"
+
+
 def test_fail_permanent_raises(rig):
     ctx = P.Context(instance="x")
     with pytest.raises(P.Permanent, match="why"):
@@ -505,6 +521,32 @@ def test_a_hooks_module_is_loaded_by_path_and_must_be_safe(rig):
     assert rig.run(env={"HOOKSPOOL_SETTINGS": json.dumps({"hooks": str(hooks)}), "HOOKSPOOL_BATCH_ID": "9"})[0] == 75
     os.chmod(hooks, 0o644)
     assert rig.run(env={"HOOKSPOOL_SETTINGS": json.dumps({"hooks": "hooks.py"}), "HOOKSPOOL_BATCH_ID": "10"})[0] == 75
+
+
+def test_a_hooks_symlink_is_refused(rig):
+    real = rig.tmp / "real_hooks.py"
+    real.write_text("def classify(m):\n    return m\n")
+    os.chmod(real, 0o644)
+    link = rig.tmp / "hooks.py"
+    link.symlink_to(real)
+    rig.processor("def process(batch, ctx):\n    return [{'event_type': 'alert', 'h': bool(ctx.hooks)}]\n")
+    assert rig.run(env={"HOOKSPOOL_SETTINGS": json.dumps({"hooks": str(real)})})[1][0]["payload"]["h"] is True
+    assert rig.run(env={"HOOKSPOOL_SETTINGS": json.dumps({"hooks": str(link)}), "HOOKSPOOL_BATCH_ID": "8"})[0] == 75
+
+
+def test_a_path_loaded_processor_cannot_import_its_siblings_and_sys_path_is_untouched(rig):
+    (rig.pkg / "sibling_mod.py").write_text("VALUE = 1\n")
+    rig.processor("import sibling_mod\n\ndef process(batch, ctx):\n    return []\n")
+    before = list(sys.path)
+    with pytest.raises(ModuleNotFoundError):
+        P.load_processor(str(rig.pkg), "demo-a")
+    assert sys.path == before
+    assert "sibling_mod" not in sys.modules and "hookspool._processor_demo_a" not in sys.modules
+    rc, emits, err = rig.run()
+    assert (rc, emits) == (75, []) and "ModuleNotFoundError" in err
+    rig.processor("def process(batch, ctx):\n    return []\n")
+    P.load_processor(str(rig.pkg), "demo-a")
+    assert sys.path == before
 
 
 def test_the_manifest_names_the_processor_module(rig):
