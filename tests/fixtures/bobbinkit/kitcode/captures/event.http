@@ -1,0 +1,9 @@
+# capture: signed with the kit test secret
+# now: 1800000000
+# expect: queued
+POST /hooks/kitcode HTTP/1.1
+Content-Type: application/json
+X-Kitcode-Signature: sha256=e03dba3a2e3e65f2ae9ac1a1d6f222e534c6071e6bf8825cb7eb5e2a3111df00
+Content-Length: 67
+
+{"id":"evt_1","type":"item.created","note":"PAYLOAD-SENTINEL-7f3a"}

@@ -818,12 +818,26 @@ emit lines ever reaches stdout. Unmapped event types are dropped with one log li
   sender_retries, proxy note.
 - `hookspool bobbin expand [<instance>]` — 14.3.3.
 - `hookspool bobbin new <name> [--dir D]` — scaffold (manifest, `source.py` or template, optional
-  `processor.py`, one capture, README) that passes the conformance kit once filled in.
+  `processor.py`, an accepted and a rejected capture, README, SETUP.md, AGENTS.md) that passes the conformance kit
+  once its TODO placeholders are filled in (until then the kit's `todos` check is its one failure).
 - **Conformance** (`hookspool.testing.bobbinkit`, run by CI for every bobbin in the repo and by
   `.github/scripts/plugin_ci.py` for every changed bobbin): manifest valid; the 14.3.7 rules; the source
   passes the source kit with each capture; the processor (if any) runs each capture's payload through
   `process` with a fake `Context` (stub HTTP), its items' event types are declared outputs, a second run
   of the same batch id replays the journal, and nothing but emits reaches stdout.
+  `hookspool bobbin check <dir> [--report text|md|json] [--strict] [--base REF]` runs the kit on one bobbin and prints a
+  scorecard (each check, pass / fail / skip, every problem as `file:line` with how to fix it); CI runs that same command,
+  so no check is CI-only. The checks: `manifest` (including one service per bobbin), `files`, `todos`, `core-only`
+  (14.3.7), `docs` (14.3.8), `captures` (an accepted and a rejected capture, each `# expect:` holds, no secret-looking
+  value or real-looking personal data), `source-kit`, `processor`, `tests` (the bobbin's own, network blocked), and the
+  advisory `scope` (`bobbin-only` or `touches-core`). Test values and stub API answers live in `captures/kit.toml`.
+
+  **Merge criteria.** A pull request that changes only `hookspool/bobbins/<name>/` (and its own tests), whose scorecard
+  passes every required check, and whose author has ticked the template's three boxes (the provider's signature
+  documentation is linked and matches the declared scheme; the captures came from a real delivery and were redacted; the
+  author can maintain the bobbin or accepts its removal if it breaks) is the expected merge. What the maintainer still
+  checks by hand is the provider's documentation against the declared scheme and the capture bodies; a `touches-core`
+  diff is reviewed as a core change. [BOBBIN_REVIEW.md](BOBBIN_REVIEW.md) is the reviewer's page.
 
 #### 14.3.6 Private customisation
 

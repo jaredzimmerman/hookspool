@@ -1,2 +1,3 @@
 # Core string literals that name a source, for the core guard in .github/scripts/plugin_ci.py.
 # Format: path | literal | reason. Keep this list short: every entry is per-source code in core.
+hookspool/testing/scan.py | GitHub token | the name of a token format the secret scan looks for (shared with plugin_ci.py)

@@ -249,23 +249,28 @@ events, attempts, dedup rows and issues it deleted. Dead batches are never prune
 
 ### hookspool bobbin
 
-Bobbins (see `docs/ARCHITECTURE.md` section 14.3). The subcommand is one of `list`, `show`, `expand` and
-`new`:
+Bobbins (see `docs/ARCHITECTURE.md` section 14.3). The subcommand is one of `list`, `show`, `expand`, `new`
+and `check`:
 
 | form | does |
 |---|---|
 | `bobbin list` | the bobbins found (built in, then each `[spool] bobbin_path` directory): name, version, where it comes from, summary, and the `[bobbins.<instance>]` tables that use it |
 | `bobbin show <bobbin>` | one bobbin: its secrets, settings (type, required, default), outputs, span, whether the sender retries, the reverse-proxy note |
 | `bobbin expand [<instance>]` | the ordinary tables one instance (or every instance) expands to, as TOML. Secret references stay references and `HOOKSPOOL_SECRET_REFS` is shown by secret name only: no secret value is ever read or printed. Exit 2 with every problem when the bobbins do not expand |
-| `bobbin new <name>` | scaffold a new bobbin directory: manifest, `source.py` (or a template source), optional `processor.py`, one capture and a README |
+| `bobbin new <name>` | scaffold a new bobbin directory: manifest, `source.py` (or a template source), optional `processor.py`, an accepted and a rejected capture, README, SETUP.md and AGENTS.md. It passes `bobbin check` once its TODO placeholders are filled in |
+| `bobbin check <dir>` | run the conformance kit on one bobbin directory and print its scorecard: each check, pass / fail / skip, and every problem as `file:line` with how to fix it. Exit 0 when every required check passes, 1 when one fails, 2 when `<dir>` is not a bobbin. It reads no config and no real secret. CI runs this same command on every changed bobbin ([BOBBIN_REVIEW.md](BOBBIN_REVIEW.md)) |
 
-`name` is the bobbin for `show`, the instance for `expand` and the new bobbin's name for `new`.
+`name` is the bobbin for `show`, the instance for `expand`, the new bobbin's name for `new` and the bobbin
+directory for `check`.
 
 | option | meaning |
 |---|---|
 | `--dir D` | `new`: the parent directory (default: the current directory) |
 | `--template` | `new`: a template source in the manifest instead of `source.py` |
 | `--processor` | `new`: include a `processor.py` and a `[processor]` table |
+| `--report text\|md\|json` | `check`: the scorecard as aligned text (default), GitHub Markdown, or JSON (schema `hookspool.bobbin-check/1`) |
+| `--strict` | `check`: advisory checks (`scope`) fail the run too |
+| `--base REF` | `check`: the git ref the change is compared with; the advisory `scope` check lists files changed outside the bobbin |
 
 ### hookspool source
 

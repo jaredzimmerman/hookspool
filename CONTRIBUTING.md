@@ -30,6 +30,11 @@ A new source also states its operational facts, which the pull request template 
 signature documentation**, whether the sender retries a failed delivery, the sweep that keeps it honest, and
 `expect_every_s`. Those facts decide whether the source needs a sweep (a sender that never retries does).
 
+A **bobbin** (the plugin for one outside service, `hookspool/bobbins/<name>/`) is checked by one command,
+`hookspool bobbin check hookspool/bobbins/<name> --base origin/main`, which CI runs too. A bobbin-only pull request with a
+green scorecard and the template's three boxes ticked is the expected merge; [docs/BOBBIN_REVIEW.md](docs/BOBBIN_REVIEW.md)
+says what green means and what a maintainer still checks by hand.
+
 Destinations have a similar, smaller path: a `script:` destination covers almost everything, and a destination class is a
 few dozen lines. See [docs/ADDING_A_DESTINATION.md](docs/ADDING_A_DESTINATION.md).
 

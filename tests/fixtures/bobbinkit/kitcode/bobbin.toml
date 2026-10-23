@@ -1,0 +1,14 @@
+name = "kitcode"
+version = "1"
+summary = "Kit fixture: a code source with a dedup id"
+
+[source]
+module = "source"
+span = "burst"
+sender_retries = true
+
+[secrets.secret]
+description = "the signing secret"
+
+[outputs."*"]
+description = "every accepted event"

@@ -329,6 +329,7 @@ scheme verifies them unchanged.
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | health, issues, repair, retention, backup and restore |
 | [docs/ADDING_A_SOURCE.md](docs/ADDING_A_SOURCE.md) | config templates, code plugins and the conformance kit |
 | [docs/ADDING_A_DESTINATION.md](docs/ADDING_A_DESTINATION.md) | scripts and destination classes |
+| [docs/BOBBIN_REVIEW.md](docs/BOBBIN_REVIEW.md) | how a new or changed bobbin is checked (`hookspool bobbin check`) and when it merges |
 | [deploy/README.md](deploy/README.md) | install, systemd, nginx, rollout, drill, sweeps |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | how to contribute, and the extension model |
 | [CHANGELOG.md](CHANGELOG.md) | what changed |
