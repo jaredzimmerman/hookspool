@@ -19,8 +19,10 @@ Everything runs locally the same way as in CI::
 The table is also appended to ``$GITHUB_STEP_SUMMARY`` when that is set.
 
 What a "plugin" is
-  ``template:<name>``  ``examples/sources/<name>.toml``, run through ``tests/test_sources_template.py``
-                       (kit cases, captures, the capture-coverage check), selected by test id.
+  ``template:<name>``  ``hookspool/bobbins/<name>/bobbin.toml`` (captures in its ``captures/``), or the
+                       legacy ``examples/sources/<name>.toml`` with ``tests/captures/<name>/``; run through
+                       ``tests/test_sources_template.py`` (kit cases, captures, the capture-coverage check),
+                       selected by test id.
   ``code:<name>``      ``hookspool/sources/<name>.py``, run through ``tests/test_sources_<name>.py``, which
                        must parametrize over ``sourcekit.CASES`` (no kit, no merge).
 """
@@ -34,11 +36,13 @@ import re
 import subprocess
 import sys
 import time
+import tomllib
 from dataclasses import dataclass, field
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SOURCES_DIR = "hookspool/sources"
 EXAMPLES_DIR = "examples/sources"
+BOBBINS_DIR = "hookspool/bobbins"
 TEMPLATE_TESTS = "tests/test_sources_template.py"
 # Shared machinery: a change to any of these can break every source, so the kit runs on all of them.
 SHARED = {"tests/sourcekit.py", "tests/conftest.py", "hookspool/plugin.py", "hookspool/verify.py",
@@ -101,9 +105,36 @@ def _git(*args: str) -> str:
 
 
 # ---- discovery -------------------------------------------------------------------------------------------
+def _is_template_bobbin(path: str) -> bool:
+    try:
+        with open(path, "rb") as f:
+            return isinstance(tomllib.load(f).get("source", {}).get("template"), dict)
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+
+
 def all_templates() -> list[str]:
+    names: set[str] = set()
+    d = os.path.join(ROOT, BOBBINS_DIR)
+    if os.path.isdir(d):
+        names |= {n for n in os.listdir(d) if _is_template_bobbin(os.path.join(d, n, "bobbin.toml"))}
     d = os.path.join(ROOT, EXAMPLES_DIR)
-    return sorted(f[:-5] for f in os.listdir(d) if f.endswith(".toml")) if os.path.isdir(d) else []
+    if os.path.isdir(d):
+        names |= {f[:-5] for f in os.listdir(d) if f.endswith(".toml")}
+    return sorted(names)
+
+
+def template_manifest(name: str) -> str | None:
+    """The file that defines a template: its bobbin manifest, else the legacy examples table."""
+    for rel in (f"{BOBBINS_DIR}/{name}/bobbin.toml", f"{EXAMPLES_DIR}/{name}.toml"):
+        if os.path.exists(os.path.join(ROOT, rel)):
+            return rel
+    return None
+
+
+def capture_dir(name: str) -> str:
+    own = f"{BOBBINS_DIR}/{name}/captures"
+    return own if os.path.isdir(os.path.join(ROOT, own)) else f"tests/captures/{name}"
 
 
 def all_code_sources() -> list[str]:
@@ -144,6 +175,9 @@ def discover(files: list[str]) -> list[str]:
         if m:
             found.add(f"template:{m.group(1)}")
         m = re.fullmatch(r"tests/captures/([A-Za-z0-9_-]+)/.+", f)
+        if m:
+            name_hit(m.group(1))
+        m = re.fullmatch(rf"{BOBBINS_DIR}/([a-z][a-z0-9-]*)/.+", f)
         if m:
             name_hit(m.group(1))
         m = re.fullmatch(r"tests/test_sources_([A-Za-z0-9_]+)\.py", f)
@@ -193,26 +227,25 @@ def template_nodeids(name: str) -> list[str]:
     if code != 0:
         return []
     ids = [ln.strip() for ln in out.splitlines() if "::" in ln and "[" in ln]
-    # ids look like ``test_x[<case>-<name>.toml]`` or ``test_y[<name>/event.http]``; a case id has no hyphen,
+    # ids look like ``test_x[<case>-<name>]`` (or ``<name>.toml``) or ``test_y[<name>/event.http]``; a case id has no hyphen,
     # so a template ``page`` does not select the tests of ``status-page``.
-    pat = re.compile(rf"\[(?:\w+-)?{re.escape(name)}\.toml\]$|\[{re.escape(name)}/")
+    pat = re.compile(rf"\[(?:\w+-)?{re.escape(name)}(?:\.toml)?\]$|\[{re.escape(name)}/")
     return [i for i in ids if pat.search(i)]
 
 
 def run_kit(spec: str, report: Report, test_file: str | None = None) -> None:
     kind, _, name = spec.partition(":")
     if kind == "template":
-        toml = f"{EXAMPLES_DIR}/{name}.toml"
-        if not os.path.exists(os.path.join(ROOT, toml)):
-            report.add("kit", spec, False, f"{toml} does not exist")
+        if template_manifest(name) is None:
+            report.add("kit", spec, False, f"{BOBBINS_DIR}/{name}/bobbin.toml does not exist")
             return
-        if not os.path.exists(os.path.join(ROOT, "tests", "captures", name, "event.http")):
-            report.add("kit", spec, False, f"tests/captures/{name}/event.http is required (a request signed "
-                                           f"with the test secret)")
+        event = f"{capture_dir(name)}/event.http"
+        if not os.path.exists(os.path.join(ROOT, event)):
+            report.add("kit", spec, False, f"{event} is required (a request signed with the test secret)")
             return
         ids = template_nodeids(name)
         if not ids:
-            report.add("kit", spec, False, f"no tests collected for {name}.toml in {TEMPLATE_TESTS}")
+            report.add("kit", spec, False, f"no tests collected for {name} in {TEMPLATE_TESTS}")
             return
         code, out, secs = _pytest(ids)
     elif kind == "code":

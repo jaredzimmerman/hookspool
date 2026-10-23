@@ -67,11 +67,12 @@ def test_check_refuses_an_event_header_hookspool_sets(name, ok):
     assert any("event_header" in e for e in rep.errors) is (not ok), rep.errors
 
 
-def test_the_github_example_sets_its_event_header():
+def test_the_github_bobbin_sets_its_event_header():
+    import sourcekit
+    assert sourcekit.bobbin_source_cfg("github")["event_header"] == "X-GitHub-Event"
     import tomllib
-    for rel in ("examples/sources/github.toml", "deploy/config.example.toml"):
-        with open(os.path.join(ROOT, rel), "rb") as f:
-            assert tomllib.load(f)["sources"]["github"]["event_header"] == "X-GitHub-Event", rel
+    with open(os.path.join(ROOT, "deploy/config.example.toml"), "rb") as f:
+        assert tomllib.load(f)["sources"]["github"]["event_header"] == "X-GitHub-Event"
 
 
 # ---- lease grace ---------------------------------------------------------------------------------------

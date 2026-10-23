@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import sqlite3
+import tomllib
 import types
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -49,6 +50,12 @@ from hookspool.store import SpoolError, Store
 SENTINEL = "PAYLOAD-SENTINEL-7f3a"   # same marker as conftest: no log line may carry it
 PLUGIN_FUNCS = ("verify", "challenge", "ignore", "payload", "key", "dedup_id", "event_type", "attrs", "action")
 CAPTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BOBBINS = os.path.join(ROOT, "hookspool", "bobbins")
+TEMPLATE_MODULE = "hookspool.sources.template"
+# The instance settings a template bobbin needs for its sample instance. The loader does not yet map
+# [settings] into [source.template] (14.3.2a), so bobbin_source_cfg carries them across by hand.
+SAMPLE_SETTINGS = {"trello": {"callback_url": "https://hooks.example.test/hooks/trello"}}
 
 
 def request(method: str, target: str, headers: Mapping[str, str] | list[tuple[str, str]] | None = None,
@@ -433,8 +440,54 @@ def run(case: Callable[[Env], None], kit: Kit, tmp_path, clock) -> None:
 
 
 # ---- captures --------------------------------------------------------------------------------------------------
+def capture_dir(source: str) -> str:
+    """A bobbin's captures live in its own directory (14.3.1); other sources keep tests/captures/<name>."""
+    own = os.path.join(BOBBINS, source, "captures")
+    return own if os.path.isdir(own) else os.path.join(CAPTURES, source)
+
+
+def bobbin_manifest(name: str) -> str:
+    return os.path.join(BOBBINS, name, "bobbin.toml")
+
+
+def bobbin_source_cfg(name: str) -> dict:
+    """The [sources.<name>] table a template bobbin expands to for its sample instance, built from the
+    manifest without running expansion. Secrets are a placeholder reference; callers drop them."""
+    with open(bobbin_manifest(name), "rb") as f:
+        m = tomllib.load(f)
+    src = m["source"]
+    cfg = {"module": TEMPLATE_MODULE, **src["template"], **SAMPLE_SETTINGS.get(name, {})}
+    for k in ("span", "sender_retries"):
+        if k in src:
+            cfg[k] = src[k]
+    cfg["action"] = f"hermes:{name}"
+    cfg["secrets"] = {"secret": {"file": f"/etc/hookspool/secrets/{name}"}}
+    return cfg
+
+
+def toml_value(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    if isinstance(v, str):
+        return json.dumps(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(toml_value(x) for x in v) + "]"
+    if isinstance(v, dict):
+        return "{" + ", ".join(f"{k} = {toml_value(x)}" for k, x in v.items()) + "}"
+    raise TypeError(f"not a TOML value: {v!r}")
+
+
+def source_table_text(name: str) -> str:
+    """``[sources.<name>]`` for a bobbin's sample instance, without the secret (the caller adds it)."""
+    cfg = bobbin_source_cfg(name)
+    body = "\n".join(f"{k} = {toml_value(v)}" for k, v in cfg.items() if k != "secrets")
+    return f"[sources.{name}]\n{body}\n"
+
+
 def captures(source: str) -> list[str]:
-    d = os.path.join(CAPTURES, source)
+    d = capture_dir(source)
     return sorted(os.path.join(d, f) for f in os.listdir(d) if f.endswith(".http")) if os.path.isdir(d) else []
 
 
