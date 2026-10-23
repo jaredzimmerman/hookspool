@@ -15,10 +15,14 @@ Captures (``tests/captures/<source>/*.http``, or ``hookspool/bobbins/<source>/ca
 """
 from __future__ import annotations
 
+import json
 import os
+from typing import Any
 
 import pytest
 
+from hookspool import bobbin_loader as hs_bobbins
+from hookspool import config as hs_config
 from hookspool.testing import sourcekit as _kit
 from hookspool.testing.sourcekit import (  # noqa: F401 - re-exported for the test modules
     CASE_IDS,
@@ -33,7 +37,12 @@ from hookspool.testing.sourcekit import (  # noqa: F401 - re-exported for the te
 )
 
 CAPTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures")
-BOBBINS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hookspool", "bobbins")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BOBBINS = os.path.join(ROOT, "hookspool", "bobbins")
+TEMPLATE_MODULE = "hookspool.sources.template"
+# The settings a template bobbin's sample instance is given: the table an operator writes under
+# [bobbins.<name>]. bobbin_source_cfg expands them through the loader (14.3.2a), like production does.
+SAMPLE_SETTINGS = {"trello": {"callback_url": "https://hooks.example.test/hooks/trello"}}
 
 
 def run(case, kit: Kit, tmp_path, clock) -> None:
@@ -50,6 +59,40 @@ def capture_dir(source: str) -> str:
     else ``tests/captures/<source>``."""
     own = os.path.join(BOBBINS, source, "captures")
     return own if os.path.isdir(own) else os.path.join(CAPTURES, source)
+
+
+def bobbin_manifest(name: str) -> str:
+    return os.path.join(BOBBINS, name, "bobbin.toml")
+
+
+def bobbin_source_cfg(name: str) -> dict:
+    """The [sources.<name>] table a template bobbin expands to for its sample instance, produced by the
+    loader's own expansion (14.3.3). Secrets are a placeholder reference; callers drop them."""
+    spec = {"bobbin": name, "secrets": {"secret": {"file": f"/etc/hookspool/secrets/{name}"}},
+            "outputs": {"*": f"hermes:{name}"}, "settings": dict(SAMPLE_SETTINGS.get(name, {}))}
+    cfg = hs_bobbins.expand(hs_config.merge(hs_config.DEFAULTS, {"bobbins": {name: spec}}))
+    return cfg["sources"][name]
+
+
+def toml_value(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    if isinstance(v, str):
+        return json.dumps(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(toml_value(x) for x in v) + "]"
+    if isinstance(v, dict):
+        return "{" + ", ".join(f"{k} = {toml_value(x)}" for k, x in v.items()) + "}"
+    raise TypeError(f"not a TOML value: {v!r}")
+
+
+def source_table_text(name: str) -> str:
+    """``[sources.<name>]`` for a bobbin's sample instance, without the secret (the caller adds it)."""
+    cfg = bobbin_source_cfg(name)
+    body = "\n".join(f"{k} = {toml_value(v)}" for k, v in cfg.items() if k != "secrets")
+    return f"[sources.{name}]\n{body}\n"
 
 
 def captures(source: str) -> list[str]:

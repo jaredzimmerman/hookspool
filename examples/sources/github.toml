@@ -1,23 +1,2 @@
-# GitHub repository webhook, as config only (no Python).
-# Sender docs: https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries
-#
-# GitHub signs the raw body with HMAC-SHA256 and sends "sha256=<hex>" in X-Hub-Signature-256.
-# It does not retry a failed delivery, so a sweep must redeliver (sender_retries = false).
-# A "ping" is verified, acknowledged and not enqueued. Point the proxy path at this source
-# with X-Hookspool-Route to route per URL: [[routes]] match = { route_hint = "ci" }.
-[sources.github]
-module = "hookspool.sources.template"
-scheme = "hmac-sha256-hex"
-header = "X-Hub-Signature-256"
-prefix = "sha256="
-key = "repository.full_name"
-dedup = "header:X-GitHub-Delivery"
-ignore = "header:X-GitHub-Event=ping"
-event_type = "header:X-GitHub-Event"
-event_header = "X-GitHub-Event"           # Hermes' GitHub route reads the event type here
-attrs = { repo = "repository.full_name", event = "header:X-GitHub-Event" }
-keep_headers = ["X-GitHub-Event", "X-GitHub-Delivery"]
-sender_retries = false
-span = "burst"
-action = "hermes:github"
-secrets.secret = { file = "/etc/hookspool/secrets/github" }
+# Moved: the GitHub webhook is the built-in bobbin hookspool/bobbins/github (manifest, captures, README,
+# SETUP.md, AGENTS.md). This file stays so old links work. Use `hookspool bobbin show github`.

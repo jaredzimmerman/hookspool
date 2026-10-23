@@ -1,0 +1,27 @@
+name = "trello"
+version = "1"
+summary = "Trello board webhook: card and board actions, signed with HMAC-SHA1 over the body and the callback URL"
+
+[source]
+span = "mail"
+sender_retries = true                  # Trello retries a failed callback 3 times (about 30, 60 and 120 seconds)
+
+[source.template]
+scheme = "hmac-sha1-base64-url"
+header = "X-Trello-Webhook"
+head_handshake = true
+key = "model.id"
+dedup = "action.id"
+event_type = "action.type"
+attrs = { board = "model.id", event = "action.type" }
+
+[secrets.secret]
+description = "the Trello app secret that signs deliveries"
+
+[settings.callback_url]
+description = "the exact URL the webhook was registered with (part of the signed input)"
+type = "string"
+required = true
+
+[outputs."*"]
+description = "every accepted Trello action"
