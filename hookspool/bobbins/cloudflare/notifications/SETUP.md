@@ -31,14 +31,15 @@ outputs = { "*" = "hermes:cloudflare-alerts" }
 
 ## Reverse proxy
 
-Pass `/hooks/cloudflare-alerts` through with the path unchanged. The callback URL has no query string. To check it,
-send a request with no secret header to the callback. It must return 401, not 404 or 502.
+Pass `/hooks/cloudflare-alerts` through with the path unchanged. The callback URL has no query string. Check the
+proxy after step 2 below, once hookspool has loaded the instance.
 
 ## Apply, then create the destination
 
 1. `hookspool bobbin expand cloudflare-alerts` prints the source with the secret as a reference only.
 2. `hookspool check`, then `hookspool reload`. Do this before creating the destination, so the first alert
-   is accepted.
+   is accepted. Then check the proxy: send a request with no secret header to the callback. It must return 401,
+   not 404 or 502. A 404 here means the proxy does not pass the path through.
 3. In the Cloudflare dashboard, go to Alerts, then Destinations. In the Webhooks card, select Create. Enter a
    name, the callback URL, and the secret from `/etc/hookspool/secrets/cloudflare-alerts`. Select Save and Test.
 4. In Alerts, create a notification policy for the alerts you want, and add the webhook destination to it.

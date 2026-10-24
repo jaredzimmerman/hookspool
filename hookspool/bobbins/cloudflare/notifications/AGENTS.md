@@ -6,7 +6,7 @@ webhook_docs: https://developers.cloudflare.com/notifications/get-started/config
 
 # Cloudflare Notifications webhook: agent setup
 
-Same procedure as SETUP.md, as steps. Read the **Needs from the human** list first. Repeat steps 1 to 7 for each
+Same procedure as SETUP.md, as steps. Read the **Needs from the human** list first. Repeat steps 1 to 8 for each
 instance. The agent never receives the webhook secret: the person writes the secret file and creates the
 destination in Cloudflare.
 
@@ -15,7 +15,8 @@ destination in Cloudflare.
 - The instance name (`<INSTANCE>`) and the public HTTPS callback URL for it (`<CALLBACK_URL>`).
 - The webhook secret, written by the person into `/etc/hookspool/secrets/<INSTANCE>` with mode 0600 (step 1).
   The agent does not read it, print it or repeat it.
-- Approval before the destination is created in Cloudflare (step 4) and before a notification policy uses it (step 6).
+- Whether Cloudflare retries a failed delivery. It is not documented; the person confirms it with Cloudflare (step 6).
+- Approval before the destination is created in Cloudflare (step 4) and before a notification policy uses it (step 7).
 
 ## Steps
 
@@ -47,7 +48,11 @@ destination in Cloudflare.
    `hookspool list --source <INSTANCE>`. **Check:** one queued event. **If it fails:** a 401 from hookspool means the
    header differs from the secret file; the person compares the file with the destination's secret. The quarantine
    that Save and Test causes is expected (SETUP.md, Verify).
-6. **Outward, human-performed:** the person adds the destination to a notification policy in Alerts. The agent does
+6. **Goal:** Cloudflare's retry behaviour is known. Ask the person to confirm with Cloudflare whether it retries a
+   failed generic webhook delivery, or to test it with a deliberate failure, and record the answer in the instance's
+   notes. **Check:** the person has given a yes or no. **If it does not retry:** stop before go-live and ask the
+   operator for a sweep for Cloudflare Notifications; SETUP.md ("Retries") explains why.
+7. **Outward, human-performed:** the person adds the destination to a notification policy in Alerts. The agent does
    not change policies.
-7. **Outward, rollback:** remove `[bobbins.<INSTANCE>]`, run `hookspool check` and `hookspool reload`, then ask the
+8. **Outward, rollback:** remove `[bobbins.<INSTANCE>]`, run `hookspool check` and `hookspool reload`, then ask the
    person to delete the destination in Cloudflare.

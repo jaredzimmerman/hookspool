@@ -197,3 +197,19 @@ def test_a_redelivered_identical_body_is_a_duplicate_and_a_new_alert_is_queued(t
     assert (again.status, json.loads(again.body)["status"]) == (200, "duplicate")
     later = variant(body=EVENT.body.replace(b'"ts":1800000000', b'"ts":1800000060'))
     assert json.loads(post(intake, later).body)["status"] == "queued"
+
+
+def test_setup_checks_the_proxy_only_after_the_reload():
+    text = doc("SETUP.md")
+    reload_at = text.index("`hookspool check`, then `hookspool reload`")
+    assert text.index("It must return 401") > reload_at
+    assert "after step 2 below" in text[: text.index("## Apply, then create")]
+
+
+def test_agents_has_a_retries_step_matching_setup_and_consistent_numbering():
+    text = doc("AGENTS.md")
+    steps = [int(n) for n in re.findall(r"^(\d+)\. \*\*", text, re.M)]
+    assert steps == list(range(1, len(steps) + 1))
+    assert f"Repeat steps 1 to {len(steps)}" in text
+    assert "retry behaviour is known" in text and "ask the\n   operator for a sweep" in text
+    assert "## Retries" in doc("SETUP.md")
