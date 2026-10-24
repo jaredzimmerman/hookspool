@@ -273,7 +273,7 @@ def cap_pages(monkeypatch, pages):
     return real
 
 
-def test_a_read_cut_short_reports_what_it_read_and_leaves_the_cursor_where_it_was(make, google, monkeypatch):
+def test_a_read_cut_short_reports_what_it_read_and_moves_the_cursor_to_the_newest_it_read(make, google, monkeypatch):
     google.tasks_page_size = 2
     rig = seeded(make, google, alpha=[task("a0", T1)])
     google.tasks["alpha"] += [task("x1", T3), task("x2", T4), task("x3", T5)]
@@ -281,13 +281,50 @@ def test_a_read_cut_short_reports_what_it_read_and_leaves_the_cursor_where_it_wa
     rc, emits, err = rig.run(TICK, bid="2")
     assert rc == 0 and "capped=1" in err
     assert ids([e["payload"] for e in emits]) == ["x1"]
-    st = rig.get_state(tp.STATE)["lists"]["alpha"]
-    assert st["updated"] == T1, "a partial, unordered read proves nothing about older tasks"
-    assert st["seen"] == {"a0": T1, "x1": T3}
+    assert rig.get_state(tp.STATE)["lists"]["alpha"] == {"updated": T3, "seen": {"x1": T3}}
     monkeypatch.setattr(G, "tasks_changes", real)              # the cap is gone: the rest follows, x1 not again
     out = tick(rig, bid="3")
     assert ids(out) == ["x2", "x3"]
+    assert list_calls(google, "alpha")[-1]["query"]["updatedMin"] == back(T3)
     assert rig.get_state(tp.STATE)["lists"]["alpha"]["updated"] == T5
+
+
+def test_a_cap_that_stays_in_place_moves_the_list_on_and_reports_nothing_twice(make, google, monkeypatch):
+    google.tasks_page_size = 2
+    rig = seeded(make, google, alpha=[task("a0", T1)])
+    t6 = "2026-10-25T08:00:00.000Z"
+    google.tasks["alpha"] += [task("x2", T4), task("x1", T3), task("x3", T5), task("x4", t6)]   # in no time order
+    cap_pages(monkeypatch, 1)                                  # every read stops after one page of two
+    rc, emits, err = rig.run(TICK, bid="2")
+    assert rc == 0 and "capped=1" in err
+    assert ids([e["payload"] for e in emits]) == ["x2"]
+    assert rig.get_state(tp.STATE)["lists"]["alpha"]["updated"] == T4
+    rc, emits, err = rig.run(TICK, bid="3")                    # capped again: x2 not again, the cursor moves on
+    assert rc == 0 and "capped=1" in err
+    assert ids([e["payload"] for e in emits]) == ["x3"]
+    assert list_calls(google, "alpha")[-1]["query"]["updatedMin"] == back(T4)
+    assert rig.get_state(tp.STATE)["lists"]["alpha"]["updated"] == T5
+    assert ids(tick(rig, bid="4")) == ["x4"]                   # the read fits again
+    assert tick(rig, bid="5") == []
+    # x1 (stamped before x2 and not in the first capped read) fell behind the window: the loss README Limits names
+
+
+def test_a_cap_filled_inside_the_margin_keeps_every_task_read_and_steps_one_margin_on(make, google, monkeypatch):
+    """More tasks inside one minute than a read returns, and fewer kept ids than a read: still nothing twice and
+    nothing stuck."""
+    monkeypatch.setattr(tp, "IDS_KEPT", 2)
+    google.tasks_page_size = 3
+    rig = seeded(make, google, alpha=[task("a0", T1)])
+    at = [f"2026-10-22T08:00:0{n}.000Z" for n in range(5)]
+    google.tasks["alpha"] += [task(f"x{n}", at[n]) for n in range(5)]
+    cap_pages(monkeypatch, 1)                                  # every read stops after three tasks
+    seen = []
+    for n in range(2, 6):
+        seen += ids(tick(rig, bid=str(n)))
+    assert seen == ["x0", "x1", "x2", "x3", "x4"], "each one once, none stuck"
+    calls = [c["query"].get("updatedMin") for c in list_calls(google, "alpha")]
+    assert calls[-2:] == [back(at[2]), at[2]], "a read filled inside the margin steps one margin on"
+    assert tick(rig, bid="6") == []
 
 
 def test_a_list_too_big_to_read_whole_starts_from_the_tick_time_and_reports_no_history(make, google, monkeypatch):

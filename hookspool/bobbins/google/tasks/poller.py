@@ -13,8 +13,12 @@ pass. No model is involved and no task text is read unless ``include_titles`` is
 3. A list already recorded is read from its cursor minus the margin. The margin catches a write whose ``updated``
    was stamped before a later one but became visible after it; a task whose id and ``updated`` are already in the
    kept map is skipped, every other returned task becomes a ``task-changed`` item.
-4. A read cut short by the page cap reports what it read but leaves the cursor where it was (the pages come in no
-   fixed order, so the newest ``updated`` of a partial read proves nothing about older tasks).
+4. A read cut short by the page cap (more than 10,000 tasks changed in the window) reports what it read and keeps
+   every task it read in the map, so the next pass reports none of them again. The cursor then moves to the newest
+   ``updated`` the read returned, or, when that is not past the cursor (the cap was filled by tasks inside the
+   margin), one margin forward. Either way the next pass asks for a later window, so a cap that stays in place
+   never stalls the list; tasks the capped read did not return and that fall behind the new window are lost, and
+   the log shows ``capped=N``.
 5. After all lists, one ``tasks-synced`` item says which lists changed and how many tasks.
 
 State: ``tasks_poll_state`` ``{lists: {<list id>: {updated, seen: {<task id>: <updated>}}}}``. The runtime stages
@@ -31,7 +35,7 @@ from hookspool.providers import google as G
 OUTPUTS = ("task-changed", "tasks-synced")           # the manifest's [outputs]
 STATE = "tasks_poll_state"
 SOURCE = "google-tasks"
-IDS_KEPT = 5000                                       # tasks remembered inside the margin of one list
+IDS_KEPT = G.TASK_PAGES * G.TASK_PAGE_SIZE            # tasks remembered inside the margin (at least one full read)
 MARGIN = timedelta(seconds=60)                        # how far behind the cursor each pass looks again
 
 
@@ -74,12 +78,19 @@ def newest(tasks: list[dict]) -> str:
     return best
 
 
-def kept(seen: dict[str, str], cursor: datetime | None) -> dict[str, str]:
-    """``seen`` cut to the tasks inside the margin of ``cursor``, at most ``IDS_KEPT`` of them (the newest)."""
+def kept(seen: dict[str, str], cursor: datetime | None, read=()) -> dict[str, str]:
+    """``seen`` cut to the tasks inside the margin of ``cursor``. The ids in ``read`` (what this pass read) that are
+    inside the margin all stay, whatever their number; the others fill up to ``IDS_KEPT``, newest first. So the next
+    read, which asks for the margin again, never meets a task this pass reported and then forgot."""
     rows = [(moment(u), i, u) for i, u in seen.items()]
     rows = [r for r in rows if r[0] is not None and (cursor is None or r[0] >= cursor - MARGIN)]
     rows.sort(key=lambda r: (r[0], r[1]))
-    return {i: u for _at, i, u in rows[-IDS_KEPT:]}
+    read = set(read)
+    mine = [r for r in rows if r[1] in read]
+    others = [r for r in rows if r[1] not in read]
+    room = max(IDS_KEPT - len(mine), 0)
+    others = others[len(others) - room:] if room else []
+    return {i: u for _at, i, u in sorted(mine + others, key=lambda r: (r[0], r[1]))}
 
 
 def previous(entry) -> tuple[str, dict[str, str]]:
@@ -149,9 +160,12 @@ def poll(batch, ctx) -> list[dict]:
         merged = dict(seen)
         merged.update({str(t["id"]): str(t.get("updated")) for t in tasks if moment(t.get("updated")) is not None})
         top = newest(tasks)
-        if finished and top and (cursor_at is None or moment(top) > cursor_at):
+        if top and (cursor_at is None or moment(top) > cursor_at):
             cursor, cursor_at = top, moment(top)
-        nxt[lid] = {"updated": cursor, "seen": kept(merged, cursor_at)}
+        elif not finished and cursor_at is not None:      # the cap was filled inside the margin: step one margin on
+            cursor_at += MARGIN
+            cursor = stamp(cursor_at)
+        nxt[lid] = {"updated": cursor, "seen": kept(merged, cursor_at, read=(str(t["id"]) for t in tasks))}
 
     ctx.save_state(STATE, {"lists": nxt})
     out = list(changed)

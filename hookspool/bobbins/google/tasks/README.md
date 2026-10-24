@@ -37,7 +37,8 @@ The Tasks API calls (listing the lists, paging a list's changes, the "list is go
    apps is hidden and a deleted one only shows when asked for). The margin picks up a write that was stamped a
    moment before another one but became visible after it. A task already reported with the same update time is
    skipped, so nothing is reported twice; a task edited again is reported again. If the read hits the page cap,
-   the tasks it did read are reported and the stored time stays where it was.
+   it reports and remembers the tasks it got, and the stored time moves to the newest of them (or one minute on,
+   when every task it got sat inside the margin). The next pass then asks for a later window.
 4. Emits one `task-changed` per changed task, oldest first, then one `tasks-synced` if anything changed.
 
 A pass with no changes emits nothing. It costs one call for the list of lists and one per followed list.
@@ -90,14 +91,18 @@ instance, delete that file and let the next tick record where each list stands.
 
 * A change is reported up to `every_s` seconds late, plus the jitter. A webhook would be faster, but Google Tasks
   has no push to offer.
-* A pass reads at most 100 pages of 100 tasks from each list. Pages arrive in no useful order, so when a read is
-  cut short the stored time does not move and the next pass reads the same window again: tasks beyond the cap are
-  not reported until the window shrinks (the log shows `capped=N`). Normal use is far below it.
+* A pass reads at most 100 pages of 100 tasks from each list, and the pages come in no useful order. When a read
+  is cut short, the tasks it got are reported and remembered, so none is reported twice. The stored time then moves
+  to the newest of them, or one minute on if they all fell inside the margin. The list never stalls, but a task the
+  capped read missed is lost once its update time falls behind the new window. The log shows `capped=N`. Normal use
+  is far below the cap.
 * A task whose update time is stamped more than 60 seconds before the newest one already seen, and only becomes
   visible after that one was read, is never reported. Two clients writing at nearly the same moment fall well
   inside the margin.
 * A list with more than 10,000 retained tasks (completed, hidden and deleted ones pile up) starts from the tick
-  time, so tasks changed in the minute before the first pass can be reported once.
+  time, so a task changed in the minute before the first pass can be reported once. The tick time comes from the
+  host's clock, but Google compares `updatedMin` with its own. If the host clock runs more than a minute ahead of
+  Google's, writes made in that gap are never reported, so keep the host clock synced.
 * A name in `tasklists` that matches no list is ignored; the log line shows `unmatched=N`, so a typo is visible.
 * A task list added after the bobbin started is recorded on its first sighting; tasks created in it before that
   moment are not reported.
