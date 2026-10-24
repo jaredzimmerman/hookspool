@@ -1,0 +1,32 @@
+# CourtListener email alerts (patterns written from the provider's published email conventions; not yet checked against real mail).
+# Docket alerts report new entries in a followed case; search alerts report new results of a saved search.
+# Every rule needs order or reservation context in the subject (a bare word such as 'updated' or 'booking' is not enough),
+# and skip_subject vetoes policy, marketing, account and review-request subjects (whole words, outside double-quoted
+# text). Nothing is vetoed on the body, so a feedback or recommendations footer does not hide a real order. A rule of
+# a built-in pack never claims mail Gmail filed as promotions, social or forums.
+[pack]
+name = "courtlistener-alerts"
+status = "unverified"
+description = "CourtListener alert mail: docket alerts (new filings in a followed case) and search alerts (new results of a saved search)"
+
+[[rules]]
+name = "docket-alert"
+kind = "alert"
+from = ["courtlistener.com", "free.law"]  # hookspool-scan: allow: the service's own sender domains
+subject_regex = '\bnew (?:docket )?(?:filings?|entr(?:y|ies))\b|\bdocket (?:alert|activity|update)\b'
+skip_subject = ["newsletter", "survey", "welcome to", "verify your", "confirm your email", "email confirmation", "alert has been created", "alert was created", "has been disabled", "unsubscribe confirmation", "updated our", "we've updated", "donate", "donation", "fundraiser"]
+[rules.extract]
+case_name = '(?:\bin|\bfor)\s+([^()\n]{3,120}?)\s*\('
+docket_number = '\b(\d{1,2}:\d{2}-[a-z]{1,4}-\d{1,6}(?:-[a-z0-9]{1,6})?|\d{2}-\d{3,6})\b'
+court = '\bcourt[:\s]+([^\n]{3,80})'
+
+[[rules]]
+name = "search-alert"
+kind = "alert"
+from = ["courtlistener.com", "free.law"]  # hookspool-scan: allow: the service's own sender domains
+subject_regex = '\bnew (?:results?|hits?|matches)\b|\b\d+ (?:new )?(?:results?|hits?|matches)\b'
+skip_subject = ["newsletter", "survey", "welcome to", "verify your", "confirm your email", "email confirmation", "alert has been created", "alert was created", "has been disabled", "unsubscribe confirmation", "updated our", "we've updated", "donate", "donation", "fundraiser"]
+[rules.extract]
+case_name = '(?:\bin|\bfor)\s+([^()\n]{3,120}?)\s*\('
+docket_number = '\b(\d{1,2}:\d{2}-[a-z]{1,4}-\d{1,6}(?:-[a-z0-9]{1,6})?|\d{2}-\d{3,6})\b'
+court = '\bcourt[:\s]+([^\n]{3,80})'

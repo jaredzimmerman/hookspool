@@ -1,0 +1,42 @@
+# DoorDash order mail (patterns written from the provider's published email conventions; not yet checked against real mail).
+# Every rule needs order or reservation context in the subject (a bare word such as 'updated' or 'booking' is not enough),
+# and skip_subject vetoes policy, marketing, account and review-request subjects (whole words, outside double-quoted
+# text). Nothing is vetoed on the body, so a feedback or recommendations footer does not hide a real order. A rule of
+# a built-in pack never claims mail Gmail filed as promotions, social or forums.
+[pack]
+name = "doordash-orders"
+status = "unverified"
+description = "DoorDash order mail: receipts, order status updates and cancellations or refunds"
+
+[[rules]]
+name = "cancelled"
+kind = "cancellation"
+from = ["doordash.com"]  # hookspool-scan: allow: the service's own sender domains
+subject_regex = '\byour\b.{0,30}?\border\b.{0,60}\b(?:cancel(?:l?ed)?|refunded)\b|\border\b.{0,20}\b(?:cancel(?:l?ed|lation)|refund(?:ed)?)\b'
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "special offer", "exclusive offer", "limited-time offer", "limited time offer", "offer ends", "new offer", "promo code", "promotion", "coupon", "% off", "deals", "deal of the day", "flash sale", "on sale", "sale ends", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "perks", "earnings", "membership", "rewards", "your points", "bonus points", "points balance", "earn points", "dining points", "dashpass", "rate your", "how was your", "leave a review", "write a review", "recommended for you", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
+[rules.extract]
+order_id = '(?:order\s*(?:number|id|#)|confirmation)\s*[:#]?\s*([a-z0-9][a-z0-9-]{4,24})\b'
+store = '\bfrom\s+([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on)\b|\s*[!.,:]|\s*$)'
+total = '(?:total|refund(?:ed)? amount)[:\s]*(\$\s?\d[\d,]*\.\d{2})'
+
+[[rules]]
+name = "status"
+kind = "delivery"
+from = ["doordash.com"]  # hookspool-scan: allow: the service's own sender domains
+subject_regex = '\byour\b.{0,30}?\border\b.{0,60}\b(?:on its way|is being prepared|is ready|has arrived|was delivered|has been delivered|is almost there|is arriving)\b|\byour dasher\b.{0,40}\b(?:is on (?:the|their|his|her) way|is arriving|has arrived|is here|is nearby|(?:has )?picked up your order|is at the store)\b|^order update\b'
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "special offer", "exclusive offer", "limited-time offer", "limited time offer", "offer ends", "new offer", "promo code", "promotion", "coupon", "% off", "deals", "deal of the day", "flash sale", "on sale", "sale ends", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "perks", "earnings", "membership", "rewards", "your points", "bonus points", "points balance", "earn points", "dining points", "dashpass", "rate your", "how was your", "leave a review", "write a review", "recommended for you", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
+[rules.extract]
+order_id = '(?:order\s*(?:number|id|#)|confirmation)\s*[:#]?\s*([a-z0-9][a-z0-9-]{4,24})\b'
+store = '\bfrom\s+([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on)\b|\s*[!.,:]|\s*$)'
+total = '(?:total|order total)[:\s]*(\$\s?\d[\d,]*\.\d{2})'
+
+[[rules]]
+name = "receipt"
+kind = "receipt"
+from = ["doordash.com"]  # hookspool-scan: allow: the service's own sender domains
+subject_regex = '\border confirmation\b|\byour\b.{0,30}?\breceipt\b|^your order from\b|\bthank(?:s| you) for your order\b'
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "special offer", "exclusive offer", "limited-time offer", "limited time offer", "offer ends", "new offer", "promo code", "promotion", "coupon", "% off", "deals", "deal of the day", "flash sale", "on sale", "sale ends", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "perks", "earnings", "membership", "rewards", "your points", "bonus points", "points balance", "earn points", "dining points", "dashpass", "rate your", "how was your", "leave a review", "write a review", "recommended for you", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
+[rules.extract]
+order_id = '(?:order\s*(?:number|id|#)|confirmation)\s*[:#]?\s*([a-z0-9][a-z0-9-]{4,24})\b'
+store = '\bfrom\s+([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on)\b|\s*[!.,:]|\s*$)'
+total = '(?:total|order total)[:\s]*(\$\s?\d[\d,]*\.\d{2})'

@@ -646,6 +646,7 @@ hookspool/bobbins/<vendor>/__init__.py   built in only: empty (no code the vendo
     processor.py                        post-commit work, optional (14.3.4)
     poller.py                           a poll bobbin's poller, in place of a source and a processor (14.4)
     captures/*.http                     conformance captures (docs/bobbins/writing-a-bobbin.md, "Capture files"), required
+    rule-packs/*.toml                   data only, optional: ready-made mail rule packs a mail bobbin offers (14.3.7, docs/bobbins/mail-rules.md)
     README.md                           what it does, how it works, settings, outputs, limits; required
     SETUP.md                            human setup: provider-side steps, secrets to create, config table, verify, rollback; required
     AGENTS.md                           agent setup: the same procedure as numbered, executable steps (14.3.8); required
@@ -917,7 +918,8 @@ emit lines ever reaches stdout. Unmapped event types are dropped with one log li
 - `hookspool bobbin list` — bobbins found (built-in, then each `spool.bobbin_path` dir): the `<vendor>.<product>`
   name, version, origin, summary, and which instances use them.
 - `hookspool bobbin show <vendor>.<product>` — the provider and its pages, secrets, settings
-  (type/required/default), outputs, span, sender_retries, proxy note.
+  (type/required/default), outputs, span, sender_retries, proxy note, and the rule packs the bobbin ships
+  (`rule-packs/*.toml`: name, status, rules; `google.gmail` only for now).
 - `hookspool bobbin expand [<instance>]` — 14.3.3.
 - `hookspool bobbin new <vendor>.<product> [--dir D] [--set NAME=VALUE ...] [--code] [--processor]` — a copy of the
   `hookspool.webhook` bobbin in `<D>/<vendor>/<product>/` with its settings frozen into a fixed `[source] template`
@@ -1003,6 +1005,7 @@ Everything that is the same for two services is core, and a bobbin calls it:
 | settings | `ctx.settings`; a bobbin never reads the environment |
 | logging | `ctx.log` (processor) / the intake's logger (source); a bobbin never opens log files |
 | time | `ctx.now()` / `req.now` |
+| recognising mail by sender and subject, pulling named values out of it, loading rule packs (`rules`, `rule_packs`) | `hookspool/mailrules.py`: pure functions on rule tables and `rule-packs/<name>.toml` data files in the bobbin's directory (`os.path.dirname(__file__)`); a bobbin never reads the files itself |
 | helpers shared by several bobbins of one provider (Google free/busy, Gmail history paging) | `hookspool/providers/<provider>.py`, written once on `ctx.http` / `ctx.oauth` |
 
 Enforcement: the conformance kit walks the AST of every bobbin module and fails on imports of `hmac`,

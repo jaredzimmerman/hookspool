@@ -1,0 +1,75 @@
+# Amazon retail order mail (patterns written from the provider's published email conventions; not yet checked against real mail).
+# Order ids are three groups of digits, 3-7-7. Regional storefronts are listed by domain.
+# Every rule needs order or reservation context in the subject (a bare word such as 'updated' or 'booking' is not enough),
+# and skip_subject vetoes policy, marketing, account and review-request subjects (whole words, outside double-quoted
+# text). Nothing is vetoed on the body, so a feedback or recommendations footer does not hide a real order. A rule of
+# a built-in pack never claims mail Gmail filed as promotions, social or forums.
+[pack]
+name = "amazon-orders"
+status = "unverified"
+description = "Amazon order mail: placed, shipped, out for delivery, delivered, delayed and refunded"
+
+[[rules]]
+name = "refunded"
+kind = "receipt"
+from = ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.com.au", "amazon.co.jp"]  # hookspool-scan: allow: the service's own sender domains
+subject_regex = '\byour refund\b|\brefund\b.{0,20}\b(?:for|on)\b.{0,20}\b(?:order|return|item)\b|\brefund (?:has been )?(?:issued|processed|initiated)\b|\b(?:order|item|return)\b.{0,30}\brefunded\b'
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "special offer", "exclusive offer", "limited-time offer", "limited time offer", "offer ends", "new offer", "promo code", "promotion", "coupon", "% off", "deals", "deal of the day", "flash sale", "on sale", "sale ends", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "perks", "earnings", "membership", "rewards", "your points", "bonus points", "points balance", "earn points", "dining points", "dashpass", "rate your", "how was your", "leave a review", "write a review", "recommended for you", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
+[rules.extract]
+order_id = '\b(\d{3}-\d{7}-\d{7})\b'
+amount = '(?:refund(?:ed)?(?: total| amount)?|total)[:\s]*((?:[$£€¥]|usd|cad|gbp|eur)\s?\d[\d,]*(?:\.\d{2})?)'
+
+[[rules]]
+name = "delayed"
+kind = "delivery"
+from = ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.com.au", "amazon.co.jp"]  # hookspool-scan: allow: the service's own sender domains
+subject_regex = '^delayed:|your\b.{0,30}?\b(?:order|package|parcel|item|shipment|delivery)s?\b.{0,40}\b(?:delayed|running late)\b|\bdelivery date (?:has )?(?:changed|been updated)\b|\bnew delivery date\b'
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "special offer", "exclusive offer", "limited-time offer", "limited time offer", "offer ends", "new offer", "promo code", "promotion", "coupon", "% off", "deals", "deal of the day", "flash sale", "on sale", "sale ends", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "perks", "earnings", "membership", "rewards", "your points", "bonus points", "points balance", "earn points", "dining points", "dashpass", "rate your", "how was your", "leave a review", "write a review", "recommended for you", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
+[rules.extract]
+order_id = '\b(\d{3}-\d{7}-\d{7})\b'
+item = '^(?:delayed|delivery update):\s*["“]?(.+?)["”]?\s*$'
+delivery_window = '(?:arriving|now arriving|new delivery date|expected)[:\s]+((?:[a-z]+day,?\s+)?[a-z]{3,9}\.?\s+\d{1,2}(?:\s*-\s*(?:[a-z]{3,9}\.?\s+)?\d{1,2})?)'
+
+[[rules]]
+name = "out-for-delivery"
+kind = "delivery"
+from = ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.com.au", "amazon.co.jp"]  # hookspool-scan: allow: the service's own sender domains
+subject_regex = '^out for delivery\b|your\b.{0,30}?\b(?:order|package|parcel|item|shipment|delivery)s?\b.{0,40}\bout for delivery\b'
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "special offer", "exclusive offer", "limited-time offer", "limited time offer", "offer ends", "new offer", "promo code", "promotion", "coupon", "% off", "deals", "deal of the day", "flash sale", "on sale", "sale ends", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "perks", "earnings", "membership", "rewards", "your points", "bonus points", "points balance", "earn points", "dining points", "dashpass", "rate your", "how was your", "leave a review", "write a review", "recommended for you", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
+[rules.extract]
+order_id = '\b(\d{3}-\d{7}-\d{7})\b'
+item = '^out for delivery:\s*["“]?(.+?)["”]?\s*$'
+delivery_window = '(?:arriving|arrives|delivery estimate)[:\s]+((?:[a-z]+day,?\s+)?(?:today|tomorrow|[a-z]{3,9}\.?\s+\d{1,2})(?:\s*(?:by|between)\s+\d{1,2}(?::\d{2})?\s?[ap]m(?:\s*-\s*\d{1,2}(?::\d{2})?\s?[ap]m)?)?)'
+
+[[rules]]
+name = "delivered"
+kind = "delivery"
+from = ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.com.au", "amazon.co.jp"]  # hookspool-scan: allow: the service's own sender domains
+subject_regex = '^delivered:|your\b.{0,30}?\b(?:order|package|parcel|item|shipment|delivery)s?\b.{0,40}\b(?:was|been|has been) delivered\b|your\b.{0,30}?\b(?:order|package|parcel|item|shipment|delivery)s?\b.{0,20}\bhas arrived\b'
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "special offer", "exclusive offer", "limited-time offer", "limited time offer", "offer ends", "new offer", "promo code", "promotion", "coupon", "% off", "deals", "deal of the day", "flash sale", "on sale", "sale ends", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "perks", "earnings", "membership", "rewards", "your points", "bonus points", "points balance", "earn points", "dining points", "dashpass", "rate your", "how was your", "leave a review", "write a review", "recommended for you", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
+[rules.extract]
+order_id = '\b(\d{3}-\d{7}-\d{7})\b'
+item = '^delivered:\s*["“]?(.+?)["”]?\s*$'
+delivered_on = '(?:delivered)[:\s]+((?:[a-z]+day,?\s+)?(?:today|yesterday|[a-z]{3,9}\.?\s+\d{1,2}))'
+
+[[rules]]
+name = "shipped"
+kind = "delivery"
+from = ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.com.au", "amazon.co.jp"]  # hookspool-scan: allow: the service's own sender domains
+subject_regex = '^shipped:|your\b.{0,30}?\b(?:order|package|parcel|item|shipment|delivery)s?\b.{0,40}\bshipped\b|\bshipment notification\b|\bshipping confirmation\b'
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "special offer", "exclusive offer", "limited-time offer", "limited time offer", "offer ends", "new offer", "promo code", "promotion", "coupon", "% off", "deals", "deal of the day", "flash sale", "on sale", "sale ends", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "perks", "earnings", "membership", "rewards", "your points", "bonus points", "points balance", "earn points", "dining points", "dashpass", "rate your", "how was your", "leave a review", "write a review", "recommended for you", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
+[rules.extract]
+order_id = '\b(\d{3}-\d{7}-\d{7})\b'
+item = '^shipped:\s*["“]?(.+?)["”]?\s*$'
+delivery_window = '(?:arriving|arrives|delivery estimate|estimated delivery)[:\s]+((?:[a-z]+day,?\s+)?[a-z]{3,9}\.?\s+\d{1,2}(?:\s*-\s*(?:[a-z]{3,9}\.?\s+)?\d{1,2})?|(?:today|tomorrow)|[a-z]+day)'
+
+[[rules]]
+name = "placed"
+kind = "order"
+from = ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.com.au", "amazon.co.jp"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["ordered:", "order confirmation", "your order has been placed", "thanks for your order"]
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "special offer", "exclusive offer", "limited-time offer", "limited time offer", "offer ends", "new offer", "promo code", "promotion", "coupon", "% off", "deals", "deal of the day", "flash sale", "on sale", "sale ends", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "perks", "earnings", "membership", "rewards", "your points", "bonus points", "points balance", "earn points", "dining points", "dashpass", "rate your", "how was your", "leave a review", "write a review", "recommended for you", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
+[rules.extract]
+order_id = '\b(\d{3}-\d{7}-\d{7})\b'
+item = '^ordered:\s*["“]?(.+?)["”]?\s*$'
+delivery_window = '(?:arriving|arrives|delivery estimate|estimated delivery)[:\s]+((?:[a-z]+day,?\s+)?[a-z]{3,9}\.?\s+\d{1,2}(?:\s*-\s*(?:[a-z]{3,9}\.?\s+)?\d{1,2})?|(?:today|tomorrow)|[a-z]+day)'

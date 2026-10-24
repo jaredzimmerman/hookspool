@@ -41,5 +41,6 @@ and `hookspool bobbin show <vendor>.<product>` prints one bobbin's provider page
 |---|---|
 | [Writing a bobbin](writing-a-bobbin.md) | the layout, the scaffold, the source (config template or code plugin), captures and the checks |
 | [The `hookspool.webhook` bobbin](webhook.md) | covering a service that has no bobbin of its own, and turning that into a dedicated bobbin |
+| [Mail rules and rule packs](mail-rules.md) | recognising mail from services that only send email (orders, reservations, court alerts) with the `google.gmail` bobbin |
 | [Private bobbins and hooks](private-bobbins.md) | changing behaviour without editing a built-in bobbin |
 | [Reviewing a bobbin](review.md) | `hookspool bobbin check`, what green means, and what a maintainer still checks |

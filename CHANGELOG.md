@@ -33,6 +33,16 @@ an interface, and the entry will say so.
 - `hookspool.providers.google`: `verify_push` and `push_message` (the Pub/Sub push token and envelope, now shared by
   `google.gmail` and `google.meet`), and the Meet REST v2 helpers `meet_conference`, `meet_participants`,
   `meet_sessions`, `meet_participant` and `meet_attendance`.
+- Mail rules in the `google.gmail` bobbin: the `rules` and `rule_packs` settings recognise mail from services that have no API or
+  push (orders, deliveries, reservations, court alerts) by sender and subject, and report one `mail-matched` item per message
+  with the rule name, its `kind` and the values the rule extracted. Seven built-in packs ship as data files under
+  `rule-packs/` (`amazon-orders`, `doordash-orders`, `resy-reservations`, `opentable-reservations`, `tock-reservations`,
+  `sevenrooms-reservations`, `courtlistener-alerts`); all are marked `unverified`. `hookspool bobbin show` lists a bobbin's
+  rule packs. The engine is `hookspool/mailrules.py`; the guide is `docs/bobbins/mail-rules.md`. Pack rules ask for order or
+  reservation context in the subject, veto policy, marketing, account and review-request subjects (`skip_subject`) and leave
+  promotions mail alone; `skip` and `skip_subject` match whole words and ignore double-quoted text in the subject; rules read the
+  owner's mailbox only; a bad rule drops the rules for that batch with one log line instead of failing it.
+- A pass over an owner's mailbox no longer reads free/busy unless a scheduling request was found.
 
 ## [0.2.0] - 2026-10-23
 
