@@ -10,6 +10,7 @@ import re
 import shutil
 import sys
 import tomllib
+from dataclasses import replace
 
 import pytest
 
@@ -17,7 +18,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from test_agents_md import check_agents_commands  # noqa: E402
 
+from _httpstub import Stub, doc_for, encode, make_ctx  # noqa: E402
 from hookspool import config as hs_config  # noqa: E402
+from hookspool.bobbin_loader import INSTANCE_KEYS  # noqa: E402
+from hookspool.destinations import build  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GUIDE = os.path.join(ROOT, "docs", "getting-started", "from-hermes-webhooks.md")
@@ -64,13 +68,35 @@ def test_agents_section_is_a_set_of_agent_steps_that_links_the_guide():
     assert os.path.exists(GUIDE)
 
 
+# backticked snake_case words in the prose that are not config keys: batch-document fields, a bobbin setting, an
+# event name and nginx names
+NOT_CONFIG = {"event_types", "event_type", "workflow_run", "limit_req_zone", "hs_github", "event_header"}
+
+
+def config_vocabulary() -> set[str]:
+    keys = set(hs_config.SOURCE_KEYS) | set(hs_config.ROUTE_KEYS) | set(INSTANCE_KEYS)
+    for ks in hs_config._SECTION_KEYS.values():
+        keys |= set(ks)
+    for ks in hs_config.DEST_KEYS.values():
+        keys |= set(ks)
+    return keys
+
+
 def test_every_config_key_the_agents_section_and_the_guide_name_exists():
-    """`[hermes]` keys are checked here; instance, destination and route keys by loading the guide's blocks below
-    (an unknown key is an error in `check`)."""
+    """Every backticked snake_case word in the guide and the AGENTS section is a real config key (or one of a few named
+    non-keys), so a prose-only key such as `expect_every_s` is checked too. The keys inside the toml blocks are checked
+    by loading them below (an unknown key is an error in `check`)."""
     assert {"base_url", "subscriptions_path"} <= hs_config._SECTION_KEYS["hermes"]
     text = agents_section() + read(GUIDE)
-    for key in ("base_url", "subscriptions_path", "unwrap", "span", "outputs", "event_header", "tee"):
+    named = set(re.findall(r"`([a-z]+(?:_[a-z0-9]+)+)`", text))
+    assert {"base_url", "subscriptions_path", "expect_every_s", "max_body_bytes"} <= named
+    unknown = named - config_vocabulary() - NOT_CONFIG
+    assert not unknown, sorted(unknown)
+    # keys named in prose by their plain word
+    for key in ("unwrap", "span", "outputs", "tee", "events", "coalesce"):
         assert re.search(rf"\b{key}\b", text), key
+    assert "unwrap" in hs_config._DEST_UNWRAP and "tee" in hs_config.ROUTE_KEYS and "span" in hs_config.SOURCE_KEYS
+    assert "event_header" in hs_config.DEST_KEYS["hermes"]
 
 
 def test_every_toml_block_in_the_guide_parses():
@@ -139,3 +165,30 @@ def test_the_tee_route_is_a_copy_not_a_second_primary(home):
     assert rep.errors == [], rep.errors
     route = next(r for r in cfg["routes"] if r["name"] == "github-ci-wake")
     assert route["tee"] is True and route["source"] == "github-ci"
+
+
+def test_an_unwrapped_github_instance_sends_the_event_type_header_to_the_gateway(home):
+    """The guide says the GitHub bobbin carries the event type in X-GitHub-Event, so a route's `events` filter still sees
+    it. Deliver one event through the guide's destination to a fake gateway and read the request."""
+    hermes = block_with("[hermes]")
+    github = block_with("[bobbins.github-ci]\nbobbin = \"github.repo\"\nsecrets.secret = { file = \"/etc/hookspool/secrets/github-ci\" }\nspan = \"immediate\"")
+    cfg, rep = load_and_check(home, "subscriptions_before.json", hermes, github)
+    assert rep.errors == [], rep.errors
+    gateway = Stub()
+    try:
+        cfg["hermes"]["base_url"] = f"http://127.0.0.1:{gateway.port}"
+        dest = build(cfg, "hermes:github-ci")
+        assert dest.unwrap is True
+        doc = doc_for(count=1, source="github-ci", event_type="workflow_run")
+        doc["event_meta"] = [{"id": 1, "event_type": "workflow_run", "dedup_id": "d-1"}]
+        payload = b'{"action":"completed","workflow_run":{"name":"test run","conclusion":"success"}}'
+        ctx = replace(make_ctx(wall=True), payloads=(payload,))
+        out = dest.deliver(doc, encode(doc), "hs_x_7", ctx)
+        assert out.kind == "ok", out
+        assert len(gateway.requests) == 1
+        req = gateway.requests[0]
+        assert req["path"] == "/webhooks/github-ci"
+        assert req["headers"]["X-GitHub-Event"] == "workflow_run"
+        assert req["body"] == payload          # the original payload, so the route's prompt template still reads it
+    finally:
+        gateway.close()

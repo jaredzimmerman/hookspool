@@ -19,17 +19,24 @@ gateway is:
 ```toml
 [hermes]
 base_url = "http://127.0.0.1:8644"
-subscriptions_path = "~/.hermes/webhook_subscriptions.json"
+subscriptions_path = "/home/agent/.hermes/webhook_subscriptions.json"
 ```
 
 * `base_url` is the gateway's webhook listener, on the same host. hookspool delivers to it directly, never through the
   public proxy.
-* `subscriptions_path` is the gateway's own routes file. hookspool reads each route's secret and profile from it on every
+* `subscriptions_path` is the gateway's own routes file: the gateway user's absolute path, here `agent`. Do not leave the
+  default `~/.hermes/...`: `~` is expanded for the user each process runs as, so under the `hookspool` service user it
+  points at `/var/lib/hookspool/.hermes`, not the gateway's file. hookspool reads each route's secret and profile from it on every
   attempt, so a rotation needs no restart and the Hermes side stays the one place those live. A route bound to a profile is
   delivered to `/p/<profile>/webhooks/<route>`, the path the gateway expects.
 
-Both values shown are the defaults. Nothing is moved yet: the gateway still takes every request, because no sender or proxy
-points at hookspool.
+The service user must be able to read that file (`sudo -u hookspool -- test -r /home/agent/.hermes/webhook_subscriptions.json`),
+or the units must run as the gateway user: [Running hookspool](../operations/running.md), step 2. Nothing is moved yet: the
+gateway still takes every request, because no sender or proxy points at hookspool.
+
+Run `hookspool` commands as the service user (`sudo -u hookspool -- env HOOKSPOOL_HOME=/var/lib/hookspool hookspool check`, as
+in Running), not as root. A `check` run as root passes on files the service user cannot read, and the first real delivery
+then fails.
 
 ## 2. Describe each route as an instance
 
@@ -54,10 +61,13 @@ Each instance needs:
 | `outputs = { "*" = "hermes:<route>" }` | send everything to the gateway route of that name |
 | `[destinations."hermes:<route>"]` with `unwrap = true` | deliver the original payload, one request per event, instead of hookspool's batch document |
 
-The secret file is written by the person who owns the secret. One way that never prints it, run by that person:
+The secret file is written by the person who owns the secret, and it must belong to the service user (the units run as
+`hookspool`, and a root-owned 0600 file cannot be read by them). One way that never prints it, run by that person: create
+the empty file with the right owner, then fill it.
 
 ```sh
-( umask 077; jq -r '."github-ci".secret' ~/.hermes/webhook_subscriptions.json | sudo tee /etc/hookspool/secrets/github-ci > /dev/null )
+sudo install -m 0600 -o hookspool -g hookspool /dev/null /etc/hookspool/secrets/github-ci
+jq -r '."github-ci".secret' /home/agent/.hermes/webhook_subscriptions.json | sudo tee /etc/hookspool/secrets/github-ci > /dev/null
 ```
 
 ### Worked example: a GitHub CI route
@@ -115,12 +125,12 @@ request straight to the intake, on the same host:
 ```sh
 hookspool reload
 body='{"repository":{"full_name":"example/widgets"},"action":"completed","workflow_run":{"name":"test run","conclusion":"success"}}'
-sig=$(printf '%s' "$body" | python3 -c 'import hmac,hashlib,sys; k=open(sys.argv[1],"rb").read().rstrip(b"\n"); print(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())' /etc/hookspool/secrets/github-ci)
+sig=$(printf '%s' "$body" | sudo -u hookspool python3 -c 'import hmac,hashlib,sys; k=open(sys.argv[1],"rb").read().rstrip(b"\n"); print(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())' /etc/hookspool/secrets/github-ci)
 curl -s -X POST http://127.0.0.1:8650/hooks/github-ci -H "X-Hub-Signature-256: sha256=$sig" -H "X-GitHub-Event: workflow_run" -H "X-GitHub-Delivery: test-1" -d "$body"
 hookspool list --source github-ci
 ```
 
-The reply is `{"status":"queued"}`, and the batch then moves to `delivered`. The request reaches the real route, so the agent
+The signing line runs as the service user because the secret file is not readable by anyone else. The reply is `{"status":"queued"}`, and the batch then moves to `delivered`. The request reaches the real route, so the agent
 sees a `workflow_run` event; use a body its prompt will treat as ordinary, or rehearse on a scratch route first (see
 [Drills](../operations/drills.md)). If the gateway answers `duplicate`, `ignored` or `coalesced`, that is its own filter or
 deduplication at work, not a fault. If the batch does not deliver, `hookspool issues` says why; the usual causes are a secret
@@ -130,7 +140,12 @@ file that differs from the route's secret and a route name that is not in the su
 
 Until now senders reach the gateway through your proxy. Change the one location for the route so it forwards to the
 intake instead. For nginx, using the exact-match form from
-[`deploy/nginx.example.conf`](../../deploy/nginx.example.conf), whose `hs_github` rate-limit zone the example reuses:
+[`deploy/nginx.example.conf`](../../deploy/nginx.example.conf). The "after" block reuses that file's `hs_github` rate-limit
+zone. Copy its `limit_req_zone` line into the `http` context (outside any `server` block), or `nginx -t` fails:
+
+```nginx
+limit_req_zone $binary_remote_addr zone=hs_github:10m rate=20r/s;
+```
 
 ```nginx
 # before
@@ -152,8 +167,20 @@ they have. Copy the example file's body-size, buffering and header settings into
 Reload the proxy (`nginx -t && systemctl reload nginx`). Then ask the sender for a real delivery, or redeliver a recent one,
 and confirm `hookspool list --source github-ci` shows it and the sender's delivery log shows a 200.
 
-Rollback is the same edit in reverse: point the location back at the gateway. Anything hookspool already accepted is
-still delivered to the gateway, so a rollback loses nothing.
+Two things change for the sender. Before, the gateway took the request directly; now the intake refuses a body over the
+source's `max_body_bytes` (768 KiB for GitHub by default, within nginx's 1 MiB) with a 413. The gateway may have accepted
+such a body. GitHub does not retry a 413 and the redelivery sweep cannot recover it. If your repos send large payloads, raise
+the limits first, in the order the [sweeps page](../operations/sweeps.md) gives, and `hookspool check` enforces it.
+
+### Rolling back
+
+1. Point the location back at the gateway and reload the proxy.
+2. Leave the instance and its `[destinations."hermes:<route>"]` table in the config. Batches are delivered with the
+   destination config current at delivery time. If you remove the table while batches are queued, they go out as batch
+   documents, without `unwrap`, to a route that still has its `events` filter and its prompt, and `check` no longer warns
+   because the destination is no longer in use.
+3. Wait until `hookspool list --source github-ci` shows nothing open, sealed, leased or retry.
+4. Then remove the instance and the destination table, and run `hookspool check` and `hookspool reload`.
 
 ## 5. Senders that do not retry
 
@@ -168,7 +195,12 @@ Leave the first pass running for a few days, then go route by route.
 
 Coalesce bursts. A push that triggers twenty checks wakes the agent twenty times in the first pass. To get one wake-up
 per burst, remove `unwrap` from the destination, return the instance to the bobbin's own span, and change the prompt to read
-the batch:
+the batch. The order matters, because queued batches are delivered with whatever the config says at that moment:
+
+1. `hookspool pause hermes:github-ci`. Events keep spooling and nothing is delivered.
+2. In the subscriptions file, change the prompt to read the batch and delete the route's `events` and `coalesce` entries
+   (below). Do this first: `check` refuses the new config while they are there.
+3. In `config.toml`, make the instance this:
 
 ```toml
 [bobbins.github-ci]
@@ -178,9 +210,15 @@ span = "burst"
 outputs = { "*" = "hermes:github-ci" }
 ```
 
+4. `hookspool check`, `hookspool reload`, then `hookspool resume hermes:github-ci`. Events that were queued during the
+   pause go out as one-event batch documents, which the new prompt reads like any other.
+
+If you skip the pause, wait until `hookspool list --source github-ci` shows nothing open, sealed, leased or retry before
+you save the first edit. If you delete the `events` filter and leave `unwrap` on, every event type wakes the agent.
+
 The route then receives one document per burst: the original events are `events`, with `count`, `summary` and
-`event_types` beside them, so a prompt can say "{summary}" and look at the list. Also delete the route's own `events` and
-`coalesce` entries from the subscriptions file. `hookspool check` fails while they are there, because a gateway filter
+`event_types` beside them, so a prompt can say "{summary}" and look at the list. The route's own `events` and
+`coalesce` entries must go from the subscriptions file. `hookspool check` fails while they are there, because a gateway filter
 looks at a whole batch as if it were one event, and the gateway's own coalescing keeps only the last event. Filter by event
 type in hookspool instead (an `outputs` entry per type, or a [route](../configuration/README.md#routes)) and let the batch
 carry the rest.

@@ -155,26 +155,32 @@ You are helping a person run hookspool on a host or turn on a service. Look befo
 
 ### Moving a Hermes setup to hookspool
 
-For a person whose senders post straight to a Hermes gateway's webhook routes. The goal is no sender URL change and no
-prompt change. The full guide, with config examples, is [From Hermes webhooks](docs/getting-started/from-hermes-webhooks.md).
+For senders posting to a Hermes gateway's routes, with no sender or prompt change: [guide](docs/getting-started/from-hermes-webhooks.md).
 
-**Needs from the human:** which routes to move (`hermes webhook list`), access to the reverse proxy config, each sender's
-secret written to a file (the person does this), and a clear yes for step 5 (`outward`: it changes what the proxy forwards).
+**Needs from the human:** which routes to move (`hermes webhook list`), the gateway user's absolute path to its
+`webhook_subscriptions.json`, reverse proxy access, each sender's secret in a file owned by the service user (the person
+writes it), and a clear yes for step 5 (`outward`: it changes what the proxy forwards).
 
-1. Set `[hermes] base_url` (the gateway's listener) and `subscriptions_path`. **Check:** `hookspool check` has no `hermes` error.
+Run `hookspool` as the service user ([Running](docs/operations/running.md)), never root (root reads files the service
+cannot). If a check fails, fix that step before the next.
+
+1. Set `[hermes] base_url` (the gateway's listener) and `subscriptions_path` (the gateway user's absolute path, not `~`).
+   **Check:** `sudo -u hookspool -- test -r <path>`; if it fails, make it readable or run the units as the gateway user.
 2. Per route, add `[bobbins.<instance>]` with the sender's bobbin, the secret file, `span = "immediate"` and
    `outputs = { "*" = "hermes:<route>" }`, and a `[destinations."hermes:<route>"]` table with `unwrap = true`.
    **Check:** `hookspool bobbin expand <instance>` shows the secret as a reference only.
-3. `hookspool check`, then `hookspool reload`. **Check:** `ok`, no error naming the instance or route.
-4. Send a signed test request to the intake on loopback, at `/hooks/<instance>`, as the guide shows. **Check:**
-   `hookspool list --source <instance>` shows it `delivered`. It reaches the real route: say so first.
-5. **Outward:** the person changes the proxy location for the route to forward to `/hooks/<instance>`. **Check:** a real
-   delivery from the sender appears in `hookspool list --source <instance>`.
-6. For a sender that does not retry (GitHub), install its redelivery sweep ([Sweeps](docs/operations/sweeps.md)).
+3. `hookspool check`, then `hookspool reload`. **Check:** `ok`; a route error means it is not in the file at that path.
+4. Send a signed test request to loopback `/hooks/<instance>`, as the guide shows (it reaches the real route: say so
+   first). **Check:** `hookspool list --source <instance>` shows it `delivered`.
+5. **Outward:** the person points the route's proxy location at `/hooks/<instance>`. **Check:** a real delivery appears
+   in `hookspool list --source <instance>`; if not, roll back at once.
+6. For a sender that does not retry (GitHub), install its redelivery sweep ([Sweeps](docs/operations/sweeps.md)). **Check:**
+   one `--dry-run` lists deliveries and refuses none. Bodies over the source `max_body_bytes` now get 413 at the intake.
 
-**Rollback:** the person points the proxy location back at the gateway. Accepted events still deliver; remove the
-instance, then `hookspool check` and `hookspool reload`. Coalescing, tee routes and bridges come after it has run clean;
-they are in the guide, and `hookspool check` fails while a gateway route still sets `events` or `coalesce` without `unwrap`.
+**Rollback:** the person points the proxy location back at the gateway. Keep the instance and its destination table until
+`hookspool list --source <instance>` shows nothing open, sealed, leased or retry; only then remove them, then
+`hookspool check` and `hookspool reload` (earlier, leftover batches go out as batch documents to a route that still
+filters). Coalescing, tee routes and bridges come later; the guide gives the order for dropping `unwrap`.
 
 ### Day two
 
