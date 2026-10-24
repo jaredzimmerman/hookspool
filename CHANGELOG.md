@@ -22,6 +22,20 @@ an interface, and the entry will say so.
 - `hookspool bobbin new <vendor>.<product> --poll` scaffolds a poll bobbin. The conformance kit runs `poller.py` once per
   `captures/poll-*.json` (stub API answers), and its `provider` row asks a poll bobbin for `api_docs`, `no_push_note` and
   `no_push_docs` in place of `webhook_docs` and `signature_docs`; the documents' frontmatter carries `api_docs`.
+- The `sec.edgar` bobbin (`hookspool/bobbins/sec/edgar/`): new SEC filings for the companies you follow, a poll bobbin
+  over EDGAR's per-company Atom feeds (EDGAR has no push). One conditional GET per company and form (`ETag` and
+  `Last-Modified` saved per feed), new filings found by accession number, the first pass of a feed silent unless
+  `backfill` asks for the newest few, one `filing` item per new filing (`cik`, `company`, `form`, `accession`, `filed`,
+  `title`, `link`). EDGAR's fair-access rules are kept: `user_agent` is required (a name and an email address) and the
+  poller refuses to run without one, and requests are paced at 5 a second.
+- `hookspool.feeds`: `parse_feed` turns an Atom 1.0, RSS 2.0 or RSS 1.0 document into dicts for any poller, and refuses
+  a document type or entity declaration (no entity expansion, no external entity), with size, depth and entry caps.
+  `parse_time` reads RFC 3339 and RFC 822 dates.
+- `ctx.pace(per_s)`: a `Pacer` whose `wait()` spaces a poller's requests under a provider's rate limit. The sleep is
+  core's, since a bobbin never sleeps. `ctx.http.get_text` also decodes a body by the `encoding` of its XML declaration
+  when the response names no charset.
+- The wheel carries `captures/poll-*.json` (a poll bobbin's stub answers), and the hostname scan accepts `sec.gov` and the
+  `purl.org` namespace name.
 - The `google.meet` bobbin (`hookspool/bobbins/google/meet/`): Google Meet events from a Google Workspace Events
   subscription on a user, delivered through a Cloud Pub/Sub push with the token in the URL. The source keys each
   CloudEvent by its conference record and dedups on `ce-id`. The processor returns `meeting-started` for the first

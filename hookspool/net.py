@@ -7,12 +7,14 @@ processor ``Context``:
   mapped to ``Retryable`` (the dispatcher retries the batch later) or ``Permanent`` (the batch is
   dead-lettered and needs a person). ``ctx.http.get_text`` is the conditional GET a poller needs
   (14.4): it returns ``(status, text, response_headers)`` and answers 304 without raising.
+- ``ctx.pace(per_s)`` is a ``Pacer`` for a provider with a request-rate rule: call ``wait()`` before each request and
+  they start at least ``1/per_s`` seconds apart. The sleep is core's, because a bobbin never sleeps (14.4).
 - ``ctx.oauth(name)`` is an ``OAuthClient`` for the credential secret ``name``: it reads the
   credential through ``ctx.secret``, keeps the access token in the runtime's state mapping,
   refreshes it when it expires or after one 401, and never writes the credential file.
 - ``ctx.secret(name)`` resolves a secret the manifest marks ``processor = true``.
 
-``make_context_extras(state, secret_resolver)`` builds all three; the processor runtime calls it
+``make_context_extras(state, secret_resolver)`` builds all of them; the processor runtime calls it
 once per batch.
 
 Status mapping (``Http``):
@@ -59,7 +61,7 @@ from typing import Any, Callable
 from . import __version__
 from .config import SecretError, resolve_secret
 
-__all__ = ["NetError", "Retryable", "Permanent", "Unauthorized", "Http", "OAuth", "OAuthClient",
+__all__ = ["NetError", "Retryable", "Permanent", "Unauthorized", "Http", "Pacer", "OAuth", "OAuthClient",
            "SecretAccess", "resolver_from_refs", "make_context_extras", "DEFAULT_TOKEN_URI"]
 
 DEFAULT_TIMEOUT_S = 20.0
@@ -72,6 +74,8 @@ DEFAULT_EXPIRES_IN_S = 3600.0
 RETRYABLE_STATUS = frozenset({408, 425, 429})
 _CODE_RE = re.compile(r"^[A-Za-z_]{1,64}$")
 _LABEL_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,64}$")
+_XML_DECL_RE = re.compile(rb"""^\s*<\?xml[^>]{0,200}?encoding\s*=\s*["']([A-Za-z0-9_.:-]{1,40})["']""")
+MAX_PACE_INTERVAL_S = 10.0
 _READ_CHUNK = 65536
 
 
@@ -155,6 +159,20 @@ def _charset(content_type: str) -> str:
     if m:
         try:
             return codecs.lookup(m.group(1)).name
+        except LookupError:
+            pass
+    return "utf-8"
+
+
+def _body_charset(content_type: str, raw: bytes) -> str:
+    """The charset of a text body: the Content-Type's, else an XML declaration's ``encoding=``, else UTF-8."""
+    import codecs
+    if re.search(r"(?i)charset\s*=", content_type or ""):
+        return _charset(content_type)
+    m = _XML_DECL_RE.match(raw[:300])
+    if m:
+        try:
+            return codecs.lookup(m.group(1).decode("ascii")).name
         except LookupError:
             pass
     return "utf-8"
@@ -249,7 +267,7 @@ class Http:
         status = int(meta.get("status") or 200)
         if status == 304:
             return 304, "", rh
-        return status, raw.decode(_charset(rh.get("content-type", "")), errors="replace"), rh
+        return status, raw.decode(_body_charset(rh.get("content-type", ""), raw), errors="replace"), rh
 
     def request(self, method: str, url: str, *, json: Any = None, form: dict | None = None,
                 params: dict | None = None, headers: dict | None = None, bearer: str | None = None,
@@ -677,11 +695,46 @@ class OAuthClient:
         return http.get_text(url, headers, bearer=tok, **kw)
 
 
+# ---- Pacer ---------------------------------------------------------------------------------------
+class Pacer:
+    """Keeps requests under a provider's rate rule (for example "at most 10 a second").
+
+    ``wait()`` before each request: the first returns at once, each later one starts at least
+    ``1/per_s`` seconds after the previous. ``clock`` and ``sleep`` are injectable so a test never
+    waits. One ``Pacer`` covers one poll in one process; a deployment that runs several instances
+    against one provider from one address splits the budget between them."""
+
+    def __init__(self, per_s: float, *, clock: Callable[[], float] = time.monotonic,
+                 sleep: Callable[[float], None] = time.sleep):
+        if isinstance(per_s, bool) or not isinstance(per_s, (int, float)) or per_s <= 0 or per_s != per_s:
+            raise Permanent("pace: requests per second must be a number greater than 0")
+        self.interval_s = 1.0 / float(per_s)
+        if self.interval_s > MAX_PACE_INTERVAL_S:
+            raise Permanent(f"pace: at least {1.0 / MAX_PACE_INTERVAL_S:g} request(s) per second")
+        self._clock = clock
+        self._sleep = sleep
+        self._next: float | None = None
+
+    def wait(self) -> float:
+        """Block until the next request may start; returns how long it waited (seconds)."""
+        t = self._clock()
+        start = t if self._next is None else max(t, self._next)
+        delay = start - t
+        if delay > 0:
+            self._sleep(delay)
+        self._next = start + self.interval_s
+        return max(delay, 0.0)
+
+
 # ---- the processor runtime's entry point ----------------------------------------------------------
 def make_context_extras(state: MutableMapping, secret_resolver: Callable[[str], str], *,
                         log: Callable[[str], None] | None = None, now: Callable[[], float] = time.time,
-                        http: Http | None = None, persist: Callable[[], None] | None = None) -> dict:
-    """``{"http", "oauth", "secret"}`` for a processor ``Context``.
+                        http: Http | None = None, persist: Callable[[], None] | None = None,
+                        sleep: Callable[[float], None] = time.sleep) -> dict:
+    """``{"http", "oauth", "secret", "pace"}`` for a processor ``Context``.
+
+    ``pace(per_s)`` builds a ``Pacer`` that sleeps with ``sleep`` (the conformance kit and the tests pass one that
+    does not wait).
 
     ``state`` is a mutable mapping the runtime owns and persists (OAuth keeps its tokens under
     ``state["oauth"]``; see ``OAuth``). ``secret_resolver(name)`` returns a secret's value or
@@ -698,4 +751,5 @@ def make_context_extras(state: MutableMapping, secret_resolver: Callable[[str], 
     runtime that wants the permanent class must wrap its mapping to raise ``KeyError`` for that case."""
     secret = SecretAccess(secret_resolver)
     h = http if http is not None else Http()
-    return {"http": h, "oauth": OAuth(h, secret, state, now=now, log=log, persist=persist), "secret": secret}
+    return {"http": h, "oauth": OAuth(h, secret, state, now=now, log=log, persist=persist), "secret": secret,
+            "pace": lambda per_s: Pacer(per_s, sleep=sleep)}

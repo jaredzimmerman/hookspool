@@ -547,6 +547,15 @@ class Context:
     def oauth(self, secret_name: str) -> Any:
         return self._x()["oauth"](secret_name)
 
+    def pace(self, per_s: float) -> Any:
+        """A pacer for a provider's request-rate rule: ``wait()`` before each request keeps them at most ``per_s`` a
+        second apart. The sleeping is core's; a bobbin never sleeps (14.4)."""
+        make = self._x().get("pace")
+        if make is None:
+            from .net import Pacer
+            return Pacer(per_s)
+        return make(per_s)
+
     # state ------------------------------------------------------------------------------------------
     def _state_path(self, name: str) -> str:
         if not isinstance(name, str) or not _STATE_NAME.match(name):

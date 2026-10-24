@@ -109,7 +109,7 @@ def main(argv: list[str]) -> int:
         sys.stderr.write(f"hookspool.processor {instance}: {' '.join(str(line).split())[:1000]}\n")
 
     def extras(state: dict, resolver):
-        return net.make_context_extras(state, resolver, http=stub, now=clock, log=log)
+        return net.make_context_extras(state, resolver, http=stub, now=clock, log=log, sleep=lambda _s: None)
 
     real_load = P.load_processor
 

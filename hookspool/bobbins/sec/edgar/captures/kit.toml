@@ -1,0 +1,6 @@
+# test values for `hookspool bobbin check`
+[settings]
+user_agent = "Example Research test@example.com"
+ciks = ["0000000001"]
+forms = ["8-K", "4"]
+backfill = 5

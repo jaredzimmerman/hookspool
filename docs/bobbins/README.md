@@ -31,6 +31,7 @@ same directory is the step-by-step setup for a person, and `AGENTS.md` is the sa
 | [`hookspool.webhook`](../../hookspool/bobbins/hookspool/webhook/README.md) | Any web service that sends a signed or tokened JSON POST: the template source, configured entirely by settings |
 | [`kaneo.projects`](../../hookspool/bobbins/kaneo/projects/README.md) | Kaneo generic webhook: project and task events, HMAC-SHA256 of the JSON body in X-Kaneo-Signature |
 | [`plaid.items`](../../hookspool/bobbins/plaid/items/README.md) | Plaid webhooks: items, transactions and link events, signed with an ES256 JWT checked against Plaid's published keys |
+| [`sec.edgar`](../../hookspool/bobbins/sec/edgar/README.md) | SEC EDGAR filings: new 8-K, Form 4 and other filings for the companies you follow (Atom feeds, polled) |
 | [`zoom.meetings`](../../hookspool/bobbins/zoom/meetings/README.md) | Zoom event subscriptions: meeting and webinar events, signed with a timestamped HMAC, and the endpoint URL validation |
 <!-- end of generated table -->
 

@@ -1,0 +1,17 @@
+{
+  "description": "two new 8-K filings for a followed company (the Form 4 feed answers the same entries)",
+  "now": 1800000000,
+  "items": 2,
+  "http": [
+    {
+      "method": "GET",
+      "url": "https://www.sec.gov/cgi-bin/browse-edgar",
+      "status": 200,
+      "headers": {
+        "ETag": "\"v2\"",
+        "Content-Type": "application/atom+xml"
+      },
+      "text": "<?xml version=\"1.0\" encoding=\"ISO-8859-1\" ?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\">\n  <author>\n    <email>webmaster@example.com</email>\n    <name>Webmaster</name>\n  </author>\n  <company-info>\n    <cik>0000000001</cik>\n    <conformed-name>Example Corp</conformed-name>\n  </company-info>\n  <entry>\n    <category label=\"form type\" scheme=\"https://www.sec.gov/\" term=\"8-K\" />\n    <content type=\"text/xml\">\n      <accession-number>0000000001-26-000002</accession-number>\n      <filing-date>2026-01-06</filing-date>\n      <filing-href>https://www.sec.gov/Archives/edgar/data/1/000000000126000002/0000000001-26-000002-index.htm</filing-href>\n      <filing-type>8-K</filing-type>\n      <form-name>Current report</form-name>\n      <size>4 KB</size>\n    </content>\n    <id>urn:tag:sec.gov,2008:accession-number=0000000001-26-000002</id>\n    <link href=\"https://www.sec.gov/Archives/edgar/data/1/000000000126000002/0000000001-26-000002-index.htm\" rel=\"alternate\" type=\"text/html\" />\n    <summary type=\"html\"> &lt;b&gt;Filed:&lt;/b&gt; 2026-01-06 &lt;b&gt;AccNo:&lt;/b&gt; 0000000001-26-000002 &lt;b&gt;Size:&lt;/b&gt; 4 KB</summary>\n    <title>8-K  - Current report</title>\n    <updated>2026-01-06T16:05:10-05:00</updated>\n  </entry>\n  <entry>\n    <category label=\"form type\" scheme=\"https://www.sec.gov/\" term=\"8-K\" />\n    <content type=\"text/xml\">\n      <accession-number>0000000001-26-000001</accession-number>\n      <filing-date>2026-01-02</filing-date>\n      <filing-href>https://www.sec.gov/Archives/edgar/data/1/000000000126000001/0000000001-26-000001-index.htm</filing-href>\n      <filing-type>8-K</filing-type>\n      <form-name>Current report</form-name>\n      <size>4 KB</size>\n    </content>\n    <id>urn:tag:sec.gov,2008:accession-number=0000000001-26-000001</id>\n    <link href=\"https://www.sec.gov/Archives/edgar/data/1/000000000126000001/0000000001-26-000001-index.htm\" rel=\"alternate\" type=\"text/html\" />\n    <summary type=\"html\"> &lt;b&gt;Filed:&lt;/b&gt; 2026-01-02 &lt;b&gt;AccNo:&lt;/b&gt; 0000000001-26-000001 &lt;b&gt;Size:&lt;/b&gt; 4 KB</summary>\n    <title>8-K  - Current report</title>\n    <updated>2026-01-02T09:15:41-05:00</updated>\n  </entry>\n  <id>https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0000000001</id>\n  <title>Example Corp  (0000000001)</title>\n  <updated>2026-01-06T16:10:00-05:00</updated>\n</feed>\n"
+    }
+  ]
+}

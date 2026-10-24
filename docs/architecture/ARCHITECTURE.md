@@ -1000,6 +1000,8 @@ Everything that is the same for two services is core, and a bobbin calls it:
 | results to the agent or another destination | return items from `process`; the runtime emits them |
 | retries, backoff, timeouts, dead-letter | the dispatcher: raise `Retryable` / `Permanent` (or `ctx.fail_permanent`); never loop or sleep |
 | HTTP to the provider's API | `ctx.http` (`hookspool/net.py`): timeouts, JSON, status → `Retryable`/`Permanent`, no bodies or query strings in errors or logs |
+| reading an Atom or RSS feed | `hookspool.feeds.parse_feed` (stdlib XML; a DOCTYPE or entity declaration is refused; size, depth and entry caps), never `xml.*` in a bobbin |
+| a provider's request-rate rule | `ctx.pace(per_s)`, then `wait()` before each request; core does the sleeping |
 | OAuth 2 refresh-token flows | `ctx.oauth(<secret name>)` (`hookspool/net.py`): reads the credential through `ctx.secret`, caches access tokens in runtime state, refreshes on expiry or one 401, and **never rewrites the credential file** (a rotated refresh token is kept in runtime state and used from then on) |
 | secrets | `ctx.secret(name)` (processor, through `net.make_context_extras`: a name the processor was not given is `Permanent`, an unreadable reference `Retryable`) / the source's `Secrets` (source) |
 | settings | `ctx.settings`; a bobbin never reads the environment |
@@ -1120,8 +1122,11 @@ the last delivery or, before the first, from when the instance was first schedul
 dispatcher's). Core adds what pollers share: `ctx.http.get_text(url, headers=None, *, params, bearer, timeout_s, label)
 -> (status, text, response_headers)` (and the same on `ctx.oauth(name)`), which returns a 304 as `(304, "", headers)`
 without raising, so a conditional GET (`If-None-Match` from the last `etag`, or `If-Modified-Since`) is possible. It has
-the same timeout, size cap and status mapping as the JSON methods; the text is decoded with the response's charset
-(UTF-8 by default) and header names are lower case.
+the same timeout, size cap and status mapping as the JSON methods; the text is decoded with the response's charset (else the
+`encoding` of an XML declaration, else UTF-8) and header names are lower case. Two more helpers serve a poller that reads a
+feed under a rate rule: `hookspool.feeds.parse_feed(text)` returns an Atom or RSS document as dicts and refuses a DOCTYPE or
+entity declaration, and `ctx.pace(per_s)` returns a `Pacer` whose `wait()`, called before each request, spaces requests at least
+`1/per_s` seconds apart. A bobbin never sleeps; the sleep is core's (and the conformance kit's does not wait).
 
 **Tooling.** `hookspool bobbin new <vendor>.<product> --poll` writes a poll bobbin (a `[poll]` table, a `poller.py` that
 makes a conditional GET, a `captures/poll-example.json`, the three documents with the poll frontmatter, `[provider]` with
