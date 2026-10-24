@@ -1,0 +1,21 @@
+name = "finnhub.earnings"
+version = "1"
+summary = "Finnhub earnings webhook: an announcement per watched symbol, verified by a shared secret header"
+
+[provider]
+vendor = "Finnhub"
+product = "Webhooks"
+homepage = "https://finnhub.io"
+webhook_docs = "https://finnhub.io/docs/api/webhook"
+signature_docs = "https://finnhub.io/docs/api/webhook"
+api_docs = "https://finnhub.io/docs/api"
+
+[source]
+template = { scheme = "shared-secret-header", header = "X-Finnhub-Secret", key = "data.0.symbol", dedup = "body_sha256" }
+span = "immediate"
+
+[secrets.secret]
+description = "the webhook secret Finnhub sends in the X-Finnhub-Secret header (the value Finnhub shows for your account's webhooks)"
+
+[outputs."*"]
+description = "every accepted earnings delivery"

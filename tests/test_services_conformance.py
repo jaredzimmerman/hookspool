@@ -16,7 +16,8 @@ from hookspool.testing import bobbinkit as K
 
 BUILTIN = sorted(os.path.dirname(p) for p in glob.glob(os.path.join(BL.BUILTIN_DIR, "*", "*", BL.MANIFEST)))
 NAMES = {"google.gmail", "google.calendar", "google.drive", "github.repo", "atlassian.trello", "kaneo.projects",
-         "zoom.meetings", "plaid.items", "hookspool.webhook", "google.meet", "cloudflare.notifications"}
+         "zoom.meetings", "plaid.items", "hookspool.webhook", "google.meet", "cloudflare.notifications",
+         "finnhub.earnings"}
 
 
 def _name(d: str) -> str:

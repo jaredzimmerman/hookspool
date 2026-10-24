@@ -46,6 +46,9 @@ an interface, and the entry will say so.
 - The `cloudflare.notifications` bobbin (`hookspool/bobbins/cloudflare/notifications/`): a Cloudflare
   Notifications webhook destination, a template bobbin with no Python. It checks the shared secret sent in the
   `cf-webhook-auth` header, keys alerts on the notification policy's name and de-duplicates on the body's digest.
+- The `finnhub.earnings` bobbin (`hookspool/bobbins/finnhub/earnings/`): Finnhub earnings webhook, a fixed
+  shared-secret template (`X-Finnhub-Secret`) keyed by `data.0.symbol`, deduplicated by body SHA-256, span `immediate`.
+  Finnhub's webhook documentation is thin; the README says which parts are assumed and must be checked on a real delivery.
 
 ## [0.2.0] - 2026-10-23
 
