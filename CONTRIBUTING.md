@@ -17,6 +17,8 @@ hookspool bobbin check hookspool/bobbins/<name> --base origin/main              
 * [Reviewing a bobbin](docs/bobbins/review.md) says what a green scorecard proves, what CI runs and what a maintainer still
   checks by hand. A pull request that touches only the bobbin, with a green scorecard and the template's three boxes ticked,
   is the expected merge.
+* Maintainers: `hookspool bobbin check` runs the bobbin's source, processor and tests, so run it on a pull request's code
+  only in a throwaway environment with no credentials, or let CI run it.
 * State the operational facts the pull request template asks for: a link to the sender's signature documentation, whether
   the sender retries a failed delivery, the sweep that keeps it honest, and `expect_every_s`.
 * Destinations have a smaller path: a `script:` destination covers almost everything. See
@@ -71,7 +73,9 @@ hookspool source test <instance> --request hookspool/bobbins/<name>/captures/eve
 
 ## Pull requests
 
-* Keep a change to one thing. A new bobbin is one pull request: the bobbin directory, its tests and a line in `CHANGELOG.md`.
+* Keep a change to one thing. A new bobbin is one pull request: the bobbin directory and its tests. Leave `CHANGELOG.md`
+  and the bobbin catalogue alone; the maintainer adds the changelog line and regenerates the catalogue on merge. Any other
+  change gets a line in `CHANGELOG.md`.
 * Write the tests with the change. A bug fix starts with a test that fails.
 * Run `python -m pytest -q` and `ruff check .` and make them pass.
 * Update the docs the change touches. `tests/test_docs.py` fails when a command, an option or a config key in the code is

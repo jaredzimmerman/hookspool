@@ -132,11 +132,16 @@ def gmail_profile(client, base: str = GMAIL_API) -> dict:
 
 
 def gmail_history(client, start_history_id: str, *, base: str = GMAIL_API, label_id: str = "INBOX",
-                  max_pages: int = HISTORY_PAGES) -> tuple[list[str], str]:
+                  max_pages: int = HISTORY_PAGES, stats: dict | None = None) -> tuple[list[str], str]:
     """(ids of messages added to ``label_id`` since ``start_history_id`` in order, the newest history id).
-    Raises ``HistoryGone`` when Gmail no longer has the start id."""
+    Raises ``HistoryGone`` when Gmail no longer has the start id.
+
+    At most ``max_pages`` pages are read. When Gmail still had more, the newest id returned skips the rest of the
+    gap; ``stats``, when given, receives ``pages`` (read), ``records`` (history records read) and ``truncated``
+    (True in that case) so the caller can log it."""
     ids: list[str] = []
     page, newest = None, start_history_id
+    pages = records = 0
     for _ in range(max_pages):
         params = {"startHistoryId": start_history_id, "historyTypes": "messageAdded", "labelId": label_id,
                   "maxResults": 500}
@@ -148,7 +153,9 @@ def gmail_history(client, start_history_id: str, *, base: str = GMAIL_API, label
         if status is not None:
             raise h
         newest = h.get("historyId", newest)
+        pages += 1
         for rec in h.get("history") or []:
+            records += 1
             for a in rec.get("messagesAdded") or []:
                 mid = (a.get("message") or {}).get("id")
                 if mid and mid not in ids:
@@ -156,6 +163,8 @@ def gmail_history(client, start_history_id: str, *, base: str = GMAIL_API, label
         page = h.get("nextPageToken")
         if not page:
             break
+    if stats is not None:
+        stats.update(pages=pages, records=records, truncated=bool(page))
     return ids, newest
 
 

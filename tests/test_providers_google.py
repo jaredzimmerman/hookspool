@@ -114,8 +114,13 @@ def test_a_stale_history_id_is_history_gone_and_other_errors_pass_through():
 
 def test_history_pages_are_bounded():
     c = Stub(*[{"history": [], "nextPageToken": "more", "historyId": str(i)} for i in range(25)])
-    ids, newest = G.gmail_history(c, "1", max_pages=3)
+    stats: dict = {}
+    ids, newest = G.gmail_history(c, "1", max_pages=3, stats=stats)
     assert ids == [] and len(c.calls) == 3 and newest == "2"
+    assert stats == {"pages": 3, "records": 0, "truncated": True}
+    stats = {}
+    G.gmail_history(Stub({"history": [{}, {}], "historyId": "9"}), "1", stats=stats)
+    assert stats == {"pages": 1, "records": 2, "truncated": False}
 
 
 def test_a_message_that_is_gone_is_none_and_the_id_is_quoted():

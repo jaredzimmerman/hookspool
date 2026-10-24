@@ -4,10 +4,8 @@
 
 ## Kind of change
 
-- [ ] New source as a config template (`examples/sources/<name>.toml` + `tests/captures/<name>/`)
-- [ ] New source as a code plugin (`hookspool/sources/<name>.py` + `tests/test_sources_<name>.py`)
-- [ ] Change to an existing source
-- [ ] New or changed bobbin (`hookspool/bobbins/<name>/`)
+- [ ] New bobbin (`hookspool/bobbins/<name>/`, made with `hookspool bobbin new`)
+- [ ] Change to an existing bobbin
 - [ ] Core, destinations, deploy or docs
 
 ## New or changed bobbin
@@ -26,7 +24,7 @@ Only a person can answer these (see [docs/bobbins/review.md](../docs/bobbins/rev
 - [ ] The captures came from a real delivery and were redacted (test secrets, example.com addresses, no real ids or names)
 - [ ] I can maintain this bobbin, or accept it being removed if it breaks and nobody fixes it
 
-## For a new or changed source
+## The sender
 
 **The sender's signature documentation (link):** <!-- required: the page that describes the header, the algorithm and the
 timestamp rules you implemented -->
@@ -34,11 +32,13 @@ timestamp rules you implemented -->
 - Signature scheme and header: <!-- e.g. HMAC-SHA256 hex in X-Example-Signature -->
 - Does the sender retry on a non-2xx answer? <!-- yes / no / unknown; this sets `sender_retries` -->
 - Any handshake (URL validation, a HEAD or ping request)? <!-- describe, or "none" -->
+- The sweep, and `expect_every_s`: <!-- what reconciles a missed delivery, or why none is needed; 0 or a duration -->
 
 ## Checklist
 
-- [ ] The conformance kit passes for this source: `python .github/scripts/plugin_ci.py kit template:<name>` (or `code:<name>`)
+- [ ] The diff stays inside `hookspool/bobbins/<name>/` (and `tests/bobbins/test_<name>.py`); the scorecard says `bobbin-only`.
+      Leave the catalogue and `CHANGELOG.md` to the maintainer
 - [ ] Captures are signed with a test secret; no real secret, token, hostname, IP or chat id anywhere in the diff
-- [ ] Nothing about this source is added to the core (`hookspool/*.py`); the core guard passes
+- [ ] Nothing about this service is added to the core (`hookspool/*.py`); the core guard passes
 - [ ] `ruff check .` and `python -m pytest -q` pass
 - [ ] Docs updated if behaviour or a config key changed

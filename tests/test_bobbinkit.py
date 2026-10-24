@@ -600,6 +600,32 @@ def test_tests_green_red_and_network(tmp_path):
     assert c.result == "fail" and any("tried to reach the network" in m for m in messages(c)), (c.detail, messages(c))
 
 
+def test_tests_run_isolated_with_a_scrubbed_environment(tmp_path, monkeypatch):
+    """`bobbin check` runs on pull request code: its tests see PATH, LANG, TMPDIR and a throwaway HOME, never the
+    caller's tokens or HOOKSPOOL_* settings, and run under -I (no PYTHON* variables, no user site, no working
+    directory on sys.path)."""
+    monkeypatch.setenv("GH_TOKEN", "test-token-must-not-leak")
+    monkeypatch.setenv("HOOKSPOOL_SECRET_REFS", '{"x": {"file": "/nowhere"}}')
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "planted"))
+    monkeypatch.setenv("PYTHONINSPECT", "1")
+    d = copy(tmp_path, "kitcode")
+    write(d, "tests/test_kitcode_env.py", f"""import os
+import sys
+
+
+def test_scrubbed():
+    allowed = {{"PATH", "HOME", "LANG", "TMPDIR",
+               "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}}       # set by Python's locale coercion and by macOS
+    extra = {{k for k in os.environ if k not in allowed and not k.startswith("PYTEST_")}}
+    assert not extra, sorted(extra)
+    assert os.environ["HOME"] != {os.path.expanduser("~")!r}
+    assert sys.flags.isolated == 1 and sys.flags.ignore_environment == 1
+    assert {str(tmp_path / "planted")!r} not in sys.path
+""")
+    c = run(d, "tests")["tests"]
+    assert c.result == "pass" and "1 passed" in c.detail, (c.detail, messages(c))
+
+
 # ---- scope (advisory) ----------------------------------------------------------------------------------------------------
 def _git(root: str, *args: str) -> str:
     env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.test", "GIT_COMMITTER_NAME": "t",
@@ -627,6 +653,30 @@ def test_scope_bobbin_only_or_touches_core(tmp_path):
     assert card.ok and card.scope == "touches-core", "advisory: does not fail the card"
     strict = K.check_bobbin(d, only=["scope"], base=base, strict=True)
     assert not strict.ok and "advisory failing under --strict: scope" in strict.summary()
+
+
+def test_scope_a_new_bobbin_made_by_the_guide_is_bobbin_only(tmp_path):
+    """A new built-in bobbin as docs/bobbins/writing-a-bobbin.md makes it: the directory and its own test file.
+    The README catalogue and the changelog are not part of it, and touching them is a change outside the bobbin."""
+    root = str(tmp_path / "repo")
+    write(root, "README.md", "# repo\n")
+    write(root, "CHANGELOG.md", "# changes\n")
+    write(root, "hookspool/bobbins/__init__.py", "")
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "base")
+    base = _git(root, "rev-parse", "HEAD").strip()
+    d = os.path.join(root, "hookspool", "bobbins", "kitcode")
+    shutil.copytree(os.path.join(FIX, "kitcode"), d)
+    write(root, "tests/bobbins/test_kitcode.py", "def test_ok():\n    pass\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "a new bobbin")
+    c = run(d, "scope", base=base)["scope"]
+    assert c.result == "pass" and c.detail.startswith("bobbin-only"), c.detail
+    write(root, "docs/a page with spaces.md", "x\n")              # untracked; -z keeps the name whole
+    edit(root, "CHANGELOG.md", "# changes", "# changes\n- kitcode")
+    c = run(d, "scope", base=base)["scope"]
+    assert c.result == "fail" and sorted(f.file for f in c.findings) == ["CHANGELOG.md", "docs/a page with spaces.md"]
 
 
 # ---- the scorecard and the command --------------------------------------------------------------------------------------

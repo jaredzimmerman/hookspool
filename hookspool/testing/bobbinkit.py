@@ -1318,6 +1318,18 @@ def check_processor(b: Bobbin) -> Result:
 
 
 # ---- the bobbin's own tests -------------------------------------------------------------------------------
+def _tests_env(b: Bobbin) -> dict:
+    """The environment the bobbin's tests run in: the caller's ``PATH``, ``LANG`` and ``TMPDIR``, a throwaway
+    ``HOME``, and nothing else. A bobbin's tests are code from its author; run on a pull request they must not see
+    the reviewer's tokens, cloud credentials or ``HOOKSPOOL_*`` settings (the processor check scrubs its child the
+    same way)."""
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": tempfile.mkdtemp(prefix="home-", dir=b.work),
+           "LANG": os.environ.get("LANG") or "C.UTF-8"}
+    if os.environ.get("TMPDIR"):
+        env["TMPDIR"] = os.environ["TMPDIR"]
+    return env
+
+
 def own_tests(b: Bobbin) -> list[str]:
     out = []
     d = b.file("tests")
@@ -1336,14 +1348,15 @@ def check_tests(b: Bobbin) -> Result:
         where = f"{b.rel(b.file('tests'))}/" + (f" or tests/bobbins/test_{b.name.replace('-', '_')}.py" if b.builtin else "")
         return "skip", f"no tests of its own ({where})", []
     cwd = b.repo_root or b.dir
-    env = dict(os.environ)
-    env["PYTHONPATH"] = ROOT_PARENT + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    args = ["-q", "-p", "no:cacheprovider", "--no-header", "-p", "hookspool.testing.netblock", *paths]
+    # -I: no PYTHON* variable, no user site, no working directory on sys.path; the child finds hookspool only
+    # through the path this line puts first, and pytest finds the tests' own conftest as it always does
+    code = ("import sys; sys.path.insert(0, " + repr(ROOT_PARENT) + "); import pytest; "
+            "sys.exit(pytest.main(" + repr(args) + "))")
     t0 = time.monotonic()
     try:
-        p = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--no-header",
-                            "-p", "hookspool.testing.netblock", *paths], cwd=cwd, env=env, capture_output=True,
-                           text=True, timeout=TESTS_TIMEOUT_S)
+        p = subprocess.run([sys.executable, "-I", "-B", "-c", code], cwd=cwd, env=_tests_env(b),
+                           capture_output=True, text=True, timeout=TESTS_TIMEOUT_S)
         rc, out = p.returncode, p.stdout + p.stderr
     except subprocess.TimeoutExpired:
         rc, out = -1, f"timed out after {TESTS_TIMEOUT_S:.0f}s"
@@ -1361,15 +1374,25 @@ def check_tests(b: Bobbin) -> Result:
 
 # ---- scope (advisory) -------------------------------------------------------------------------------------
 def changed_files(root: str, base: str) -> list[str]:
+    """Every path added, copied, modified, renamed or deleted since the merge base with ``base``, plus uncommitted and
+    untracked ones git does not ignore. ``-z`` keeps a name with a space, a newline or a non-ASCII character whole."""
     def git(*args: str) -> list[str]:
         p = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
         if p.returncode != 0:
             raise RuntimeError(p.stderr.strip()[:200])
-        return [x for x in p.stdout.split("\n") if x]
-    names = set(git("diff", "--name-only", "--diff-filter=ACMRD", f"{base}...HEAD"))
-    names |= set(git("diff", "--name-only", "--diff-filter=ACMRD", "HEAD"))
-    names |= set(git("ls-files", "--others", "--exclude-standard"))
-    return sorted(n for n in names if not n.startswith((".ladder/", "deploy/local/")))
+        return [x for x in p.stdout.split("\0") if x]
+    names = set(git("diff", "-z", "--name-only", "--diff-filter=ACMRD", f"{base}...HEAD"))
+    names |= set(git("diff", "-z", "--name-only", "--diff-filter=ACMRD", "HEAD"))
+    names |= set(git("ls-files", "-z", "--others", "--exclude-standard"))
+    return sorted(names)
+
+
+def outside_bobbin(files: list[str], mine: str, own_test: str) -> list[str]:
+    """The changed files that make a change ``touches-core``: everything not under the bobbin's directory ``mine``
+    (``hookspool/bobbins/<name>/``) and not its own test file. README.md and CHANGELOG.md count too: the catalogue
+    is generated (``hookspool bobbin list --markdown``) and the changelog line is the maintainer's, so a bobbin's pull
+    request needs neither. ``.github/scripts/bobbin_label.py`` applies the same rule to GitHub's file list."""
+    return [f for f in files if not f.startswith(mine) and f != own_test]
 
 
 def check_scope(b: Bobbin) -> Result:
@@ -1383,7 +1406,7 @@ def check_scope(b: Bobbin) -> Result:
         return "skip", f"git: {e}", []
     mine = os.path.relpath(b.real, os.path.realpath(b.repo_root)).replace(os.sep, "/") + "/"
     own_test = f"tests/bobbins/test_{b.name.replace('-', '_')}.py"
-    outside = [f for f in files if not f.startswith(mine) and f != own_test]
+    outside = outside_bobbin(files, mine, own_test)
     if outside:
         return "fail", f"touches core: {len(outside)} file(s) outside {mine}", [Finding(f, 0, "changed outside the"
                                                                                        " bobbin") for f in outside[:50]]

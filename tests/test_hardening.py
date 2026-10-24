@@ -71,8 +71,11 @@ def test_the_github_bobbin_sets_its_event_header():
     import sourcekit
     assert sourcekit.bobbin_source_cfg("github")["event_header"] == "X-GitHub-Event"
     import tomllib
+    from hookspool import bobbin_loader
     with open(os.path.join(ROOT, "deploy/config.example.toml"), "rb") as f:
-        assert tomllib.load(f)["sources"]["github"]["event_header"] == "X-GitHub-Event"
+        example = tomllib.load(f)
+    assert "github" in example["bobbins"]                 # the example's GitHub is an instance of the bobbin
+    assert bobbin_loader.expand(C.merge(C.DEFAULTS, example))["sources"]["github"]["event_header"] == "X-GitHub-Event"
 
 
 # ---- lease grace ---------------------------------------------------------------------------------------

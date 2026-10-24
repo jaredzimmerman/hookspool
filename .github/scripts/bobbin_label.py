@@ -11,8 +11,13 @@ treats the artifact as untrusted data:
 * only known fields are read, every value is checked (bobbin names, check names, results, the scope), and
   every piece of text is shortened and escaped before it goes into the comment, so the comment cannot
   mention people, add links or break out of its table;
-* the labels are only ``bobbin-only`` (every changed bobbin touches nothing outside itself) and
-  ``touches-core`` (one does), one replacing the other;
+* the label is computed here, from GitHub's own list of the pull request's files
+  (``GET /repos/{repo}/pulls/{pr}/files``, every page), never from the artifact: the scorecards were made by
+  the pull request's code, which could say anything about its own scope. The rule is the kit's ``scope``
+  check: ``bobbin-only`` when every file is inside one ``hookspool/bobbins/<name>/`` or is that bobbin's
+  ``tests/bobbins/test_<name>.py``, else ``touches-core``. The scorecards' scope is only a cross-check: when
+  it disagrees, the label is ``touches-core`` and the comment says why;
+* the labels are only ``bobbin-only`` and ``touches-core``, one replacing the other;
 * one comment, found by its hidden marker, is created or updated, never a second one.
 
     python .github/scripts/bobbin_label.py --reports DIR --repo OWNER/NAME --head-sha SHA [--dry-run]
@@ -42,6 +47,10 @@ REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 MAX_TEXT = 300
 MAX_BOBBINS = 20
 MAX_CHECKS = 20
+FILES_PER_PAGE = 100
+MAX_FILE_PAGES = 30                           # GitHub lists at most 3000 files of a pull request
+BOBBIN_FILE_RE = re.compile(r"^hookspool/bobbins/([a-z][a-z0-9-]{0,39})/.")
+BOBBIN_TEST_RE = re.compile(r"^tests/bobbins/test_([a-z][a-z0-9_]{0,39})\.py$")
 
 Api = Callable[[str, str, Any], Any]          # (method, path, json body or None) -> parsed JSON
 
@@ -110,17 +119,69 @@ def validate(doc: Any) -> dict:
 
 
 def decide_label(cards: list[dict]) -> str | None:
+    """The scope the scorecards claim (only a cross-check: see ``scope_of_files``)."""
     scopes = [c["scope"] for c in cards]
     if not cards or any(s is None for s in scopes):
         return None
     return "touches-core" if "touches-core" in scopes else "bobbin-only"
 
 
-def comment_body(cards: list[dict], label: str | None, missing: list[str] = ()) -> str:
+def scope_of_files(files: list[str] | None) -> str:
+    """``bobbin-only`` when every path is inside one built-in bobbin directory, ``hookspool/bobbins/<name>/``, or is
+    that bobbin's own test file, ``tests/bobbins/test_<name>.py`` (``-`` in the name is ``_`` there); anything else,
+    an empty list or a list GitHub cut short (``None``) is ``touches-core``. The same rule as the kit's ``scope``
+    check, applied to GitHub's list instead of the checkout's."""
+    if not files:
+        return "touches-core"
+    names = set()
+    for f in files:
+        m = BOBBIN_FILE_RE.match(f) or BOBBIN_TEST_RE.match(f)
+        if not m:
+            return "touches-core"
+        names.add(m.group(1).replace("-", "_"))
+    return "bobbin-only" if len(names) == 1 else "touches-core"
+
+
+def pr_files(api: Api, repo: str, pr: int) -> list[str] | None:
+    """Every path the pull request adds, changes, renames (old and new name) or removes, from GitHub, all pages;
+    None when the list reaches GitHub's 3000-file limit, so it may be incomplete."""
+    out: list[str] = []
+    for page in range(1, MAX_FILE_PAGES + 1):
+        rows = api("GET", f"/repos/{repo}/pulls/{pr}/files?per_page={FILES_PER_PAGE}&page={page}", None)
+        if not isinstance(rows, list):
+            raise Refused("GitHub API: the pull request's file list is not a list")
+        for r in rows:
+            name = r.get("filename") if isinstance(r, dict) else None
+            if not isinstance(name, str) or not name:
+                raise Refused("GitHub API: a pull request file has no name")
+            out.append(name)
+            old = r.get("previous_filename")
+            if isinstance(old, str) and old:
+                out.append(old)
+        if len(rows) < FILES_PER_PAGE:
+            return out
+    return None
+
+
+def cross_check(github: str, claimed: str | None, complete: bool) -> tuple[str, str | None]:
+    """(the label, a note for the comment or None). GitHub's file list decides; a scorecard that claims another
+    scope, or no scope, turns the label into ``touches-core``."""
+    if not complete:
+        return "touches-core", ("GitHub lists only the first 3000 files of this pull request, so its scope cannot be"
+                                " confirmed: it is reviewed as a core change.")
+    if claimed == github:
+        return github, None
+    return "touches-core", (f"The scorecards say `{claimed or 'no scope'}` but GitHub's list of the changed files says"
+                            f" `{github}`, so the label is `touches-core`: review the whole diff as a core change.")
+
+
+def comment_body(cards: list[dict], label: str | None, missing: list[str] = (), note: str | None = None) -> str:
     lines = [MARKER, "## Bobbin scorecards", ""]
     if label:
         lines += [f"Label: `{label}`" + (" (every change is inside the bobbin)" if label == "bobbin-only" else
                                         " (files outside the bobbin changed: review those as core changes)"), ""]
+    if note:
+        lines += [note, ""]
     if missing:
         lines += [f"No scorecard for {', '.join(f'`{n}`' for n in missing)}: the check job stopped before writing"
                   " one (see its log). No label until every changed bobbin has a scorecard.", ""]
@@ -194,17 +255,21 @@ def clear(api: Api, repo: str, pr: int, head_sha: str, *, missing: list[str] = (
 
 def apply(api: Api, repo: str, pr: int, head_sha: str, cards: list[dict], *, missing: list[str] = (),
           dry_run: bool = False) -> dict:
-    """Verify the pull request, then set the label and the one comment. Returns what was done.
+    """Verify the pull request, then set the label (from GitHub's file list, cross-checked against the
+    scorecards) and the one comment. Returns what was done.
 
     ``missing`` names the bobbins meta.json says were checked but no scorecard arrived for (that
-    child died): the comment names them, and no label is set because their scope is unknown.
+    child died): the comment names them, and no label is set until the check runs to the end.
     """
     info = api("GET", f"/repos/{repo}/pulls/{pr}", None)
     if not isinstance(info, dict) or (info.get("head") or {}).get("sha") != head_sha:
         raise Refused("the artifact names a pull request whose head is not this run's commit")
-    label = None if missing else decide_label(cards)
-    body = comment_body(cards, label, missing)
-    done: dict[str, Any] = {"pr": pr, "label": label, "comment": None}
+    files = pr_files(api, repo, pr)
+    label, note = cross_check(scope_of_files(files), decide_label(cards), files is not None)
+    if missing:
+        label, note = None, None
+    body = comment_body(cards, label, missing, note)
+    done: dict[str, Any] = {"pr": pr, "label": label, "comment": None, "note": note}
     if dry_run:
         done["comment"] = "dry-run"
         return done

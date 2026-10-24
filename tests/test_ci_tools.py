@@ -85,8 +85,11 @@ def test_changed_files_since_the_base_commit_includes_uncommitted_and_new_files(
     commit(root, env, "hookspool/sources/alpha.py")
     write(root, "examples/sources/new.toml", "a = 1\n")             # untracked
     write(root, "README.md", "changed\n")                           # modified, uncommitted
-    write(root, ".ladder/notes.md", "ledger\n")                     # never scanned
-    assert P.changed_files(base) == ["README.md", "examples/sources/new.toml", "hookspool/sources/alpha.py"]
+    write(root, "docs/a b.md", "spaces\n")                         # untracked, a space in the name
+    write(root, ".gitignore", "ignored/\n")
+    write(root, "ignored/notes.md", "never listed\n")              # git ignores it, so it is never scanned
+    assert P.changed_files(base) == [".gitignore", "README.md", "docs/a b.md", "examples/sources/new.toml",
+                                     "hookspool/sources/alpha.py"]
     assert P.changed_files(None) == []
 
 
@@ -318,15 +321,15 @@ def test_scan_python_files_ignore_attribute_lookalikes():
     assert "hostname" in kinds("H = 'hooks.realcorp.com'", rel="hookspool/x.py")  # hookspool-scan: allow
 
 
-def test_scan_all_skips_ladder_unless_asked(repo):
+def test_scan_all_covers_every_tracked_and_untracked_file(repo):
     root, env = repo
-    write(root, ".ladder/RULES.md", "deployed at hooks.realcorp.com\n")       # hookspool-scan: allow
+    write(root, "notes/RULES.md", "deployed at hooks.realcorp.com\n")       # hookspool-scan: allow
     subprocess.run(["git", "-C", root, "add", "-A"], check=True, env=env, capture_output=True)
-    assert ".ladder/RULES.md" not in P.tracked_files()
-    assert ".ladder/RULES.md" in P.tracked_files(include_ladder=True)
+    write(root, "notes/new draft.md", "x\n")                                  # untracked, a space in the name
+    assert {"notes/RULES.md", "notes/new draft.md"} <= set(P.tracked_files())
     report = P.Report()
-    P.run_scan(report, P.tracked_files(include_ladder=True))
-    assert not report.ok and report.rows[0].subject == ".ladder/RULES.md:1"
+    P.run_scan(report, P.tracked_files())
+    assert not report.ok and report.rows[0].subject == "notes/RULES.md:1"
 
 
 def test_scan_reports_findings_with_file_and_line(repo):
@@ -397,7 +400,7 @@ def test_pull_request_template_asks_for_the_signature_docs_link():
     with open(os.path.join(ROOT, ".github", "pull_request_template.md"), encoding="utf-8") as f:
         text = f.read()
     assert "signature documentation (link)" in text
-    assert "plugin_ci.py kit" in text
+    assert "hookspool bobbin check" in text and "plugin_ci.py kit" not in text
     assert kinds(text, rel=".github/pull_request_template.md") == []
 
 

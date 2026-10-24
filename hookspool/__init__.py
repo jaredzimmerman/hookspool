@@ -2,7 +2,7 @@
 
     from hookspool.store import Store
     st = Store()
-    st.enqueue("gmail", "account-1", "script:gmail_delta", payload, dedup_id=message_id)
+    st.enqueue("gmail", "account-1", "script:gmail", payload, dedup_id=message_id)
 
 ``enqueue()`` commits to the SQLite spool before it returns; the dispatcher delivers
 the coalesced batch later and retries until it succeeds.
