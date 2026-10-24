@@ -10,6 +10,8 @@ The changes below will ship as 0.2.0.
 
 ### Added
 
+- A guide for moving a Hermes gateway's webhook routes behind hookspool with no sender or prompt changes
+  (`docs/getting-started/from-hermes-webhooks.md`), summarised in the README and as agent steps in `AGENTS.md`.
 - The `hookspool.webhook` bobbin: any web service that sends a signed or tokened JSON POST, configured entirely by settings
   (`[source] template = "settings"`; five schemes). One rule now maps a bobbin setting named after a template key to that
   key's value, for a fixed template (Trello's `callback_url`) and for `"settings"` alike; settings may be a `table`, and an

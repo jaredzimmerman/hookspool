@@ -153,6 +153,35 @@ You are helping a person run hookspool on a host or turn on a service. Look befo
 5. Verify with the steps in the bobbin's AGENTS.md, and with `hookspool status`, `hookspool list --source <instance>` and
    `hookspool issues`. [Verifying](docs/getting-started/verifying.md) says what healthy looks like.
 
+### Moving a Hermes setup to hookspool
+
+For senders posting to a Hermes gateway's routes, with no sender or prompt change: [guide](docs/getting-started/from-hermes-webhooks.md).
+
+**Needs from the human:** which routes to move (`hermes webhook list`), the gateway user's absolute path to its
+`webhook_subscriptions.json`, reverse proxy access, each sender's secret in a file owned by the service user (the person
+writes it), and a clear yes for step 5 (`outward`: it changes what the proxy forwards).
+
+Run `hookspool` as the service user ([Running](docs/operations/running.md)), never root (root reads files the service
+cannot). If a check fails, fix that step before the next.
+
+1. Set `[hermes] base_url` (the gateway's listener) and `subscriptions_path` (the gateway user's absolute path, not `~`).
+   **Check:** `sudo -u hookspool -- test -r <path>`; if it fails, make it readable or run the units as the gateway user.
+2. Per route, add `[bobbins.<instance>]` with the sender's bobbin, the secret file, `span = "immediate"` and
+   `outputs = { "*" = "hermes:<route>" }`, and a `[destinations."hermes:<route>"]` table with `unwrap = true`.
+   **Check:** `hookspool bobbin expand <instance>` shows the secret as a reference only.
+3. `hookspool check`, then `hookspool reload`. **Check:** `ok`; a route error means it is not in the file at that path.
+4. Send a signed test request to loopback `/hooks/<instance>`, as the guide shows (it reaches the real route: say so
+   first). **Check:** `hookspool list --source <instance>` shows it `delivered`.
+5. **Outward:** the person points the route's proxy location at `/hooks/<instance>`. **Check:** a real delivery appears
+   in `hookspool list --source <instance>`; if not, roll back at once.
+6. For a sender that does not retry (GitHub), install its redelivery sweep ([Sweeps](docs/operations/sweeps.md)). **Check:**
+   one `--dry-run` exits 0 and prints its summary line (exit 3: `gh` failed). Bodies over the source `max_body_bytes` now get 413 at the intake.
+
+**Rollback:** the person points the proxy location back at the gateway. Keep the instance and its destination table until
+`hookspool list --source <instance>` shows nothing open, sealed, leased or retry; only then remove them, then
+`hookspool check` and `hookspool reload` (earlier, leftover batches go out as batch documents to a route that still
+filters). Coalescing, tee routes and bridges come later; the guide gives the order for dropping `unwrap`.
+
 ### Day two
 
 - `hookspool status` is the one-screen health view; `hookspool list --state dead` finds stuck batches; `hookspool issues`
