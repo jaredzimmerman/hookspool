@@ -1,0 +1,40 @@
+name = "sec.edgar"
+version = "1"
+summary = "SEC EDGAR filings: new 8-K, Form 4 and other filings for the companies you follow (Atom feeds, polled)"
+
+[provider]
+vendor = "SEC"
+product = "EDGAR"
+homepage = "https://www.sec.gov/"
+api_docs = "https://www.sec.gov/about/rss-feeds"
+no_push_note = "EDGAR publishes RSS and Atom feeds only; there is no push."
+no_push_docs = "https://www.sec.gov/about/rss-feeds"
+
+[poll]
+every_s = 300
+module = "poller"
+timeout_s = 300
+state = true
+
+[settings.user_agent]
+description = "the User-Agent EDGAR requires, with contact information: a name and an email address you can be reached at"
+type = "string"
+required = true
+
+[settings.ciks]
+description = "the companies to follow: CIK numbers, with or without leading zeros (at most 100 companies and forms together make 200 feeds)"
+type = "list"
+required = true
+
+[settings.forms]
+description = "the form types to follow; EDGAR matches by prefix, so 4 also brings 4/A"
+type = "list"
+default = ["8-K", "4"]
+
+[settings.backfill]
+description = "how many of the newest filings in each feed to send the first time a feed is seen (0 = none: start from now)"
+type = "int"
+default = 0
+
+[outputs.filing]
+description = "a new filing for a followed company: cik, company, form, accession, filed, title, link"

@@ -547,11 +547,12 @@ SECRET_PATTERNS = _scan.SECRET_PATTERNS          # one set of patterns for this 
 HOST_OK_SUFFIX = (".example", ".test", ".invalid", ".localhost", ".example.com", ".example.org", ".example.net",
                   "googleapis.com", "google.com", "github.com", "githubusercontent.com", "zoom.us", "plaid.com",
                   "atlassian.com", "trello.com", ".cloudflare.com", "finnhub.io", "kaneo.app", "standardwebhooks.com",
-                  "free.law", "courtlistener.com", "python.org", "pypi.org",
+                  "free.law", "courtlistener.com", "sec.gov", "python.org", "pypi.org",
                   "readthedocs.io", "shields.io", "mermaid.js.org",
                   "jaredzimmerman.github.io",                       # this project's documentation site
                   "contributor-covenant.org",                       # CODE_OF_CONDUCT.md's source and FAQ
-                  "w3.org", "hairline.lucasmarkes.com")      # the SVG namespace, and the style the banners follow
+                  "w3.org", "purl.org",                      # XML namespace names (SVG, RSS 1.0), not hosts that are contacted
+                  "hairline.lucasmarkes.com")      # the style the banners follow
 HOST_OK_EXACT = {"localhost", "example.com", "example.org", "example.net", "127.0.0.1", "0.0.0.0", "[::1]"}
 URL_RE = re.compile(r"""\b(?:https?|wss?)://(?:[^/\s'"<>@]*@)?(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)""")
 # A bare host name (``server_name hooks.example.com;``, a path under /etc/nginx/sites-available/): labels, then a

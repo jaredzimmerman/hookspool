@@ -1,0 +1,39 @@
+name = "google.contacts"
+version = "1"
+summary = "Google Contacts (People API), polled with a sync token because the API has no push: which contacts changed or were deleted, by resource name only"
+
+[provider]
+vendor = "Google"
+product = "Contacts"
+homepage = "https://contacts.google.com"
+api_docs = "https://developers.google.com/people/api/rest/v1/people.connections/list"
+no_push_note = "The People API has no watch method; incremental sync uses a sync token."
+no_push_docs = "https://developers.google.com/people/api/rest"
+
+[poll]
+every_s = 900
+module = "poller"
+timeout_s = 120
+state = true
+
+[secrets.cred]
+description = "OAuth credential JSON (client_id, client_secret, refresh_token, token_uri) with the contacts.readonly scope (and contacts.other.readonly when include_other_contacts is on)"
+processor = true
+
+[settings.page_size]
+description = "contacts read per request, 1 to 1000; a stored sync token keeps the page size it was issued with until the next full read"
+type = "int"
+default = 1000
+
+[settings.include_other_contacts]
+description = "also follow 'Other contacts' (people the account has only emailed), with a sync token of its own; needs the contacts.other.readonly scope"
+type = "bool"
+default = false
+
+[settings.api_url]
+description = "People API base URL (change only to use a test server)"
+type = "string"
+default = "https://people.googleapis.com/v1/"
+
+[outputs.contacts-changed]
+description = "contacts were added, edited or deleted since the last poll; carries resource names and counts only, never a name, address or number; past 2000 names it carries the count and no names (truncated)"

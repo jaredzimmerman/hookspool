@@ -25,8 +25,14 @@ module is your code, not the bobbin's.
 ```toml
 [bobbins.gmail]
 bobbin = "google.gmail"
-settings = { owner = "owner@example.com", hooks = "/etc/hookspool/hooks/gmail_hooks.py" }
+
+[bobbins.gmail.settings]
+owner = "owner@example.com"
+hooks = "/etc/hookspool/hooks/gmail_hooks.py"
 ```
+
+Write `settings` as a table of its own, as here. An inline `settings = { ... }` cannot be added to later, so the
+`rule_packs` and `[[bobbins.gmail.settings.rules]]` lines of [Mail rules](mail-rules.md) would then not parse.
 
 ## 3. A private bobbin
 

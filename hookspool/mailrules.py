@@ -96,7 +96,7 @@ def parse_rule(raw, where: str, prefix: str = "") -> Rule:
             raise ValueError(f"{where}: subject_regex must be a string")
         try:
             subject_regex = re.compile(rx, re.I)
-        except re.error:
+        except (re.error, OverflowError, RecursionError):      # a huge repeat count raises OverflowError, not re.error
             raise ValueError(f"{where}: subject_regex is not a valid regular expression") from None
     if not (senders or subject_any or subject_regex):
         raise ValueError(f"{where}: needs from, subject_any or subject_regex")
@@ -112,7 +112,7 @@ def parse_rule(raw, where: str, prefix: str = "") -> Rule:
             raise ValueError(f"{where}: extract.{key} must be a regular expression")
         try:
             c = re.compile(pat, re.I)
-        except re.error:
+        except (re.error, OverflowError, RecursionError):
             raise ValueError(f"{where}: extract.{key} is not a valid regular expression") from None
         if c.groups != 1:
             raise ValueError(f"{where}: extract.{key} must have exactly one capture group")
@@ -223,7 +223,8 @@ def _sender_hit(address: str, entries: tuple[str, ...]) -> bool:
     return False
 
 
-_QUOTED = re.compile(r'"[^"\n]*(?:"|$)|\u201c[^\u201d\n]*(?:\u201d|$)|\u00ab[^\u00bb\n]*(?:\u00bb|$)')
+# A straight quote straight after a digit is an inch mark (24" monitor), not the start of a quoted span.
+_QUOTED = re.compile(r'(?<!\d)"[^"\n]*(?:"|$)|\u201c[^\u201d\n]*(?:\u201d|$)|\u00ab[^\u00bb\n]*(?:\u00bb|$)')
 
 
 def _unquoted(subject: str) -> str:

@@ -22,6 +22,28 @@ an interface, and the entry will say so.
 - `hookspool bobbin new <vendor>.<product> --poll` scaffolds a poll bobbin. The conformance kit runs `poller.py` once per
   `captures/poll-*.json` (stub API answers), and its `provider` row asks a poll bobbin for `api_docs`, `no_push_note` and
   `no_push_docs` in place of `webhook_docs` and `signature_docs`; the documents' frontmatter carries `api_docs`.
+- The `google.tasks` bobbin (`hookspool/bobbins/google/tasks/`), the first poll bobbin: Google Tasks has no watch or push
+  method, so the dispatcher ticks every `every_s` seconds (300 by default) and `poller.py` reads each followed list with
+  `tasks.list` and `updatedMin` (completed, hidden and deleted tasks included, with a 60-second overlap so a late-visible write is not lost). The first pass, and any list added later,
+  only records where the list stands. `task-changed` carries the list id, task id, status, update time, due date and
+  whether the task was deleted (the title only with `include_titles`), and `tasks-synced` summarises a pass that found
+  changes. The settings are `tasklists` (ids or titles; empty follows all), `include_titles` and `api_url`; the secret is
+  an OAuth credential with the `tasks.readonly` scope.
+- `hookspool.providers.google`: `tasks_lists`, `tasks_changes` and `TasklistGone` for the Tasks API v1.
+- The `sec.edgar` bobbin (`hookspool/bobbins/sec/edgar/`): new SEC filings for the companies you follow, a poll bobbin
+  over EDGAR's per-company Atom feeds (EDGAR has no push). One conditional GET per company and form (`ETag` and
+  `Last-Modified` saved per feed), new filings found by accession number, the first pass of a feed silent unless
+  `backfill` asks for the newest few, one `filing` item per new filing (`cik`, `company`, `form`, `accession`, `filed`,
+  `title`, `link`). EDGAR's fair-access rules are kept: `user_agent` is required (a name and an email address) and the
+  poller refuses to run without one, and requests are paced at 5 a second.
+- `hookspool.feeds`: `parse_feed` turns an Atom 1.0, RSS 2.0 or RSS 1.0 document into dicts for any poller, and refuses
+  a document type or entity declaration (no entity expansion, no external entity), with size, depth and entry caps.
+  `parse_time` reads RFC 3339 and RFC 822 dates.
+- `ctx.pace(per_s)`: a `Pacer` whose `wait()` spaces a poller's requests under a provider's rate limit. The sleep is
+  core's, since a bobbin never sleeps. `ctx.http.get_text` also decodes a body by the `encoding` of its XML declaration
+  when the response names no charset.
+- The wheel carries `captures/poll-*.json` (a poll bobbin's stub answers), and the hostname scan accepts `sec.gov` and the
+  `purl.org` namespace name.
 - The `google.meet` bobbin (`hookspool/bobbins/google/meet/`): Google Meet events from a Google Workspace Events
   subscription on a user, delivered through a Cloud Pub/Sub push with the token in the URL. The source keys each
   CloudEvent by its conference record and dedups on `ce-id`. The processor returns `meeting-started` for the first
@@ -54,6 +76,16 @@ an interface, and the entry will say so.
   a fixed `url-token` template checks a secret token in the endpoint URL; `Idempotency-Key` is the dedup header and the
   event type (`webhook.event_type`) is the batch key. README.md states that webhooks are agreement-based for
   organizations and that alerts count against the membership allowance.
+- The `google.contacts` bobbin (`hookspool/bobbins/google/contacts/`), a poll bobbin (14.4) for Google Contacts, whose
+  People API has no push. Every 900 seconds it reads `people.connections.list` with a sync token (and `otherContacts.list`
+  with a token of its own when `include_other_contacts` is on) and emits `contacts-changed` with `changed` and `deleted`
+  resource names, `full_resync` and `total_changed`, and nothing else. The request asks for `metadata` only, so no name,
+  address or number reaches hookspool. The first pass stores the token and emits nothing. An expired token (HTTP 410)
+  makes one full read and sets `full_resync`. A stored token keeps the page size it was issued with. An item names at
+  most 2000 contacts; a pass with more (a weekly full read of a large book, a bulk import) sends empty lists, `truncated`
+  true and the real `total_changed`, so it cannot outgrow the processor's 1 MiB stdout cap and kill the tick.
+- `hookspool.providers.google.people_changes`: the People API sync-token listing, shared by anything that polls contacts.
+- The wheel now carries `captures/poll-*.json`, the stub API answers of a poll bobbin's conformance captures.
 
 ## [0.2.0] - 2026-10-23
 

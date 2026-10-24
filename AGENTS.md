@@ -23,7 +23,7 @@ Each built-in bobbin also has its own `AGENTS.md` with the setup steps for that 
 | `hookspool/intake.py`, `hookspool/dispatch.py` | the two processes: the HTTP intake, and the single deliverer |
 | `hookspool/store.py`, `hookspool/migrations/` | the SQLite spool and its schema |
 | `hookspool/config.py`, `hookspool/bobbin_loader.py` | config parsing and checks; bobbin discovery and expansion into ordinary tables |
-| `hookspool/verify.py`, `hookspool/plugin.py`, `hookspool/net.py` | signature checks; the source plugin API; outbound HTTP, OAuth and secret access |
+| `hookspool/verify.py`, `hookspool/plugin.py`, `hookspool/net.py`, `hookspool/feeds.py` | signature checks; the source plugin API; outbound HTTP, OAuth, secret access and request pacing; Atom and RSS parsing |
 | `hookspool/processor.py`, `hookspool/breaker.py`, `hookspool/logs.py` | the bobbin processor runtime; the circuit breaker; structured logs |
 | `hookspool/bobbins/<vendor>/<product>/` | one built-in bobbin per directory (manifest, captures, README, SETUP.md, AGENTS.md) |
 | `hookspool/providers/`, `hookspool/mailrules.py` | code shared by several bobbins, written once on core APIs: one provider's helpers; mail rules and rule packs |

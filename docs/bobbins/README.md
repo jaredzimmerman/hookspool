@@ -25,12 +25,15 @@ same directory is the step-by-step setup for a person, and `AGENTS.md` is the sa
 | [`finnhub.earnings`](../../hookspool/bobbins/finnhub/earnings/README.md) | Finnhub earnings webhook: an announcement per watched symbol, verified by a shared secret header |
 | [`github.repo`](../../hookspool/bobbins/github/repo/README.md) | GitHub repository webhook: HMAC-SHA256 over the raw body; pings are acknowledged and not enqueued |
 | [`google.calendar`](../../hookspool/bobbins/google/calendar/README.md) | Google Calendar push (watch channel): conflicts, meeting-brief requests and a change notice for one calendar |
+| [`google.contacts`](../../hookspool/bobbins/google/contacts/README.md) | Google Contacts (People API), polled with a sync token because the API has no push: which contacts changed or were deleted, by resource name only |
 | [`google.drive`](../../hookspool/bobbins/google/drive/README.md) | Google Drive push (watch channel): file changes, new files and files shared with the account, by id, never by content |
 | [`google.gmail`](../../hookspool/bobbins/google/gmail/README.md) | Gmail push (Cloud Pub/Sub): new mail in the owner's and an optional assistant's mailbox, read from Gmail's history |
 | [`google.meet`](../../hookspool/bobbins/google/meet/README.md) | Google Meet events (Workspace Events API over Cloud Pub/Sub): a call started, and who attended once it ended |
+| [`google.tasks`](../../hookspool/bobbins/google/tasks/README.md) | Google Tasks (polled; the API has no push): tasks added, edited, completed or deleted, by id, never by content |
 | [`hookspool.webhook`](../../hookspool/bobbins/hookspool/webhook/README.md) | Any web service that sends a signed or tokened JSON POST: the template source, configured entirely by settings |
 | [`kaneo.projects`](../../hookspool/bobbins/kaneo/projects/README.md) | Kaneo generic webhook: project and task events, HMAC-SHA256 of the JSON body in X-Kaneo-Signature |
 | [`plaid.items`](../../hookspool/bobbins/plaid/items/README.md) | Plaid webhooks: items, transactions and link events, signed with an ES256 JWT checked against Plaid's published keys |
+| [`sec.edgar`](../../hookspool/bobbins/sec/edgar/README.md) | SEC EDGAR filings: new 8-K, Form 4 and other filings for the companies you follow (Atom feeds, polled) |
 | [`zoom.meetings`](../../hookspool/bobbins/zoom/meetings/README.md) | Zoom event subscriptions: meeting and webinar events, signed with a timestamped HMAC, and the endpoint URL validation |
 <!-- end of generated table -->
 
