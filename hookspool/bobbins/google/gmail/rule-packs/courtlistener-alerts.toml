@@ -1,6 +1,7 @@
 # CourtListener email alerts (patterns written from the provider's published email conventions; not yet checked against real mail).
 # Docket alerts report new entries in a followed case; search alerts report new results of a saved search.
-# Every rule needs order or reservation context in the subject (a bare word such as 'updated' or 'booking' is not enough),
+# Only the alert service's own domain is listed: the parent organisation's domain also sends newsletters and appeals.
+# Every rule needs alert context in the subject (a bare word such as 'updated' is not enough),
 # and skip_subject vetoes policy, marketing, account and review-request subjects (whole words, outside double-quoted
 # text). Nothing is vetoed on the body, so a feedback or recommendations footer does not hide a real order. A rule of
 # a built-in pack never claims mail Gmail filed as promotions, social or forums.
@@ -12,7 +13,7 @@ description = "CourtListener alert mail: docket alerts (new filings in a followe
 [[rules]]
 name = "docket-alert"
 kind = "alert"
-from = ["courtlistener.com", "free.law"]  # hookspool-scan: allow: the service's own sender domains
+from = ["courtlistener.com"]  # hookspool-scan: allow: the service's own sender domains
 subject_regex = '\bnew (?:docket )?(?:filings?|entr(?:y|ies))\b|\bdocket (?:alert|activity|update)\b'
 skip_subject = ["newsletter", "survey", "welcome to", "verify your", "confirm your email", "email confirmation", "alert has been created", "alert was created", "has been disabled", "unsubscribe confirmation", "updated our", "we've updated", "donate", "donation", "fundraiser"]
 [rules.extract]
@@ -23,7 +24,7 @@ court = '\bcourt[:\s]+([^\n]{3,80})'
 [[rules]]
 name = "search-alert"
 kind = "alert"
-from = ["courtlistener.com", "free.law"]  # hookspool-scan: allow: the service's own sender domains
+from = ["courtlistener.com"]  # hookspool-scan: allow: the service's own sender domains
 subject_regex = '\bnew (?:results?|hits?|matches)\b|\b\d+ (?:new )?(?:results?|hits?|matches)\b'
 skip_subject = ["newsletter", "survey", "welcome to", "verify your", "confirm your email", "email confirmation", "alert has been created", "alert was created", "has been disabled", "unsubscribe confirmation", "updated our", "we've updated", "donate", "donation", "fundraiser"]
 [rules.extract]

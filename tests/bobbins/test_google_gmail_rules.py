@@ -90,6 +90,22 @@ def test_double_quoted_text_in_the_subject_never_vetoes():
     assert first(r, "x@example.test", 'Sale: everything shipped "free"') is None         # outside the quotes it still vetoes
 
 
+def test_an_inch_mark_is_not_a_quote():
+    r = [rule(subject_any=["shipped"], skip_subject=["sale"])]
+    assert first(r, "x@example.test", 'Sale: shipped 24" monitor') is None             # the inch mark does not open a quote
+    assert first(r, "x@example.test", 'Shipped: 24" monitor, "sale" edition')           # a real quote still shields its text
+    assert first(r, "x@example.test", 'Shipped: 24" sale monitor') is None
+
+
+@pytest.mark.parametrize("field", ["subject_regex", "extract"])
+def test_an_overflowing_pattern_is_a_config_error_not_a_crash(field):
+    bad = "(a){99999999999}"
+    raw = {"name": "r", "subject_any": ["x"]}
+    raw.update({"subject_regex": bad} if field == "subject_regex" else {"extract": {"k": bad}})
+    with pytest.raises(ValueError):
+        MR.parse_rule(raw, "rules")
+
+
 def test_a_rule_pack_entry_that_is_not_a_name_is_a_config_error():
     for bad in ([{"name": "amazon-orders"}], [["amazon-orders"]], [3]):
         with pytest.raises(ValueError, match="pack name"):
@@ -249,6 +265,9 @@ for _p in ("resy-reservations", "opentable-reservations", "tock-reservations", "
                 "Our reservation policy has changed", "Tickets and gift cards on sale", "Take our survey about your booking",
                 "Reminder: your dining points and upcoming reservation perks", "Your reservation rewards are waiting",
                 "How was your reservation at Corner Bistro?", "Leave a review of your reservation at Corner Bistro"]
+for _p in ("resy-reservations", "opentable-reservations", "tock-reservations", "sevenrooms-reservations"):
+    JUNK[_p] += ["Your reservation at Oak Tavern: exclusive deals inside", "Your reservation at Oak Tavern is confirmed: earn rewards points",
+                 "Your reservation at Oak Tavern is confirmed. Join our membership program"]
 JUNK["opentable-reservations"] = JUNK["opentable-reservations"] + [
     "Reminder: your OpenTable points and upcoming reservation perks"]
 SENDER = {"amazon-orders": "store-news@amazon.com", "doordash-orders": DD, "courtlistener-alerts": CL, **RES}  # hookspool-scan: allow: the service's own sender domain
@@ -290,9 +309,21 @@ NAMED = [
     ("courtlistener-alerts", CL, "New hits for your search alert: privacy policy disputes", "search-alert"),
     ("courtlistener-alerts", CL, 'New filing for Deal v. Sale (1:23-cv-04567)', "docket-alert"),
 ]
+NAMED += [
+    ("doordash-orders", DD, "Your order from Deals Deli is confirmed", "receipt"),
+    ("doordash-orders", DD, "Your order from Deals Deli is on its way", "status"),
+    ("doordash-orders", DD, "Your order from Perks Cafe was delivered", "status"),
+    ("doordash-orders", DD, "Your order from Rewards Noodles was canceled", "cancelled"),
+    ("amazon-orders", AMZ, "Your Amazon.com order of Rewards Card Holder has shipped!", "shipped"),  # hookspool-scan: allow: the service's own brand name in a subject
+    ("amazon-orders", AMZ, "Shipped: Deals Binder", "shipped"),
+    ("amazon-orders", AMZ, "Delivered: Membership Card Case", "delivered"),
+    ("amazon-orders", AMZ, "Delivered: Perks Planner", "delivered"),
+]
 for _pack, _frm in RES.items():
-    for _place in ("Ideal Bistro", "Casale", "Rosales", "Five Points Grill", "Offerman House"):
+    for _place in ("Ideal Bistro", "Casale", "Rosales", "Five Points Grill", "Offerman House", "Perks Tavern",
+                   "Rewards Room", "Membership Club", "Guarantee Grill"):
         NAMED.append((_pack, _frm, f"Your reservation at {_place} is confirmed", "confirmation"))
+    NAMED.append((_pack, _frm, "Your reservation at Deals Deli has been canceled", "cancellation"))
 
 
 @pytest.mark.parametrize("pack,frm,subject,name", NAMED)
@@ -532,3 +563,41 @@ def test_bobbin_show_lists_the_rule_packs(capsys, tmp_path):
     for p in ALL_PACKS:
         assert p in out
     assert "[unverified]" in out
+
+
+# ---- shapes added after the first review (synthetic) ---------------------------------------------------------------
+@pytest.mark.parametrize("subject", [
+    'Your Amazon.com order of "' + "Widget, blue, assorted sizes " * 4 + '" has shipped!',  # hookspool-scan: allow: the service's own brand name in a subject
+    "Your Amazon.com order of Widget has shipped!",  # hookspool-scan: allow: the service's own brand name in a subject
+    "Your Amazon.com order of Rewards Card Holder has shipped!",  # hookspool-scan: allow: the service's own brand name in a subject
+])
+def test_amazon_shipped_mail_in_the_classic_shape(subject):
+    m = first(MR.compile_rules([], ["amazon-orders"], PACKS), AMZ, subject, "Order # 123-4567890-1234567")
+    assert m is not None and m[0].name == "amazon-orders.shipped"
+
+
+# Other-language storefront subjects are held back until they are measured on real mail: the pack claims none of them,
+# whether they are real shipping notices, their negation or a promotion that contains the same words.
+@pytest.mark.parametrize("subject", [
+    "Versandbest\u00e4tigung f\u00fcr Ihre Bestellung", "Ihre Bestellung wurde versandt", "Ihre Bestellung wurde nicht versandt",
+    "Rabatt: Ihre Bestellung jetzt versandkostenfrei versandt", "Votre commande a \u00e9t\u00e9 exp\u00e9di\u00e9e",
+    "Votre commande n'a pas \u00e9t\u00e9 exp\u00e9di\u00e9e", "Tu pedido ha sido enviado", "Tu pedido no ha sido enviado",
+    "Oferta: tu pedido con env\u00edo gratis, ya enviado", "Il tuo ordine \u00e8 stato spedito", "Il tuo ordine non \u00e8 stato spedito",
+])
+def test_amazon_pack_claims_no_other_language_subject_yet(subject):
+    assert first(MR.compile_rules([], ["amazon-orders"], PACKS), AMZ, subject, "Order # 123-4567890-1234567") is None
+
+
+@pytest.mark.parametrize("subject", [
+    "Your order has not shipped", "Your order hasn't shipped yet", "Your order hasn\u2019t shipped yet",
+    "Your package could not be delivered", "Your package was not delivered", "Your order has not been delivered",
+    "Your package couldn't be delivered",
+])
+def test_amazon_negated_shipping_and_delivery_subjects_are_not_claimed(subject):
+    assert first(MR.compile_rules([], ["amazon-orders"], PACKS), AMZ, subject, "Order # 123-4567890-1234567") is None
+
+
+def test_courtlistener_alerts_ignore_the_parent_organisations_domain():
+    rules = MR.compile_rules([], ["courtlistener-alerts"], PACKS)
+    assert first(rules, CL, "New filings in a followed case")
+    assert first(rules, "news@free.law", "New filings and new results this month") is None  # hookspool-scan: allow: the service's parent domain
