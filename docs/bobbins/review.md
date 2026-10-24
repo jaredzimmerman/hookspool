@@ -17,6 +17,12 @@ result, and each problem as `file:line` with a line on how to fix it. It exits 0
 `--strict` makes the advisory check fail the run too. It needs no config and reads no real secret: every secret is a test
 value from the bobbin's `captures/kit.toml` (or the default `test-secret-bobbin`).
 
+`bobbin check` runs the bobbin's code: it imports the source, starts the processor and runs the bobbin's tests. The
+processor and the tests run in child processes under `python -I` that see only `PATH`, `LANG`, `TMPDIR` and a throwaway
+`HOME`, not your tokens or `HOOKSPOOL_*` settings; the source runs in the command's own process. So a maintainer runs
+`bobbin check` on a pull request's code only in a throwaway environment (a container or a fresh VM with no
+credentials), or leaves it to CI, which runs it with a read-only token and no secrets.
+
 CI runs exactly this command, through `.github/scripts/plugin_ci.py bobbins`, on every bobbin a pull request adds or
 changes. There is no check that only CI knows about.
 
@@ -37,7 +43,7 @@ same things locally before you push (see [Contributing](../../CONTRIBUTING.md)).
 | `source-kit` | with each accepted capture, the source passes the shared source kit: signed, unsigned, tampered, stale and future timestamps, oversized, chunked, duplicate, the handshakes, quarantine, spool failures, and nothing secret in the spool or the logs |
 | `processor` | each capture's payload goes through the real processor runtime with stub HTTP and the network blocked, loopback included (any real socket fails the check; only Unix sockets stay): only declared outputs come back, a second run of the same batch replays the journal, nothing but emits reaches stdout, a failure exits 75 and a permanent one 65 |
 | `tests` | the bobbin's own tests (`hookspool/bobbins/<name>/tests/` or `tests/bobbins/test_<name>.py`) pass with the network blocked; loopback is allowed here so a test may run a local stub server |
-| `scope` (advisory) | `bobbin-only` when every changed file is inside the bobbin (or its test file); `touches-core` lists the others. Changed means added, copied, modified or renamed: a pull request that only deletes files runs no bobbin check and gets no label, so review a deletion by hand (the built-in bobbins are re-checked by `tests/test_services_conformance.py` in the main test job) |
+| `scope` (advisory) | `bobbin-only` when every changed file is inside the bobbin (or its test file); `touches-core` lists the others, `README.md` and `CHANGELOG.md` included (a bobbin's pull request needs neither: the catalogue is generated and the changelog line is the maintainer's). Changed means added, copied, modified or renamed: a pull request that only deletes files runs no bobbin check and gets no label, so review a deletion by hand (the built-in bobbins are re-checked by `tests/test_services_conformance.py` in the main test job) |
 
 ## What a maintainer still checks by hand
 
@@ -58,8 +64,17 @@ These need a person, and the pull request template asks the contributor for each
 ## The labels and the comment
 
 A separate workflow (`bobbin-label.yml`) reads the scorecards the pull request's run uploaded, checks that the pull request
-they name is the one the run was for, labels it `bobbin-only` or `touches-core`, and keeps one comment with the scorecards
-up to date. It never runs the pull request's code, so it is safe for pull requests from forks.
+they name is the one the run was for, and keeps one comment with the scorecards up to date. It never runs the pull
+request's code, so it is safe for pull requests from forks.
+
+The label does not come from the scorecards, because the pull request's own code wrote them. The workflow asks GitHub for
+the pull request's list of files and applies the `scope` rule to it: `bobbin-only` when every file is inside one
+`hookspool/bobbins/<name>/` or is that bobbin's `tests/bobbins/test_<name>.py`, otherwise `touches-core`. The
+scorecards' scope is a cross-check. When the two disagree, the label is `touches-core` and the comment says so; read the
+whole diff as a core change.
+
+When the bobbin is merged, the maintainer regenerates the catalogue in `docs/bobbins/README.md` with
+`hookspool bobbin list --markdown` and adds the `CHANGELOG.md` line.
 
 ## Test values: `captures/kit.toml`
 

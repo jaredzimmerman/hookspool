@@ -99,8 +99,8 @@ Under the instance's state directory (default `<home>/services/<instance>/`): `g
 `{syncToken, last_seen, bootstrapped}`, and with briefs on, `briefs_requested.json` (written here) and
 `briefs_published.json` (written by whatever publishes the briefs; this bobbin only reads it). The runtime
 writes state only after its journal holds the result: a retried batch reports the same items and advances the
-sync token once. The old script's log and action files (`gcal_push.log`, `push_actions.jsonl`) are not
-written: the processor logs counts to its standard error, which the dispatcher keeps with the attempt.
+sync token once. The processor writes no log or action file of its own: it logs counts to its standard error,
+which the dispatcher keeps with the attempt.
 
 ## Limits
 
@@ -109,11 +109,13 @@ written: the processor logs counts to its standard error, which the dispatcher k
   `expect = true` so silence opens an issue.
 * Errors map as everywhere: 408, 425, 429 and 5xx retry the batch (exit 75); another 4xx is permanent
   (exit 65, dead-lettered).
+* Travel blocks are the exception. An error while creating one, a 429 or 503 included, goes into `actions_text`
+  and the log; one while removing a stale block goes into the log only. Either way the pass still stores the new
+  sync token, so that block is not tried again until its event changes. Retrying it safely needs a stable event
+  id for the block, which is planned.
 * Logs carry counts only, never titles or addresses.
 
-## Replaces the delta script
+## Moving from 0.1
 
-`GCAL_DELTA_CRED` -> secret `cred`; `GCAL_DELTA_TZ` -> `tz`; `GCAL_DELTA_OWN` -> `own`;
-`GCAL_DELTA_BRIEF_DIR` -> `brief_dir`; `GCAL_DELTA_API` -> `api_url`; `GCAL_DELTA_SYNC_SH` -> the `changed`
-output; `GCAL_DELTA_SKILL_DIR` and `GCAL_DELTA_TRAVEL_PY` -> `hooks.travel`. The old state files keep their
-names, so pointing `state_dir` at the old directory keeps the sync token.
+This bobbin replaces the 0.1 delta script. [Upgrading to 0.2](../../../docs/operations/upgrading.md#upgrading-to-02-bobbins)
+maps each of its variables to a setting and keeps the sync token by pointing `state_dir` at the old directory.

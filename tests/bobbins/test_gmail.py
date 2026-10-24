@@ -192,6 +192,29 @@ def test_history_is_read_across_pages(make, google):
     assert gstate(rig)["historyId"] == "125" and gstate(rig)["handled"] == ["a", "b"]
 
 
+def test_a_gap_longer_than_the_page_cap_is_logged_with_its_size(make, google):
+    rig = make()
+    gseed(rig)
+    google.history = [dict(hist(f"m{i}", history_id=str(200 + i)), nextPageToken=f"p{i + 1}") for i in range(25)]
+    for i in range(25):
+        google.messages[f"m{i}"] = gmsg(f"m{i}", subject="Hello", text="hi")
+    rc, _emits, err = rig.run(gpush())
+    assert rc == 0 and "history owner: stopped at 20 pages (20 records); the rest of the gap is skipped" in err
+    assert gstate(rig)["historyId"] == "219" and OWNER not in err
+    google.history = [hist("m30", history_id="300")]
+    google.messages["m30"] = gmsg("m30", subject="Hello", text="hi")
+    rc, _emits, err = rig.run(gpush(), bid="2")
+    assert rc == 0 and "stopped at" not in err
+
+
+def test_the_agent_mailbox_may_not_be_the_owners(make, google):
+    rig = make(owner=AGENT.upper())                  # the agent defaults to AGENT: one mailbox under two roles
+    gseed(rig, AGENT)
+    rc, emits, err = rig.run(gpush(AGENT))
+    assert rc == 65 and "the agent setting names the owner's mailbox" in err and emits == []
+    assert google.requests == []
+
+
 def test_a_history_gone_rebootstraps_and_other_errors_fail(make, google):
     rig = make()
     gseed(rig)

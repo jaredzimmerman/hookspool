@@ -59,21 +59,11 @@ arriving as one delivery. Other first steps are in [docs/getting-started/](docs/
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/banners/rack-dark.svg"><img alt="A plank with six pegs, each holding a bobbin wound a different amount." src="docs/assets/banners/rack-light.svg" width="960"></picture>
 
 A bobbin is the plugin for one outside service. It knows how that service proves a request is genuine, what to group its
-events on, and sometimes how to ask it what changed. You turn one on with a few lines of config.
+events on, and sometimes how to ask it what changed. You turn one on with a few lines of config. Built in today: GitHub,
+Gmail, Google Calendar, Google Drive, Plaid, Trello, Zoom and Kaneo, plus `webhook` for any service that signs a JSON POST.
 
-| bobbin | service | what it does |
-|---|---|---|
-| `github` | GitHub | repository webhooks; pings acknowledged, not queued |
-| `gmail` | Gmail | new mail, read from Gmail's history after a push |
-| `gcal` | Google Calendar | conflicts, brief requests and changed events |
-| `drive` | Google Drive | changed, created and shared files, by id and metadata |
-| `plaid` | Plaid | items, transactions and link events |
-| `trello` | Trello | card and board actions |
-| `zoom` | Zoom | meeting and webinar events |
-| `kaneo` | Kaneo | project and task events |
-| `webhook` | any web service | a signed or tokened JSON POST, set up by settings alone |
-
-Details, setup steps and how to write one are in [docs/bobbins/](docs/bobbins/README.md).
+[The catalogue](docs/bobbins/README.md) lists them with a line each, and `hookspool bobbin list` prints the same from the
+installed copy. Setup steps and how to write a new one are in [docs/bobbins/](docs/bobbins/README.md).
 
 ## Documentation
 

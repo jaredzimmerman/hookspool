@@ -96,19 +96,16 @@ dropped, HTTP 404) only records Gmail's current history id; nothing is reported 
 ## Limits
 
 * One pass reads at most 20 pages of 500 history records (10,000). If a mailbox changed by more than that
-  between two passes, the rest of that gap is not read: the pass stores Gmail's current history id.
+  between two passes, the rest of that gap is not read: the pass stores Gmail's current history id and logs
+  how many pages and records it read.
+* `agent` may not be the owner's mailbox: the batch is refused as permanent (exit 65).
 * The `handled` list keeps the last 300 message ids.
 * A Gmail watch lasts seven days: renew it (a `users.watch` call) daily; see SETUP.md for the sweep.
 * HTTP errors map as everywhere in hookspool: 408, 425, 429 and 5xx retry the batch (exit 75); another 4xx,
   including a revoked credential, is permanent (exit 65): the batch is dead-lettered and an issue opens.
 * Logs carry counts and the label `owner` or `agent` only, never subjects, addresses or bodies.
 
-## Replaces the delta script
+## Moving from 0.1
 
-The settings replace the old script's variables one for one: `GMAIL_DELTA_OWNER` -> `owner`,
-`GMAIL_DELTA_AGENT` -> `agent`, `GMAIL_DELTA_AGENT_STATE` -> `agent_state`, `GMAIL_DELTA_TZ` -> `tz`,
-`GMAIL_DELTA_HOURS` -> `hours`, `GMAIL_DELTA_OWN_DOMAINS` -> `own_domains`, `GMAIL_DELTA_API` -> `api_url`,
-`GMAIL_DELTA_FREEBUSY` -> `freebusy_url`; `GMAIL_DELTA_CRED_DIR` became the two credential secrets;
-`GMAIL_DELTA_EMAIL_CHECK` became `skip_domains`, `skip_keywords` and `important_senders`;
-`GMAIL_DELTA_SCHED_MODULE` became `hooks.classify`. The old state files keep their names, so pointing
-`state_dir` at the old directory keeps the history ids.
+This bobbin replaces the 0.1 delta script. [Upgrading to 0.2](../../../docs/operations/upgrading.md#upgrading-to-02-bobbins)
+maps each of its variables to a setting and keeps the history ids by pointing `state_dir` at the old directory.

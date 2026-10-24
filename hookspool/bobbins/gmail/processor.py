@@ -67,6 +67,8 @@ class Config:
         self.agent = str(s["agent"]).strip().lower()
         if not self.owner:
             ctx.fail_permanent("the owner setting is empty")
+        if self.agent and self.agent == self.owner:     # one mailbox under two roles: the owner's state would be rebound
+            ctx.fail_permanent("the agent setting names the owner's mailbox")
         try:
             self.tz_name = str(s["tz"])
             self.tz = ZoneInfo(self.tz_name)
@@ -219,11 +221,15 @@ def _pass(ctx, cfg: Config, account: str, now: datetime) -> list[dict]:
     if not state.get("historyId"):
         bootstrap("no history id")
         return []
+    stats: dict = {}
     try:
-        ids, newest = G.gmail_history(client, state["historyId"], base=cfg.api)
+        ids, newest = G.gmail_history(client, state["historyId"], base=cfg.api, stats=stats)
     except G.HistoryGone:                              # the history id is too old: start over quietly
         bootstrap("history 404")
         return []
+    if stats.get("truncated"):
+        ctx.log(f"history {label}: stopped at {stats['pages']} pages ({stats['records']} records); the rest of the gap"
+                " is skipped")
 
     handled = state.get("handled") or []
     hits: list[dict] = []

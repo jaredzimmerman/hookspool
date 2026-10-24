@@ -101,6 +101,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="new: freeze a webhook setting (scheme, header, prefix, key, ...) into the template;"
                         " the value is TOML (--set 'key=[\"id\"]') or a bare string")
     p.add_argument("--processor", action="store_true", help="new: include a processor.py")
+    p.add_argument("--markdown", action="store_true",
+                   help="list: the catalogue table of docs/bobbins/README.md, generated from the manifests")
     p.add_argument("--report", choices=("text", "md", "json"), default="text",
                    help="check: the scorecard format (default text)")
     p.add_argument("--strict", action="store_true", help="check: advisory checks fail too")
@@ -282,6 +284,9 @@ def _bobbin(a, cfg: dict) -> int:
     for inst, spec in services.items():
         pname = spec.get("bobbin", inst) if isinstance(spec, dict) else inst
         users.setdefault(str(pname), []).append(inst)
+    if a.subcmd == "list" and a.markdown:
+        sys.stdout.write(bobbin_loader.catalogue_markdown(pkgs.values()))
+        return EXIT_OK if pkgs else EXIT_NOTHING
     if a.subcmd == "list":
         rows = [{"name": p.name, "version": p.version, "origin": p.origin, "summary": p.summary,
                  "instances": users.get(p.name, []), "valid": not p.errors} for p in pkgs.values()]

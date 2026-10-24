@@ -42,7 +42,8 @@ Add `--code` for a `source.py` instead of the template, and `--processor` for a 
 3. Run `hookspool bobbin check hookspool/bobbins/acme`. It prints a scorecard; fix each `file:line` it lists until every
    required check passes. [Reviewing a bobbin](review.md) says what each check proves and what a maintainer still looks at.
 4. Open a pull request that touches only the bobbin directory and its tests. With a green scorecard and the template's
-   three boxes ticked, that is the expected merge.
+   three boxes ticked, that is the expected merge. Leave the catalogue and `CHANGELOG.md` alone: the maintainer
+   regenerates the one and writes the other when merging, and an edit to either makes the pull request `touches-core`.
 
 The rest of this page is about the part that is different for every sender: the source.
 
@@ -64,10 +65,10 @@ There are two ways to say this. Try the first one first.
 
 | | when | what you write |
 |---|---|---|
-| **A. a config template** | the sender signs the raw body with an HMAC, or sends a shared secret in a header or the URL, and everything else is a field of the JSON body or a header | one TOML table, two capture files, no Python |
-| **B. a code plugin** | the signature covers a timestamp, is a JWT, needs a key fetch or a handshake answer computed from the secret, or the payload has to be decoded or built | one Python module of about 30 lines, and a test that describes it to the kit |
+| **A. a config template** | the sender signs the raw body with an HMAC, or sends a shared secret in a header or the URL, and everything else is a field of the JSON body or a header | a `[source.template]` table in `bobbin.toml`, two capture files, no Python |
+| **B. a code plugin** | the signature covers a timestamp, is a JWT, needs a key fetch or a handshake answer computed from the secret, or the payload has to be decoded or built | `source.py` in the bobbin, about 30 lines of Python |
 
-Both are tested by the same conformance kit, which is what makes a new source safe to merge.
+`hookspool bobbin check` runs the same conformance kit on both, and the kit is what makes a new source safe to merge.
 
 ## Before you write anything
 
@@ -86,12 +87,19 @@ them (the PR template asks for the link):
 
 ## A. A config template
 
-The `template` source reads everything from its table, so adding a source is a table in the config and a test fixture.
-This is the whole of the GitHub source, from `examples/sources/github.toml`:
+A template bobbin has no Python. The sender's rules sit in a fixed `[source.template]` table in `bobbin.toml`, and the
+`template` source reads them. This is the GitHub bobbin's whole manifest, `hookspool/bobbins/github/bobbin.toml`:
 
 ```toml
-[sources.github]
-module = "hookspool.sources.template"
+name = "github"
+version = "1"
+summary = "GitHub repository webhook: HMAC-SHA256 over the raw body; pings are acknowledged and not enqueued"
+
+[source]
+span = "burst"
+sender_retries = false
+
+[source.template]
 scheme = "hmac-sha256-hex"
 header = "X-Hub-Signature-256"
 prefix = "sha256="
@@ -99,13 +107,20 @@ key = "repository.full_name"
 dedup = "header:X-GitHub-Delivery"
 ignore = "header:X-GitHub-Event=ping"
 event_type = "header:X-GitHub-Event"
+event_header = "X-GitHub-Event"
 attrs = { repo = "repository.full_name", event = "header:X-GitHub-Event" }
 keep_headers = ["X-GitHub-Event", "X-GitHub-Delivery"]
-sender_retries = false
-span = "burst"
-action = "hermes:github"
-secrets.secret = { file = "/etc/hookspool/secrets/github" }
+
+[secrets.secret]
+description = "the webhook secret typed into the repository's webhook settings"
+
+[outputs."*"]
+description = "every accepted delivery (pushes, pull requests, and the rest; the event type is in attrs)"
 ```
+
+A deployment turns it on with an instance that names the secret file and where events go (`[bobbins.github]`, see
+[Your first bobbin](../getting-started/first-bobbin.md)); `hookspool bobbin expand github` prints the `[sources.github]`
+table that instance becomes.
 
 ### Template reference
 
@@ -149,34 +164,42 @@ There is deliberately no expression language. If a `key` cannot be read from a r
 answered 202, an issue opened) rather than lost, and `hookspool replay <batch>` re-runs it once the table is fixed. If
 the sender needs more than the table can say, use a code plugin.
 
-The standard source keys in [the configuration reference](../configuration/README.md) (`span`, `action`, `expect_every_s`, `keep_headers`,
-`dedup_window_s`, the window fields) work on a template source like any other. `secrets.secret` is the one secret.
+In the manifest, `span`, `sender_retries` and `expect_every_s` go in `[source]` next to the template table, and
+`[secrets.secret]` declares the one secret. `keep_headers` (the headers stored with each event) and `event_header` may sit
+in the template table as they do for GitHub. An instance can override `span`, the window fields, `expect_every_s`,
+`dedup_window_s` and `max_body_bytes` ([the configuration reference](../configuration/README.md#bobbinsinstance)).
 
 ### Steps
 
-1. **Write the table** in `examples/sources/<name>.toml`. The file holds exactly one `[sources.<name>]` table, its
-   `module` is `hookspool.sources.template`, and it sets `secrets.secret`. Use placeholders for paths, never real values.
-   Put the sender's documentation link and any retry facts in a comment at the top.
-2. **Write a capture**, a real request from the sender with a test body, in `tests/captures/<name>/event.http`. The
-   format is [below](#capture-files). The body must contain the text `PAYLOAD-SENTINEL-7f3a`, which the kit uses to prove
-   that no log line ever carries a payload. Add the other captures that apply:
-   - `tampered.http`, `# expect: unverified`, with `# tamper_of: event.http`: the same request with the body changed
+1. **Scaffold the bobbin**:
+   `hookspool bobbin new <name> --dir hookspool/bobbins --set scheme=<scheme> --set header=<header> --set key=<selector>`.
+   Give `--set` again for `prefix`, `dedup`, `ignore`, `event_type` or `attrs`, or edit `[source.template]` afterwards. The
+   template source checks every value before anything is written. Put the sender's documentation link and its retry
+   behaviour in the README.
+2. **Put a real delivery in the captures.** The scaffold writes `captures/event.http` (`# expect: queued`) and
+   `captures/tampered.http` (`# expect: unverified`), both signed for the scheme with the test secret in
+   `captures/kit.toml`. Swap the body of `event.http` for a redacted delivery from the sender: example.com addresses,
+   made-up ids, no real names. `tampered.http` stays the same request with the body changed. The format is
+   [below](#capture-files). Add the captures that apply:
    - `ping.http`, `# expect: ignored`, if the table has an `ignore` rule
    - `head.http`, `# expect: challenge`, if it has `head_handshake`
-3. **Sign the captures** with the kit's test secret: `python tests/test_sources_template.py --write <name>`. This fills in
-   the signature headers; you write the request without them.
-4. **Run the kit**: `python -m pytest tests/test_sources_template.py -k <name>`. It finds every `examples/sources/*.toml`
-   by itself, so there is no test to write.
-5. **Try it offline** the way an operator would: copy the table into a config with a secret file you control, and run
-   `hookspool source test <name> --request tests/captures/<name>/event.http`.
-6. **Wire it up**: add the table to your `config.toml` with the real secret reference, add a route if you want one,
-   add an nginx `location` for `/hooks/<name>` (`deploy/nginx.example.conf` has the pattern), run `hookspool check`, then
-   `hookspool reload`.
+3. **Sign the new body.** Compute the signature the way the sender's documentation describes, over the exact body bytes,
+   with the test secret from `captures/kit.toml`. For `hmac-sha256-hex` that is
+   `openssl dgst -sha256 -hmac '<test secret>' body.json`. Put the result in the signature header and set
+   `Content-Length` to the body's size.
+4. **Fill in README.md, SETUP.md and AGENTS.md.** Every declared secret and required setting must appear in both setup
+   documents, and the `[bobbins.<name>]` table they show must expand.
+5. **Run the check**: `hookspool bobbin check hookspool/bobbins/<name> --base origin/main`. It runs the shared
+   [conformance kit](#the-conformance-kit) against each capture, so there is no test to write. Fix each `file:line` it
+   lists until every required check passes.
+6. **Try it offline** the way an operator would: put a `[bobbins.<name>]` instance in a scratch config whose secret file
+   holds the test secret, then run `hookspool source test <name> --request hookspool/bobbins/<name>/captures/event.http`.
 
 ## B. A code plugin
 
-A code plugin is a Python module under `hookspool/sources/<name>.py`, or any importable module named by
-`module = "pkg.mod"` in the source's table. It defines these names; only `verify`, `key` and `auth_headers` are required.
+A code source is `source.py` in the bobbin directory: `hookspool bobbin new <name> --code` writes one, and the
+manifest names it with `[source] module = "source"`. It defines these names; only `verify`, `key` and `auth_headers` are
+required.
 
 | name | type | meaning |
 |---|---|---|
@@ -249,7 +272,7 @@ A sender, `acme`, signs `"<timestamp>.<body>"` with HMAC-SHA256 and sends `t=<ti
 Events look like `{"id": "evt_1", "type": "invoice.paid", "data": {"customer": "cus_9"}}`. Its documentation says it
 retries for three days.
 
-`hookspool/sources/acme.py`:
+`hookspool/bobbins/acme/source.py`:
 
 ```python
 """Acme Billing webhooks. Signature scheme: https://docs.example.com/webhooks/signatures
@@ -284,26 +307,22 @@ def event_type(payload: dict, req: Request) -> str:
     return payload.get("type", "")
 ```
 
-The test, `tests/test_sources_acme.py`, describes the source to the kit once, then runs the whole matrix. The signing
-function is written from the sender's documentation with `hmac` directly, not with `hookspool.verify`, so a bug in a
-helper cannot hide behind a matching bug in the test:
+`hookspool bobbin check` runs the kit on this source with each capture, using the test secrets in
+`captures/kit.toml`. That is enough to merge. To run the whole matrix against a request built in code as well, describe
+the source to the kit in a test of the bobbin's own, `hookspool/bobbins/acme/tests/test_source.py`; the `tests` check
+runs it with the network blocked. The signing function is written from the sender's documentation with `hmac`
+directly, not with `hookspool.verify`, so a bug in a helper cannot hide behind a matching bug in the test:
 
 ```python
 import hashlib
 import hmac
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import sourcekit  # noqa: E402
-from sourcekit import SENTINEL, Kit, request  # noqa: E402
-
-from hookspool.sources import acme  # noqa: E402
+from hookspool.bobbins.acme import source as acme
+from hookspool.testing import sourcekit
+from hookspool.testing.sourcekit import SENTINEL, FakeClock, Kit, request
 
 SECRET = "test-acme-signing-secret"
 
@@ -323,25 +342,29 @@ KIT = Kit(
 
 
 @pytest.mark.parametrize("case", sourcekit.CASES, ids=sourcekit.CASE_IDS)
-def test_kit_matrix(case, tmp_path, clock):
-    sourcekit.run(case, KIT, tmp_path, clock)
+def test_kit_matrix(case, tmp_path):
+    try:
+        sourcekit.run(case, KIT, tmp_path, FakeClock())
+    except sourcekit.Skip as e:          # a case that does not apply, such as a handshake acme does not have
+        pytest.skip(str(e))
 ```
 
 `Kit` takes more arguments for the sources that need them: `handshake` (an unsigned handshake request that `challenge`
 answers after verification), `unauth_handshake` (for a `challenge_unauthenticated` source), `timestamped=True` with
 `tolerance_s` for a signed time window, `body_signed=False` for a static token that does not cover the body (the
 tampered-body case then does not apply), `break_stage` (the plugin function the quarantine case makes raise) and
-`source_cfg` (extra keys for the source's table). `tests/test_sources_zoom.py` (a timestamp and a handshake),
-`tests/test_sources_gcal.py` (a token and a payload built from headers) and `tests/test_sources_plaid.py` (a JWT) are the
-fuller models.
+`source_cfg` (extra keys for the source's table). The `zoom` bobbin (a timestamp and a handshake), `gcal` (a token and a
+payload built from headers) and `plaid` (a JWT) are the fuller models; their kit tests are `tests/test_sources_zoom.py`,
+`tests/test_sources_gcal.py` and `tests/test_sources_plaid.py`.
 
-Captures for a code plugin sit in `tests/captures/<name>/*.http` (or in `captures/` of its bobbin) and are run with
-`sourcekit.run_capture`; the Zoom test shows the loop. Sign them at the time the capture says (`# now:`).
+A code source's captures sit in the bobbin's `captures/`, like a template's. Sign each one at the time the capture says
+(`# now:`), so a timestamped scheme verifies when the kit replays it.
 
 ## The conformance kit
 
-`tests/sourcekit.py` drives each source through the real intake with a fake clock, a temporary spool and test secrets.
-Every case below must pass; one that does not apply to your source (no handshake, no timestamp) is skipped.
+`hookspool.testing.sourcekit` drives each source through the real intake with a fake clock, a temporary spool and test
+secrets; `hookspool bobbin check` runs it as its `source-kit` check, once per accepted capture. Every case below must
+pass; one that does not apply to your source (no handshake, no timestamp) is skipped.
 
 | case | what it proves |
 |---|---|
@@ -383,7 +406,7 @@ Content-Length: 87
 |---|---|
 | `# now: T` | the unix time the request was signed at, which `source test` verifies at |
 | `# expect: R` | the result the kit requires: `queued`, `ignored`, `challenge` or `unverified` |
-| `# tamper_of: FILE` | (template sources) re-signing keeps this file's signature over this capture's changed body |
+| `# tamper_of: FILE` | this capture is FILE's request with a changed body, still carrying FILE's signature |
 | `Content-Length` | when present, the body is exactly that many bytes; when absent, the rest of the file minus one trailing newline |
 
 Captures hold test secrets and made-up payloads only. Never commit a real secret, a real signature of real data, or a
@@ -391,10 +414,13 @@ real customer's payload.
 
 ## Wiring and the sweep
 
-1. Add `[sources.<name>]` to the config, with `secrets.*` pointing at files (see [the configuration reference](../configuration/README.md)).
-2. Add an nginx `location /hooks/<name>` with its own `limit_req`; the pattern is in `deploy/nginx.example.conf`.
+These are the bobbin's SETUP.md steps, and a deployment follows them:
+
+1. Add a `[bobbins.<instance>]` table to the config, with `secrets.*` pointing at files (see
+   [the configuration reference](../configuration/README.md#bobbinsinstance)).
+2. Add an nginx `location /hooks/<instance>` with its own `limit_req`; the pattern is in `deploy/nginx.example.conf`.
 3. Run `hookspool check`, then `hookspool reload`.
-4. Register the URL with the sender and send its test event. `hookspool list --source <name>` shows it.
+4. Register the URL with the sender and send its test event. `hookspool list --source <instance>` shows it.
 
 A webhook replaces a poll but never completely: channels expire, subscriptions get disabled after failures, and some
 senders never retry. So every source states, in its pull request and in the sweep table of [Sweeps](../operations/sweeps.md):
@@ -409,10 +435,11 @@ senders never retry. So every source states, in its pull request and in the swee
 ## Checklist
 
 - [ ] the sender's signature documentation is linked
-- [ ] template table in `examples/sources/<name>.toml`, or plugin in `hookspool/sources/<name>.py`
-- [ ] captures in `tests/captures/<name>/`: a signed event, a tampered one, and a ping or handshake if the sender has one
-- [ ] the conformance kit passes (`python -m pytest tests/test_sources_<...>.py -k <name>`)
+- [ ] `hookspool/bobbins/<name>/` made with `hookspool bobbin new`: a `[source.template]` table or a `source.py`
+- [ ] captures in `hookspool/bobbins/<name>/captures/`: a signed event, a tampered one, and a ping or handshake if the
+      sender has one
+- [ ] `hookspool bobbin check hookspool/bobbins/<name> --base origin/main` passes every required check and says
+      `bobbin-only`
 - [ ] the full suite passes (`python -m pytest -q`) and `ruff check .` is clean
 - [ ] no hostname, address, account name or real secret anywhere in the change
 - [ ] `sender_retries`, the sweep and `expect_every_s` are stated
-- [ ] a line in `CHANGELOG.md`
