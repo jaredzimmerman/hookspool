@@ -1,0 +1,8 @@
+# capture: an earnings delivery carrying the test secret in X-Finnhub-Secret
+# expect: queued
+POST /hooks/earnings HTTP/1.1
+Content-Type: application/json
+X-Finnhub-Secret: test-template-secret-PAYLOAD-SENTINEL-7f3a
+Content-Length: 149
+
+{"data":[{"symbol":"TEST","period":"2026-09-30","actual":1.23,"estimate":1.1}],"type":"earnings","note":"made-up test payload PAYLOAD-SENTINEL-7f3a"}

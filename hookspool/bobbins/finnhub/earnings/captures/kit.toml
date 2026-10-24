@@ -1,0 +1,5 @@
+# test values for `hookspool bobbin check`: the secret the captures carry
+[secrets]
+secret = "test-template-secret-PAYLOAD-SENTINEL-7f3a"
+
+[settings]
