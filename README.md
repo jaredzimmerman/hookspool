@@ -1,6 +1,6 @@
 # hookspool
 
-[![CI](https://github.com/jaredzimmerman/hookspool/actions/workflows/ci.yml/badge.svg)](https://github.com/jaredzimmerman/hookspool/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/hookspool)](https://pypi.org/project/hookspool/) [![Python](https://img.shields.io/pypi/pyversions/hookspool)](https://pypi.org/project/hookspool/) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![Docs](https://github.com/jaredzimmerman/hookspool/actions/workflows/docs.yml/badge.svg)](https://jaredzimmerman.github.io/hookspool/)
+[![CI](https://github.com/jaredzimmerman/hookspool/actions/workflows/ci.yml/badge.svg)](https://github.com/jaredzimmerman/hookspool/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/hookspool)](https://pypi.org/project/hookspool/) [![Python](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fjaredzimmerman%2Fhookspool%2Fmain%2Fpyproject.toml)](pyproject.toml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![Docs](https://github.com/jaredzimmerman/hookspool/actions/workflows/docs.yml/badge.svg)](https://jaredzimmerman.github.io/hookspool/)
 
 **Durable, coalescing intake for inbound webhooks.** hookspool sits between your reverse proxy and whatever consumes the
 events, whether that is an agent gateway, a script or an HTTP endpoint. It writes every event to disk before its sender
