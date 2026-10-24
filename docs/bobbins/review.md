@@ -67,6 +67,17 @@ These need a person, and the pull request template asks the contributor for the 
    helper in `hookspool/verify.py`, `hookspool/net.py`, `hookspool/providers/`) gets the review a core change gets, and is
    better as its own pull request when it can stand alone.
 
+### A poll bobbin
+
+For a poll bobbin ([Poll bobbins](writing-a-bobbin.md#poll-bobbins)) the question is not the signature but whether
+the service really has no push. Read `no_push_note` and open `no_push_docs`. If the provider has a webhook,
+a push subscription or a watch method for this data (on any plan the deployment could use), the bobbin should be a
+webhook bobbin, and the poll is refused. Then check that `every_s` respects the provider's rate limits and that the
+poller asks for changes (a sync token, an ETag, an `updated_since`), not the whole collection on every tick. In the
+kit's rows, `provider` asks for `api_docs`, `no_push_note` and `no_push_docs` in place of `webhook_docs` and
+`signature_docs`, `captures` reads `captures/poll-*.json`, `processor` runs `poller.py` on each of them, and
+`source-kit` is skipped.
+
 ## The labels and the comment
 
 A separate workflow (`bobbin-label.yml`) reads the scorecards the pull request's run uploaded, checks that the pull request

@@ -5,7 +5,8 @@ processor ``Context``:
 
 - ``ctx.http`` is an ``Http``: JSON in and out, a timeout on every request, and every failure
   mapped to ``Retryable`` (the dispatcher retries the batch later) or ``Permanent`` (the batch is
-  dead-lettered and needs a person).
+  dead-lettered and needs a person). ``ctx.http.get_text`` is the conditional GET a poller needs
+  (14.4): it returns ``(status, text, response_headers)`` and answers 304 without raising.
 - ``ctx.oauth(name)`` is an ``OAuthClient`` for the credential secret ``name``: it reads the
   credential through ``ctx.secret``, keeps the access token in the runtime's state mapping,
   refreshes it when it expires or after one 401, and never writes the credential file.
@@ -133,6 +134,32 @@ def _retry_after(value: str | None) -> float | None:
     return max(0.0, min(dt.timestamp() - time.time(), MAX_RETRY_AFTER_S))
 
 
+def _lower_headers(headers: Any) -> dict[str, str]:
+    """Response headers as a plain dict with lower-case names (the last value of a repeated header wins)."""
+    out: dict[str, str] = {}
+    if headers is None:
+        return out
+    try:
+        items = headers.items()
+    except AttributeError:
+        return out
+    for k, v in items:
+        out[str(k).lower()] = str(v)
+    return out
+
+
+def _charset(content_type: str) -> str:
+    """The ``charset`` of a Content-Type value if Python knows it, else UTF-8."""
+    import codecs
+    m = re.search(r"(?i)charset\s*=\s*\"?([A-Za-z0-9_.:-]+)", content_type or "")
+    if m:
+        try:
+            return codecs.lookup(m.group(1)).name
+        except LookupError:
+            pass
+    return "utf-8"
+
+
 def _is_loopback(host: str) -> bool:
     if host.lower() in ("localhost", "localhost."):
         return True
@@ -192,6 +219,37 @@ class Http:
              label: str | None = None) -> Any:
         return self.request("POST", url, json=json, form=form, params=params, headers=headers, bearer=bearer,
                             timeout_s=timeout_s, label=label)
+
+    def get_text(self, url: str, headers: dict | None = None, *, params: dict | None = None,
+                 bearer: str | None = None, timeout_s: float | None = None,
+                 label: str | None = None) -> tuple[int, str, dict[str, str]]:
+        """A GET that returns ``(status, text, response_headers)`` instead of parsed JSON, for a feed, a page or
+        an API that answers a conditional request (14.4).
+
+        Send ``If-None-Match`` (the ``etag`` header of the last answer) or ``If-Modified-Since`` in ``headers``:
+        a 304 comes back as ``(304, "", headers)`` and is not an error. A 2xx body is decoded with the charset of
+        its ``Content-Type`` (UTF-8 when there is none; undecodable bytes become U+FFFD). Header names are lower
+        case. Every other status, the timeout and the size cap are those of ``request``."""
+        prefix = self._target("GET", url, label)
+        if params:
+            url = url + ("&" if urllib.parse.urlsplit(url).query else "?") + urllib.parse.urlencode(params,
+                                                                                                    doseq=True)
+        hdrs = {"Accept": "*/*", "User-Agent": self.user_agent}
+        for k, v in (headers or {}).items():
+            hdrs[str(k)] = str(v)
+        if bearer is not None:
+            hdrs["Authorization"] = f"Bearer {bearer}"
+        budget = self.timeout_s if timeout_s is None else float(timeout_s)
+        deadline = self._clock() + max(budget, 0.001)
+        meta: dict[str, Any] = {}
+        err, raw = self._send("GET", url, None, hdrs, deadline, prefix, meta=meta)
+        if err is not None:
+            raise err
+        rh = meta.get("headers") or {}
+        status = int(meta.get("status") or 200)
+        if status == 304:
+            return 304, "", rh
+        return status, raw.decode(_charset(rh.get("content-type", "")), errors="replace"), rh
 
     def request(self, method: str, url: str, *, json: Any = None, form: dict | None = None,
                 params: dict | None = None, headers: dict | None = None, bearer: str | None = None,
@@ -253,9 +311,10 @@ class Http:
     def _left(self, deadline: float) -> float:
         return deadline - self._clock()
 
-    def _send(self, method, url, data, hdrs, deadline, prefix) -> tuple[NetError | None, bytes]:
+    def _send(self, method, url, data, hdrs, deadline, prefix, meta: dict | None = None) -> tuple[NetError | None, bytes]:
         """(error, body). The error is built here and raised by the caller, outside every except
-        block, so it carries no chained exception (whose text could hold a URL)."""
+        block, so it carries no chained exception (whose text could hold a URL). With ``meta`` (``get_text``),
+        the status and the response headers are put in it, and a 304 is an answer, not an error."""
         try:
             req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
         except ValueError:
@@ -268,7 +327,17 @@ class Http:
             try:
                 resp = self._opener.open(req, timeout=left)
             except urllib.error.HTTPError as e:
+                if meta is not None and int(e.code) == 304:
+                    meta.update(status=304, headers=_lower_headers(e.headers))
+                    try:
+                        e.close()
+                    except Exception:  # noqa: BLE001,S110 - closing an answered request
+                        pass
+                    return None, b""
                 return self._http_error(e, prefix, deadline), b""
+            if meta is not None:
+                meta.update(status=getattr(resp, "status", 200) or 200,
+                            headers=_lower_headers(getattr(resp, "headers", None)))
             return self._read(resp, deadline, prefix)
         except (TimeoutError, ConnectionError) as e:
             return Retryable(f"{prefix}: {'timed out' if isinstance(e, TimeoutError) else e.__class__.__name__}"), b""
@@ -594,6 +663,18 @@ class OAuthClient:
 
     def post(self, url: str, **kw) -> Any:
         return self.request("POST", url, **kw)
+
+    def get_text(self, url: str, headers: dict | None = None, **kw) -> tuple[int, str, dict[str, str]]:
+        """``Http.get_text`` with the credential's bearer token (one refresh on a 401, as ``request``)."""
+        kw.pop("bearer", None)
+        http = self._oauth.http
+        try:
+            return http.get_text(url, headers, bearer=self.token(), **kw)
+        except Unauthorized:
+            pass
+        self._oauth.invalidate(self.name)
+        tok = self._oauth.token(self.name, force=True)
+        return http.get_text(url, headers, bearer=tok, **kw)
 
 
 # ---- the processor runtime's entry point ----------------------------------------------------------

@@ -12,6 +12,7 @@ hookspool/bobbins/<vendor>/<product>/
     source.py          a code source, only when the template cannot express the sender (optional)
     processor.py       work done after the event is committed, such as asking the service what changed (optional)
     captures/*.http    sample requests the checks replay: one accepted, one rejected
+    poller.py          a poll bobbin's poller, in place of a source, for a service with no push (see Poll bobbins)
     README.md          what it does, its settings, outputs and limits
     SETUP.md           the steps for a person: provider side, secrets, config table, verify, roll back
     AGENTS.md          the same procedure as numbered steps an agent can follow
@@ -504,6 +505,99 @@ senders never retry. So every source states, in its pull request and in the swee
 - **whether the sender retries**, and for how long. When it does not, the sweep must redeliver failures (GitHub's does)
 - **the paths its scripts write**, for the service unit's `ReadWritePaths`, if it has a `script:` destination
 
+## Poll bobbins
+
+Some services cannot push at all. They have no webhook, no watch channel and no push subscription, and for those
+alone a bobbin polls. A service that can push gets a webhook bobbin, even when polling looks simpler: a poll gives up
+the sender's retries and its ordering, and it spends a call on every window whether anything changed or not.
+
+A poll bobbin has a `[poll]` table instead of `[source]`, and a `poller.py` instead of `processor.py`.
+`hookspool bobbin new <vendor>.<product> --poll` writes one:
+
+```toml
+name = "acme.tasks"
+version = "1"
+summary = "Acme Tasks: changed tasks, polled because the API has no push"
+
+[provider]
+vendor = "Acme"
+product = "Tasks"
+homepage = "https://github.com"
+api_docs = "https://docs.github.com/en/rest"                         # the API the poller calls; required
+no_push_note = "The tasks API has no webhook, push or watch method."  # one plain sentence; required
+no_push_docs = "https://docs.github.com/en/rest/activity/feeds"       # the page that shows it; required
+
+[poll]
+every_s = 900          # required, at least 60: seconds between polls
+# jitter_s = 90        # default 10% of every_s, at most 300: up to this many seconds are added to each wait
+module = "poller"      # poller.py in the bobbin (the only allowed value)
+timeout_s = 120        # how long one poll may run (default 300)
+state = true           # default true: a state directory for the cursor (an ETag, a sync token, the ids seen)
+
+[secrets.api_key]
+description = "the API key the poller sends"
+
+[outputs.changed]
+description = "a task changed"
+```
+
+How it runs:
+
+- There is no source and no `/hooks/<instance>` (the intake answers 404), so a poll bobbin has no proxy line,
+  no signature and no request captures. Every secret it declares belongs to the poller.
+- Every `every_s` seconds plus a random jitter of up to `jitter_s`, the dispatcher enqueues
+  one event, `{"tick": <unix seconds>, "instance": "<instance>"}`, with the key `poll`. It goes to `poller.py`
+  as a batch like any other, and the runtime calls `poll(batch, ctx)` with the same `Batch` and `Context` a processor
+  gets. The journal, staged state, emits and exit codes work the same way. A dispatcher that was stopped for a day
+  makes one tick when it starts, not a burst. While the previous tick is still waiting or dead, no new tick is
+  enqueued, so a slow or failing poller never builds up a queue of ticks.
+- The rules of 14.3.7 apply unchanged. Call the API through `ctx.http` or `ctx.oauth`, keep the cursor with
+  `ctx.load_state` and `ctx.save_state`, raise `Retryable` or `Permanent`, and never sleep or loop on time: the next
+  tick comes from the clock.
+- For a conditional GET, `ctx.http.get_text(url, headers)` returns `(status, text, response_headers)` (header names in
+  lower case) and answers 304 without raising. Send the last `etag` as `If-None-Match`, or a date as
+  `If-Modified-Since`, and an unchanged feed answers with a short 304:
+
+  ```python
+  def poll(batch, ctx) -> list[dict]:
+      cursor = ctx.load_state("cursor", {"etag": ""})
+      headers = {"If-None-Match": cursor["etag"]} if cursor["etag"] else {}
+      status, text, resp = ctx.http.get_text("https://api.example.com/v1/tasks", headers, label="tasks")
+      if status == 304:
+          return []
+      ...
+      ctx.save_state("cursor", {"etag": resp.get("etag", "")})
+      return items
+  ```
+
+- `hookspool status` shows each poll instance under `polls`. With no delivered tick for three times
+  `every_s`, the issue `poll:<instance>:stale` opens; the next delivered tick resolves it.
+
+The documents open with the poll frontmatter, `api_docs` in place of `webhook_docs`:
+
+```
+---
+bobbin: acme.tasks
+provider: Acme Tasks
+api_docs: https://docs.github.com/en/rest
+---
+```
+
+The conformance kit runs `poller.py` instead of a source. Each `captures/poll-<name>.json` is one poll: the stub API
+answers for that run and, optionally, how many items it should return:
+
+```json
+{"description": "two tasks changed", "now": 1800000000, "items": 2,
+ "http": [{"method": "GET", "url": "https://api.example.com/v1/tasks", "status": 200,
+           "headers": {"ETag": "\"v2\""}, "text": "{\"tasks\": [{\"id\": \"t1\"}, {\"id\": \"t2\"}]}"}]}
+```
+
+A stub's `text` and `headers` answer `get_text`, and a stub with `status = 304` is the not-modified answer. For each
+capture the kit runs a tick through `poll` with stub HTTP and the network blocked. It checks that only declared outputs
+come back, that `items` matches when it is given, that a second run replays the journal, that nothing but emits
+reaches stdout, and that failures exit 75 and 65. The `source-kit` row is skipped, and AGENTS.md needs no `outward`
+step, because nothing is registered at the provider.
+
 ## Checklist
 
 - [ ] the name is `<vendor>.<product>` and the directory `hookspool/bobbins/<vendor>/<product>/`, made with
@@ -517,3 +611,5 @@ senders never retry. So every source states, in its pull request and in the swee
 - [ ] the full suite passes (`python -m pytest -q`) and `ruff check .` is clean
 - [ ] no hostname, address, account name or real secret anywhere in the change
 - [ ] `sender_retries`, the sweep and `expect_every_s` are stated
+- [ ] a poll bobbin only for a service with no push at all: `[provider]` has `api_docs`, `no_push_note` and
+      `no_push_docs`, and `captures/` has a `poll-*.json` for each kind of answer (changes, nothing new, 304)

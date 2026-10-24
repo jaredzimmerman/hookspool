@@ -104,6 +104,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="new: freeze a webhook setting (scheme, header, prefix, key, ...) into the template;"
                         " the value is TOML (--set 'key=[\"id\"]') or a bare string")
     p.add_argument("--processor", action="store_true", help="new: include a processor.py")
+    p.add_argument("--poll", action="store_true",
+                   help="new: a poll bobbin (no source, a poller.py the dispatcher ticks) for a service with no push")
     p.add_argument("--markdown", action="store_true",
                    help="list: the catalogue table of docs/bobbins/README.md, generated from the manifests")
     p.add_argument("--report", choices=("text", "md", "json"), default="text",
@@ -257,7 +259,7 @@ def _bobbin(a, cfg: dict) -> int:
             return EXIT_CONFIG
         try:
             d = bobbin_loader.scaffold(a.name, a.dir, code=a.code, processor=a.processor,
-                                       settings=_set_args(a.set_))
+                                       settings=_set_args(a.set_), poll=a.poll)
         except ValueError as e:
             _err(str(e))
             return EXIT_CONFIG
@@ -307,7 +309,8 @@ def _bobbin(a, cfg: dict) -> int:
     src = p.source
     info = {"name": p.name, "version": p.version, "origin": p.origin, "dir": p.dir, "summary": p.summary,
             "provider": {k: v for k, v in p.provider.items() if isinstance(v, str)},
-            "source": "template" if "template" in src else src.get("module"),
+            "source": "poll" if p.poll is not None else "template" if "template" in src else src.get("module"),
+            "poll": p.poll,
             "span": src.get("span"), "sender_retries": src.get("sender_retries"),
             "expect_every_s": src.get("expect_every_s"), "proxy": src.get("proxy"),
             "processor": p.processor, "instances": users.get(p.name, []), "errors": p.errors,
@@ -317,13 +320,22 @@ def _bobbin(a, cfg: dict) -> int:
                              "default": v.get("default"), "description": v.get("description", "")}
                          for k, v in p.settings.items() if isinstance(v, dict)},
             "outputs": {k: (v.get("description", "") if isinstance(v, dict) else "") for k, v in p.outputs.items()}}
-    lines = [f"{p.name} {p.version} ({p.origin}: {p.dir})", f"  {p.summary}",
-             f"  source: {info['source']}  span: {info['span'] or '-'}  sender_retries: {info['sender_retries']}"
-             f"  expect_every_s: {info['expect_every_s'] or '-'}"]
+    lines = [f"{p.name} {p.version} ({p.origin}: {p.dir})", f"  {p.summary}"]
+    if p.poll is not None:
+        every = p.poll.get("every_s")
+        jitter = p.poll.get("jitter_s", bobbin_loader.default_jitter_s(every) if isinstance(every, (int, float)) else "-")
+        lines.append(f"  poll: every_s={every} jitter_s={jitter} timeout_s="
+                     f"{p.poll.get('timeout_s', bobbin_loader.DEFAULT_PROCESSOR_TIMEOUT_S)}"
+                     f" state={p.poll.get('state', True) is True}  (no URL: the dispatcher ticks poller.py)")
+    else:
+        lines.append(f"  source: {info['source']}  span: {info['span'] or '-'}  sender_retries: {info['sender_retries']}"
+                     f"  expect_every_s: {info['expect_every_s'] or '-'}")
     prov = info["provider"]
     if prov:
         lines.append(f"  provider: {prov.get('vendor', '-')} {prov.get('product', '-')}")
         lines += [f"    {k}: {prov[k]}" for k in bobbin_loader.PROVIDER_URL_KEYS if prov.get(k)]
+        if prov.get("no_push_note"):
+            lines.append(f"    no_push_note: {prov['no_push_note']}")
     if info["proxy"]:
         lines.append(f"  proxy: {info['proxy']}")
     if p.processor is not None:

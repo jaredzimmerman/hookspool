@@ -33,7 +33,7 @@ Order matters only where noted. Nothing here touches the gateway.
 5. **Config.** Copy `config.example.toml` to `/var/lib/hookspool/config.toml`, replace every placeholder, then:
    ```
    sudo -u hookspool env HOOKSPOOL_HOME=/var/lib/hookspool hookspool check      # exit 2 lists what is wrong
-   sudo -u hookspool env HOOKSPOOL_HOME=/var/lib/hookspool hookspool migrate    # creates the spool, schema 2
+   sudo -u hookspool env HOOKSPOOL_HOME=/var/lib/hookspool hookspool migrate    # creates the spool, schema 3
    ```
    `check` reads `hermes.subscriptions_path` and **fails on any `events` filter or `coalesce` block on a Hermes
    route that hookspool feeds**: hookspool coalesces, and a filter on the Hermes side would silently drop part of a

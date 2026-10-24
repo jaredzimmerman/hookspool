@@ -7,6 +7,10 @@ receives (`google.gmail`, `atlassian.trello`, `github.repo`; `hookspool.` is res
 hookspool). A deployment turns one on with a `[bobbins.<instance>]` table that names it (`bobbin = "google.gmail"`); see
 [the configuration reference](../configuration/README.md#bobbinsinstance).
 
+A service with no push of any kind gets a **poll bobbin**. Instead of a source, it has a `poller.py` that the
+dispatcher's clock starts every `every_s` seconds. It has no URL and asks the service what changed
+([Poll bobbins](writing-a-bobbin.md#poll-bobbins)). A service that can push always gets a webhook bobbin, never a poll.
+
 ## The catalogue
 
 Each name links to the bobbin's own README, which lists its settings, secrets, outputs and limits. `SETUP.md` in the

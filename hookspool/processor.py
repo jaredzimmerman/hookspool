@@ -8,6 +8,11 @@ a processor. It reads the batch document on stdin, loads ``processor.py`` from
     def process(batch: Batch, ctx: Context) -> list[dict]:
         '''Return items; each is {"event_type": ..., <payload fields>}; [] means nothing to do.'''
 
+A poll bobbin (its manifest has ``[poll]``, ARCHITECTURE 14.4) has ``poller.py`` instead, and the runtime calls
+``poll(batch, ctx)`` with the same ``Batch`` and ``Context``: the batch holds the dispatcher's tick
+(``{"tick": <unix s>, "instance": <instance>}``), and everything below (journal, staged state, emits, exit codes)
+is the same.
+
 The environment (built by the config expansion, 14.3.3): ``HOOKSPOOL_BOBBIN``,
 ``HOOKSPOOL_BOBBIN_INSTANCE``, ``HOOKSPOOL_BOBBIN_DIR``, ``HOOKSPOOL_SETTINGS`` (JSON, typed, defaults
 applied), ``HOOKSPOOL_DELTA_ROUTES`` (JSON, event type -> destination), ``HOOKSPOOL_SECRET_REFS`` (JSON,
@@ -438,13 +443,21 @@ def _load_file(name: str, path: str):
     return mod
 
 
+def entry_point(manifest: Mapping[str, Any] | None) -> tuple[str, str]:
+    """(module, function) the runtime calls: ``processor.process``, or ``poller.poll`` for a poll bobbin (14.4)."""
+    m = manifest or {}
+    if isinstance(m.get("poll"), dict):
+        return (m["poll"].get("module") or "poller"), "poll"
+    proc = m.get("processor")
+    return ((proc.get("module") if isinstance(proc, dict) else None) or "processor"), "process"
+
+
 def load_processor(service_dir: str, instance: str, manifest: Mapping[str, Any] | None = None):
-    """The bobbin's processor module: imported by name for a built-in bobbin, by file path (under a
-    private module name, never on ``sys.path``) for one in a ``spool.bobbin_path`` directory."""
+    """The bobbin's processor module (a poll bobbin's poller): imported by name for a built-in bobbin, by file
+    path (under a private module name, never on ``sys.path``) for one in a ``spool.bobbin_path`` directory."""
     if not service_dir or not os.path.isdir(service_dir):
         raise BatchError("HOOKSPOOL_BOBBIN_DIR is not a directory")
-    proc = (manifest or {}).get("processor")
-    module = (proc.get("module") if isinstance(proc, dict) else None) or "processor"
+    module, func = entry_point(manifest)
     if not isinstance(module, str) or not _MODULE_NAME.match(module):
         raise BatchError("the manifest's processor module must be a module name in the bobbin")
     real = os.path.realpath(service_dir)
@@ -458,8 +471,8 @@ def load_processor(service_dir: str, instance: str, manifest: Mapping[str, Any] 
         if not os.path.isfile(path):
             raise BatchError(f"the bobbin has no {module}.py")
         mod = _load_file(_private_name("processor", instance), path)
-    if not callable(getattr(mod, "process", None)):
-        raise BatchError(f"{module}.py defines no process(batch, ctx)")
+    if not callable(getattr(mod, func, None)):
+        raise BatchError(f"{module}.py defines no {func}(batch, ctx)")
     return mod
 
 
@@ -664,7 +677,8 @@ def run(instance: str, doc: dict | None = None, *, env: Mapping[str, str] | None
                                       state_dir=sdir, hooks=load_hooks(settings, instance), runtime_state=runtime,
                                       err=err, clock=clock, extras_factory=extras_factory, persist=persist)
                         with staging() as st:
-                            emits = build_emits(mod.process(batch, ctx), batch, instance, routes, log)
+                            work = getattr(mod, entry_point(manifest)[1])
+                            emits = build_emits(work(batch, ctx), batch, instance, routes, log)
                             j = _new_journal(batch.id, emits, st)
                 finally:
                     # Cached access tokens and a rotated refresh token are kept whatever the outcome.

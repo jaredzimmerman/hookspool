@@ -9,10 +9,11 @@ applies schema migrations at startup, and every poll (``poll_s``):
    time stand still instead of rewriting anything;
 3. writes the heartbeat every ``heartbeat_s``;
 4. recovers expired leases that no live worker of this process holds (uncounted);
-5. seals every ready ``open`` batch, before any destination gate;
-6. runs maintenance every 60 s (retention hourly, silent sources, dead-batch issues);
-7. hands unalerted issues to the alert thread;
-8. claims candidates (head of group only, oldest first) through each destination's
+5. runs the poll clock (§14.4): one tick per due poll source, none while its previous tick is undelivered;
+6. seals every ready ``open`` batch, before any destination gate;
+7. runs maintenance every 60 s (retention hourly, silent sources, stale polls, dead-batch issues);
+8. hands unalerted issues to the alert thread;
+9. claims candidates (head of group only, oldest first) through each destination's
    gate and hands them to the worker pool.
 
 Workers only call ``Destination.deliver``; the main thread records every outcome, so
@@ -62,6 +63,7 @@ RETENTION_S = 3600.0
 RETRY_AFTER_CAP_S = 3600.0
 ALERT_RETRY_S = 60.0
 STREAK_ISSUE_AT = 3
+POLL_STALE_WINDOWS = 3  # a poll with no delivered tick for this many windows opens poll:<instance>:stale
 POISON_STRIKES = 5      # transport failures, each after another batch's success (§4.2)
 # delivery issue reason classes that a successful attempt on the destination resolves
 TRANSIENT_REASONS = ("unreachable", "http_5xx", "timeout", "script_exit", "batch")
@@ -109,7 +111,7 @@ class Dispatcher:
                  now: Callable[[], float] = time.time, config_path: str | None = None,
                  destination_factory: Callable[[dict, str], Destination] | None = None,
                  jitter: Callable[[], float] | None = None, lock_path: str | None = None,
-                 cli_home: str | None = None):
+                 cli_home: str | None = None, poll_jitter: Callable[[float], float] | None = None):
         self._cli_home = cli_home      # --home: reloads must expand with the same home as startup
         if config is None:
             config_path = config_path or _config.config_path()
@@ -122,6 +124,7 @@ class Dispatcher:
         self.wall = now
         self._factory = destination_factory or _build_destination
         self._jitter = jitter or (lambda: random.uniform(0.0, 0.25))
+        self._poll_jitter = poll_jitter or (lambda j: random.uniform(0.0, j))     # seconds in [0, jitter_s]
         self.lock_path = lock_path or os.path.join(_config.home_dir(config), "dispatch.lock")
         self._lock_file = None
         self._dests: dict[str, Destination] = {}
@@ -328,6 +331,7 @@ class Dispatcher:
         self._heartbeat(now)
         for bid in self.store.recover_leases(now, self._live):
             log.warning("lease expired batch=%d: redelivering", bid)
+        self._polls(now)
         sealed = self.store.seal_ready(now)
         if sealed:
             log.debug("sealed %d batch(es)", len(sealed))
@@ -653,6 +657,49 @@ class Dispatcher:
                          f"{name} rejected batch {bid} ({out.reason}); it is dead. Fix or `hookspool split`/"
                          f"`exclude` it, then `hookspool replay {bid}`", now)
 
+    # ---- the poll clock (§14.4) --------------------------------------------------------------------
+    def _polls(self, now: float) -> None:
+        """One tick for each due poll source. The rows are read first; only a due (or new, or rescheduled)
+        instance takes a write transaction."""
+        polls = _config.poll_sources(self.config)
+        if not polls:
+            return
+        rows = self.store.poll_rows()
+        for name, p in polls.items():
+            row = rows.get(name)
+            if row is not None and now < row["next_at"] <= now + p.every_s + p.jitter_s:
+                continue
+            try:
+                r = self.store.poll_tick(name, p.action, p.every_s, p.jitter_s, now=now, jitter=self._poll_jitter)
+            except (SpoolError, InvalidEvent) as e:
+                log.error("poll tick failed instance=%s: %s", name, e.__class__.__name__)
+                continue
+            if r.action == "enqueued":
+                log.info("poll tick instance=%s batch=%s next_in_s=%.0f", name, r.batch_id, r.next_at - now)
+            elif r.action == "skipped":
+                log.warning("poll tick skipped instance=%s: tick batch=%s is not delivered yet", name, r.batch_id)
+            elif r.action != "not_due":
+                log.info("poll %s instance=%s next_in_s=%.0f", r.action, name, r.next_at - now)
+
+    def _check_polls(self, now: float) -> None:
+        """``poll:<instance>:stale`` while no tick was delivered for ``POLL_STALE_WINDOWS`` x ``every_s``."""
+        for name, p in _config.poll_sources(self.config).items():
+            self.store.poll_refresh(name)
+            st = self.store.poll_status(name, p.every_s, now)
+            fp = f"poll:{name}:stale"
+            cur = self.store.issue_get(fp)
+            active = cur is not None and cur["state"] in ("open", "acked", "ignored")
+            if st["stale"] and not active:
+                last = "never" if st["delivered_at"] is None else f"{now - st['delivered_at']:.0f}s ago"
+                iid, _ = self.store.issue_open(fp, "source_silent", route=name, now=now,
+                                               error=f"poll {name}: no tick delivered for longer than"
+                                                     f" {POLL_STALE_WINDOWS} x {p.every_s:g}s (last: {last});"
+                                                     f" see `hookspool list --source {name}`")
+                log.warning("issue opened id=%d fingerprint=%s", iid, fp)
+            elif not st["stale"] and cur is not None and cur["state"] in ("open", "acked"):
+                self.store.issue_resolve(fp, now=now)
+                log.info("issue resolved fingerprint=%s", fp)
+
     # ---- maintenance ------------------------------------------------------------------------------
     def _maintenance(self, now: float) -> None:
         if self._last_prune is None or now - self._last_prune >= RETENTION_S:
@@ -661,6 +708,7 @@ class Dispatcher:
             if any(out.values()):
                 log.info("retention " + " ".join(f"{k}=%d" for k in out), *out.values())
         self._check_sources(now)
+        self._check_polls(now)
         self._resolve_exhausted(now)
 
     def _check_sources(self, now: float) -> None:

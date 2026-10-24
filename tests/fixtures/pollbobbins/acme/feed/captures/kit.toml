@@ -1,0 +1,6 @@
+# test values for `hookspool bobbin check`
+[secrets]
+api_key = "test-api-key-feed"
+
+[settings]
+feed = "news"

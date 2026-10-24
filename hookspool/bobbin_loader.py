@@ -46,21 +46,31 @@ TEMPLATE_MODULE = "hookspool.sources.template"
 PROCESSOR_MODULE = "hookspool.processor"
 DEFAULT_PROCESSOR_TIMEOUT_S = 300
 
-MANIFEST_KEYS = {"name", "version", "summary", "provider", "source", "secrets", "settings", "processor", "outputs"}
-PROVIDER_KEYS = {"vendor", "product", "homepage", "webhook_docs", "signature_docs", "api_docs"}
-PROVIDER_URL_KEYS = ("homepage", "webhook_docs", "signature_docs", "api_docs")
+MANIFEST_KEYS = {"name", "version", "summary", "provider", "source", "poll", "secrets", "settings", "processor",
+                 "outputs"}
+PROVIDER_KEYS = {"vendor", "product", "homepage", "webhook_docs", "signature_docs", "api_docs", "no_push_note",
+                 "no_push_docs"}
+PROVIDER_URL_KEYS = ("homepage", "webhook_docs", "signature_docs", "api_docs", "no_push_docs")
 SOURCE_KEYS = {"module", "template", "span", "sender_retries", "expect_every_s", "proxy", "config"}
 SECRET_KEYS = {"description", "processor", "required"}
 SETTING_KEYS = {"description", "type", "required", "default"}
 PROCESSOR_KEYS = {"module", "timeout_s", "state"}
+# a poll bobbin (14.4): no [source] and no URL; the dispatcher's clock enqueues a tick that poller.py answers
+POLL_KEYS = {"every_s", "jitter_s", "module", "timeout_s", "state"}
+POLL_MODULE = "poller"
+POLL_MIN_EVERY_S = 60
+POLL_MAX_JITTER_S = 300
+POLL_KIND = "poll"
 OUTPUT_KEYS = {"description"}
 # window, liveness, dedup and body overrides copied onto the expanded source table
 SOURCE_OVERRIDES = ("span", *_config.WINDOW_FIELDS, "expect_every_s", "dedup_window_s", "max_body_bytes")
 PROCESSOR_OVERRIDES = ("timeout_s", "state_dir")
+POLL_OVERRIDES = ("every_s", "jitter_s")
 # names a setting copied by [source] config can never take: they are keys of the expanded source table that
 # the loader or the instance sets (an instance setting must not choose the module or overwrite an override)
 RESERVED_SOURCE_NAMES = frozenset(_config.SOURCE_KEYS | SOURCE_KEYS | set(SOURCE_OVERRIDES))
-INSTANCE_KEYS = {"bobbin", "secrets", "settings", "outputs", "expect", *SOURCE_OVERRIDES, *PROCESSOR_OVERRIDES}
+INSTANCE_KEYS = {"bobbin", "secrets", "settings", "outputs", "expect", *SOURCE_OVERRIDES, *PROCESSOR_OVERRIDES,
+                 *POLL_OVERRIDES}
 # keys of a manifest's source template that the instance or the manifest's own [source] sets
 _TEMPLATE_RESERVED = {"module", "action", "secrets", "span", "expect_every_s", "dedup_window_s", "max_body_bytes",
                       *_config.WINDOW_FIELDS}
@@ -75,6 +85,24 @@ TEMPLATE_KEYS = {"scheme": ("string",), "header": ("string",), "prefix": ("strin
                  "callback_url": ("string",), "head_handshake": ("bool",), "key": ("string", "list"),
                  "dedup": ("string",), "ignore": ("string", "list"), "event_type": ("string",),
                  "attrs": ("table",), "sender_retries": ("bool",)}
+
+
+def default_jitter_s(every_s: float) -> float:
+    """A poll's jitter when neither the manifest nor the instance sets one: 10% of ``every_s``, at most 300 s."""
+    return min(float(POLL_MAX_JITTER_S), round(0.1 * float(every_s), 3))
+
+
+def poll_every_problem(v: Any) -> str | None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v < POLL_MIN_EVERY_S:
+        return f"must be a number of seconds >= {POLL_MIN_EVERY_S} (a poll more often than once a minute is a"\
+               " push the service does not have)"
+    return None
+
+
+def poll_jitter_problem(v: Any) -> str | None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or not 0 <= v <= POLL_MAX_JITTER_S:
+        return f"must be a number of seconds from 0 to {POLL_MAX_JITTER_S}"
+    return None
 
 
 class BobbinError(_config.ConfigError):
@@ -187,6 +215,22 @@ class Package:
         return p if isinstance(p, dict) else None
 
     @property
+    def poll(self) -> dict | None:
+        """The ``[poll]`` table of a poll bobbin (14.4), else None."""
+        p = self.manifest.get("poll")
+        return p if isinstance(p, dict) else None
+
+    @property
+    def worker(self) -> dict | None:
+        """What the dispatcher runs for an instance: the ``[processor]``, or a poll bobbin's ``[poll]`` (its poller
+        is its processor), else None."""
+        return self.poll if self.poll is not None else self.processor
+
+    @property
+    def worker_module(self) -> str:
+        return POLL_MODULE if self.poll is not None else "processor"
+
+    @property
     def outputs(self) -> dict:
         o = self.manifest.get("outputs")
         return o if isinstance(o, dict) else {}
@@ -279,8 +323,34 @@ def validate_manifest(m: Any, rel: str, spans: dict) -> list[str]:
                 errs.append(f"provider.{k}: must be a string")
 
     src = m.get("source")
-    if src is None:
-        errs.append("source: required")
+    poll = m.get("poll")
+    if poll is not None:
+        if src is not None:
+            errs.append("poll: a poll bobbin has no [source] (no URL: the dispatcher's clock starts each poll);"
+                        " a service that can push gets a webhook bobbin, never a poll")
+        if m.get("processor") is not None:
+            errs.append("poll: a poll bobbin has no [processor]; poller.py is what runs ([poll] timeout_s, state)")
+        if unknown("poll", poll, POLL_KEYS):
+            if "every_s" not in poll:
+                errs.append(f"poll.every_s: required (seconds between polls, >= {POLL_MIN_EVERY_S})")
+            else:
+                problem = poll_every_problem(poll["every_s"])
+                if problem:
+                    errs.append(f"poll.every_s: {problem}")
+            if "jitter_s" in poll:
+                problem = poll_jitter_problem(poll["jitter_s"])
+                if problem:
+                    errs.append(f"poll.jitter_s: {problem}")
+            if poll.get("module", POLL_MODULE) != POLL_MODULE:
+                errs.append(f'poll.module: must be "{POLL_MODULE}" ({POLL_MODULE}.py in the bobbin)')
+            t = poll.get("timeout_s")
+            if t is not None and (isinstance(t, bool) or not isinstance(t, (int, float)) or t <= 0):
+                errs.append("poll.timeout_s: must be a number > 0")
+            if "state" in poll and not isinstance(poll["state"], bool):
+                errs.append("poll.state: must be true or false")
+        src = None
+    elif src is None:
+        errs.append("source: required (or [poll], for a service with no push at all)")
     elif unknown("source", src, SOURCE_KEYS):
         has_mod, has_tpl = "module" in src, "template" in src
         if has_mod == has_tpl:
@@ -381,7 +451,7 @@ def validate_manifest(m: Any, rel: str, spans: dict) -> list[str]:
                 errs.append(f"outputs.{k}: not an event-type token ({EVENT_TYPE_RE.pattern}) or \"*\"")
             if unknown(f"outputs.{k}", o, OUTPUT_KEYS) and "description" in o and not isinstance(o["description"], str):
                 errs.append(f"outputs.{k}.description: must be a string")
-        if proc is None and len(outputs) >= 2 and ALL_OUTPUTS not in outputs:
+        if proc is None and poll is None and len(outputs) >= 2 and ALL_OUTPUTS not in outputs:
             errs.append('outputs: a bobbin with several outputs and no processor must declare "*"'
                         " (the source's action; an instance cannot be expanded without it)")
     # a setting either names a template key (14.3.2a) or a processor reads it; a setting that is neither would be
@@ -415,6 +485,8 @@ def _validate_files(pkg: Package) -> list[str]:
         errs.append(f"source.module: {mod}.py is not in the bobbin")
     if pkg.processor is not None and not os.path.isfile(pkg.local_file("processor")):
         errs.append("processor: processor.py is not in the bobbin")
+    if pkg.poll is not None and not os.path.isfile(pkg.local_file(POLL_MODULE)):
+        errs.append(f"poll: {POLL_MODULE}.py is not in the bobbin")
     return errs
 
 
@@ -763,12 +835,30 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
     settings = _settings_for(pkg, spec.get("settings"), where, errs)
     secrets = _secrets_for(pkg, spec.get("secrets"), where, errs)
     outputs = _outputs_for(pkg, spec.get("outputs"), where, errs)
-    proc = pkg.processor
+    proc = pkg.worker
+    poll = pkg.poll
     msrc = pkg.source
 
     # the source table
     src: dict[str, Any] = {}
-    if "template" in msrc:
+    if poll is not None:
+        # a poll source (14.4): no plugin and no URL (the intake answers 404); the dispatcher's clock enqueues one
+        # tick per window into it, and the tick goes to the poller like any batch goes to a processor
+        for k in (*SOURCE_OVERRIDES, "expect"):
+            if k in spec:
+                errs.append(f"{where}.{k}: bobbin {pname!r} polls (it has no URL, no window and no sender); a poll"
+                            " instance takes every_s and jitter_s")
+        every = spec.get("every_s", poll.get("every_s"))
+        problem = poll_every_problem(every)
+        if problem:
+            errs.append(f"{where}.every_s: {problem}")
+            every = POLL_MIN_EVERY_S
+        jitter = spec.get("jitter_s", poll.get("jitter_s", default_jitter_s(every)))
+        problem = poll_jitter_problem(jitter)
+        if problem:
+            errs.append(f"{where}.jitter_s: {problem}")
+        src.update(kind=POLL_KIND, every_s=every, jitter_s=jitter, span="immediate")
+    elif "template" in msrc:
         src["module"] = TEMPLATE_MODULE
         fixed = msrc["template"] if isinstance(msrc["template"], dict) else {}
         src.update(copy.deepcopy(fixed))
@@ -794,10 +884,16 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
         for n in msrc.get("config") or ():
             if n in settings:
                 src[n] = copy.deepcopy(settings[n])
+    if poll is None:
+        for k in POLL_OVERRIDES:
+            if k in spec:
+                errs.append(f"{where}.{k}: only for a poll bobbin (bobbin {pname!r} receives webhooks)")
     if msrc.get("span") is not None:
         src["span"] = msrc["span"]
     expect = spec.get("expect")
-    if expect is not None and not isinstance(expect, bool):
+    if poll is not None:
+        pass
+    elif expect is not None and not isinstance(expect, bool):
         errs.append(f"{where}.expect: must be true or false")
     elif expect is True:
         if msrc.get("expect_every_s") is None and spec.get("expect_every_s") is None:
@@ -805,19 +901,21 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
         elif msrc.get("expect_every_s") is not None:
             src["expect_every_s"] = msrc["expect_every_s"]
     for k in SOURCE_OVERRIDES:
-        if k in spec:
+        if k in spec and poll is None:
             src[k] = copy.deepcopy(spec[k])
     src["secrets"] = secrets
 
     dest: dict | None = None
     routes: list[dict] = []
-    proc_secrets = sorted(k for k, s in pkg.secrets.items() if isinstance(s, dict) and s.get("processor") is True)
+    # a poll bobbin has no source to verify with, so every secret it declares is its poller's
+    proc_secrets = sorted(k for k, s in pkg.secrets.items()
+                          if isinstance(s, dict) and (poll is not None or s.get("processor") is True))
     if proc is not None:
         dname = f"script:{inst}"
         src["action"] = dname
         dest = {"processor": inst, "max_inflight": 1,
                 "timeout_s": spec.get("timeout_s", proc.get("timeout_s", DEFAULT_PROCESSOR_TIMEOUT_S))}
-        if proc.get("state") is True:
+        if proc.get("state", poll is not None) is True:
             sd = spec.get("state_dir")
             dest["state_dir"] = sd if sd is not None else os.path.join(home, "bobbins", inst)
         elif "state_dir" in spec:
@@ -857,6 +955,7 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
     if isinstance(hdecl, dict) and hdecl.get("type") == "path" and settings.get(HOOKS_SETTING):
         hooks = settings[HOOKS_SETTING]
     meta = {"bobbin": pkg.name, "dir": pkg.dir, "origin": pkg.origin, "processor": proc is not None,
+            "poll": poll is not None,
             "source": inst, "destination": f"script:{inst}" if proc is not None else None,
             "routes": [r["name"] for r in routes], "processor_secrets": proc_secrets, "hooks": hooks,
             "outputs": dict(outputs)}
@@ -1171,19 +1270,132 @@ def _scaffold_requests(name: str, frozen: dict[str, Any]) -> tuple[str, str]:
     return request(SCAFFOLD_SECRET), request("wrong-test-secret")
 
 
-def doc_frontmatter(name: str, provider: str, webhook_docs: str) -> str:
+def doc_frontmatter(name: str, provider: str, webhook_docs: str, *, key: str = "webhook_docs") -> str:
     """The YAML frontmatter README.md, SETUP.md and AGENTS.md start with (the kit's provider row compares it with
-    the manifest's ``[provider]``)."""
-    return f"---\nbobbin: {name}\nprovider: {provider}\nwebhook_docs: {webhook_docs}\n---\n\n"
+    the manifest's ``[provider]``). A poll bobbin's third key is ``api_docs`` (14.4)."""
+    return f"---\nbobbin: {name}\nprovider: {provider}\n{key}: {webhook_docs}\n---\n\n"
+
+
+POLL_SCAFFOLD_EVERY_S = 900
+
+
+def _scaffold_dir(name: str, parent: str) -> tuple[str, str, bool]:
+    """(the new bobbin's directory, its vendor directory, whether the parent is a Python package)."""
+    vendor, product = split_name(name)
+    parent = os.path.abspath(parent)
+    package = os.path.isfile(os.path.join(parent, "__init__.py"))
+    vdir = os.path.join(parent, module_part(vendor) if package else vendor)
+    return os.path.join(vdir, module_part(product) if package else product), vdir, package
+
+
+def scaffold_poll(name: str, parent: str) -> str:
+    """``bobbin new <name> --poll`` (14.4): a poll bobbin with a ``[poll]`` table, a ``poller.py`` that makes a
+    conditional GET through ``ctx.http.get_text``, a ``captures/poll-example.json`` of stub API answers, and the
+    three documents with the poll frontmatter. ``[provider]`` is written with TODO placeholders."""
+    problem = name_problem(name)
+    if problem:
+        raise ValueError(f"bobbin name {problem}")
+    vendor, product = split_name(name)
+    if vendor == RESERVED_VENDOR:
+        raise ValueError(f"bobbin name {name!r}: the {RESERVED_VENDOR}. namespace is reserved for the bobbins shipped"
+                         " with hookspool; name the vendor that runs the service")
+    inst = product
+    d, vdir, package = _scaffold_dir(name, parent)
+    if os.path.exists(d):
+        raise FileExistsError(d)
+    new_vendor = not os.path.isdir(vdir)
+    os.makedirs(os.path.join(d, "captures"))
+    if package and new_vendor:
+        with open(os.path.join(vdir, "__init__.py"), "x", encoding="utf-8"):
+            pass
+    api = "https://api.example.com/v1/items"
+    manifest = (f'name = {_val(name)}\nversion = "1"\nsummary = "TODO: one line on what is polled"\n\n'
+                '[provider]\n'
+                'vendor = "TODO: the company that runs the service, as it writes its name"\n'
+                'product = "TODO: the product or API this bobbin polls"\n'
+                'homepage = "TODO: https://... the product\'s home page"\n'
+                'api_docs = "TODO: https://... the reference of the API the poller calls"\n'
+                'no_push_note = "TODO: one plain sentence on why this service has no push."\n'
+                'no_push_docs = "TODO: https://... the page that shows there is no webhook, push or watch method"\n\n'
+                f'[poll]\nevery_s = {POLL_SCAFFOLD_EVERY_S}\nmodule = "{POLL_MODULE}"\ntimeout_s = 120\nstate = true\n\n'
+                '[secrets.api_key]\ndescription = "TODO: the credential the poller sends to the API"\n\n'
+                '[outputs.changed]\ndescription = "TODO: what one item means"\n')
+    table = (f'[bobbins.{inst}]\nbobbin = "{name}"\n'
+             f'secrets.api_key = {{ file = "/etc/hookspool/secrets/{inst}_api_key" }}\n'
+             f'outputs = {{ changed = "hermes:{inst}-changed" }}\n')
+    front = doc_frontmatter(name, f"{PROVIDER_TODO} {PROVIDER_TODO}", PROVIDER_TODO, key="api_docs")
+    poller = (f'"""{name} poller: asks the API what changed since the last poll (a conditional GET)."""\n'
+              "import json\n\n"
+              f'URL = "{api}"  # TODO: the API endpoint\n\n\n'
+              "def poll(batch, ctx) -> list[dict]:\n"
+              '    """Return items, each {"event_type": ..., <fields>}; [] when nothing changed. Never sleep or loop'
+              ' on time:\n    the dispatcher ticks every every_s."""\n'
+              '    cursor = ctx.load_state("cursor", {"etag": "", "seen": []})\n'
+              '    headers = {"If-None-Match": cursor["etag"]} if cursor["etag"] else {}\n'
+              '    status, text, resp = ctx.http.get_text(URL, headers, bearer=ctx.secret("api_key"), label="items")\n'
+              "    if status == 304:\n        return []\n"
+              "    data = json.loads(text) if text.strip() else {}\n"
+              '    seen = set(cursor["seen"])\n    out = []\n'
+              '    for item in data.get("items") or []:\n'
+              '        if item["id"] not in seen:\n'
+              '            seen.add(item["id"])\n'
+              '            out.append({"event_type": "changed", "key": item["id"], "id": item["id"]})\n'
+              '    ctx.save_state("cursor", {"etag": resp.get("etag", ""), "seen": sorted(seen)[-1000:]})\n'
+              "    return out\n")
+    capture = json.dumps({"description": "TODO: what this poll finds", "now": 1800000000, "items": 1,
+                          "http": [{"method": "GET", "url": api, "status": 200, "headers": {"ETag": '"v1"'},
+                                    "text": json.dumps({"items": [{"id": "item-1"}]})}]}, indent=2) + "\n"
+    files = {MANIFEST: manifest, POLL_MODULE + ".py": poller,
+             os.path.join("captures", "poll-example.json"): capture,
+             os.path.join("captures", "kit.toml"): '# test values for `hookspool bobbin check`\n[secrets]\n'
+                                                   f'api_key = "test-api-key-{inst}"\n',
+             "README.md": front + f"# {name}\n\nTODO: what is polled, and why this service cannot push (the"
+                          " no_push_note).\n\n## How it works\n\nThe dispatcher ticks every `every_s` seconds (plus"
+                          " jitter); `poller.py` asks the API what changed and returns one item per change.\n\n"
+                          "## Secrets\n\n- `api_key`: TODO\n\n## Settings\n\nNone yet.\n\n## Outputs\n\n"
+                          "- `changed`: TODO\n",
+             "SETUP.md": front + f"# Set up {name}\n\nTODO: what to create at the provider (an API key or an OAuth"
+                         " client), with a link to the provider's API documentation. Nothing is registered at the"
+                         " provider: hookspool polls.\n\n## Secrets\n\n"
+                         f"- `api_key`: TODO. Save it to `/etc/hookspool/secrets/{inst}_api_key`, mode 0600, owned by"
+                         " the hookspool user.\n\n"
+                         "## Config\n\nAdd to `config.toml`, then run `hookspool check` and `hookspool reload`:\n\n"
+                         f"```toml\n{table}```\n\n"
+                         f"`every_s` and `jitter_s` in the table change how often it polls. There is no URL and no"
+                         " proxy line.\n\n"
+                         "## Verify\n\n`hookspool status` shows the instance under `polls` with its `next_at`; after"
+                         f" the first tick, `hookspool list --source {inst}` shows a delivered batch.\n\n"
+                         "## Roll back\n\nRemove the table and run `hookspool reload`.\n",
+             "AGENTS.md": front + f"# Set up {name} (for an agent)\n\nThe same procedure as SETUP.md, as steps.\n\n"
+                          "## Needs from the human\n\n"
+                          "- TODO: an account at the provider that may create an API key\n"
+                          f"- the credential `api_key`, written by the human to `/etc/hookspool/secrets/{inst}_api_key`"
+                          " (never pass its value to the agent)\n\n"
+                          "## Steps\n\n"
+                          "1. **Add the config table.** Goal: the dispatcher polls the service. Add to `config.toml`:\n\n"
+                          "   ```toml\n" + "".join("   " + ln + "\n" for ln in table.splitlines()) + "   ```\n\n"
+                          "   Check: `hookspool check` exits 0, then `hookspool reload` exits 0. If `hookspool check`"
+                          " fails: fix what it names, then run both again.\n"
+                          f"2. **Verify.** Goal: one tick is delivered. Run `hookspool status` and read `polls.{inst}`,"
+                          f" then `hookspool list --source {inst}` after `next_at`.\n"
+                          "   Check: a delivered batch is listed. If not: run `hookspool issues` and report it.\n"}
+    for rel, text in files.items():
+        with open(os.path.join(d, rel), "x", encoding="utf-8") as f:
+            f.write(text)
+    return d
 
 
 def scaffold(name: str, parent: str, *, code: bool = False, processor: bool = False,
-             settings: dict[str, Any] | None = None) -> str:
+             settings: dict[str, Any] | None = None, poll: bool = False) -> str:
     """Write a new bobbin directory ``<parent>/<vendor>/<product>`` and return its path: a copy of the ``webhook``
     bobbin with its settings frozen into a fixed ``[source] template`` (``settings`` over the example values), or,
     with ``code``, a ``source.py`` bobbin. The example instance is named after the product. Refuses an invalid name,
     the reserved ``hookspool.`` namespace, an invalid setting or an existing directory (``ValueError`` /
     ``FileExistsError``)."""
+    if poll:
+        if code or processor or settings:
+            raise ValueError("--poll makes a bobbin with no source: it takes no --code, --processor or --set")
+        return scaffold_poll(name, parent)
     problem = name_problem(name)
     if problem:
         raise ValueError(f"bobbin name {problem}")
