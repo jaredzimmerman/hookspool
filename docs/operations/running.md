@@ -22,7 +22,7 @@ Order matters only where noted. Nothing here touches the gateway.
    already has where the provider keeps one (a GitHub hook secret, a Zoom Secret Token): then rolling a sender back needs
    no secret change. `hookspool check` warns about files readable by group or other. Env refs (`{ env = "…" }`) do not rotate
    without a restart; prefer `file` or `env_file`.
-4. **Bobbins and scripts.** Gmail, Calendar and Drive are the built-in `google.gmail`, `google.calendar` and `google.drive` bobbins: nothing to copy.
+4. **Bobbins and scripts.** Gmail, Calendar, Drive and Meet are the built-in `google.gmail`, `google.calendar`, `google.drive` and `google.meet` bobbins: nothing to copy.
    Each instance (`[bobbins.gmail]`, `[bobbins.calendar]` in the config example) keeps its state in
    `<home>/bobbins/<instance>`, which the unit already allows; a `state_dir` you set outside the home goes in
    `ReadWritePaths` and must be private (mode 0700: it holds OAuth tokens in the clear). Each bobbin's
@@ -33,7 +33,7 @@ Order matters only where noted. Nothing here touches the gateway.
 5. **Config.** Copy `config.example.toml` to `/var/lib/hookspool/config.toml`, replace every placeholder, then:
    ```
    sudo -u hookspool env HOOKSPOOL_HOME=/var/lib/hookspool hookspool check      # exit 2 lists what is wrong
-   sudo -u hookspool env HOOKSPOOL_HOME=/var/lib/hookspool hookspool migrate    # creates the spool, schema 2
+   sudo -u hookspool env HOOKSPOOL_HOME=/var/lib/hookspool hookspool migrate    # creates the spool, schema 3
    ```
    `check` reads `hermes.subscriptions_path` and **fails on any `events` filter or `coalesce` block on a Hermes
    route that hookspool feeds**: hookspool coalesces, and a filter on the Hermes side would silently drop part of a

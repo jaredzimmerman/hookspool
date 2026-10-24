@@ -122,7 +122,8 @@ Named coalescing presets. A span sets `quiet_s` and `max_s`, and a source picks 
 | `mail` | 30 | 120 | mail, boards and tickets |
 | `calendar` | 45 | 180 | calendar edits |
 | `sync` | 60 | 300 | bank and data syncs that send several notices per backfill |
-| `immediate` | 0 | 0 | meetings, security, anything where latency matters more than batching |
+| `meeting` | 60 | 900 | a call's start, joins, leaves and end, so a short call is one batch |
+| `immediate` | 0 | 0 | meeting alerts, security, anything where latency matters more than batching |
 
 ```toml
 [spans]
@@ -158,6 +159,28 @@ outputs = { "*" = "script:show_batch" }
 | `expect_every_s`, `dedup_window_s`, `max_body_bytes` | the bobbin's own | the same keys as on a source |
 | `timeout_s` | the manifest's | for a bobbin with a processor: how long one batch may run |
 | `state_dir` | `<home>/bobbins/<instance>` | for a bobbin with a processor: where its state lives. Outside the home it must be listed in the dispatch unit's `ReadWritePaths` and be private (mode 0700), because it holds OAuth tokens in the clear |
+| `every_s` | the manifest's `[poll] every_s` | for a poll bobbin: seconds between polls, at least 60 |
+| `jitter_s` | the manifest's, else 10% of `every_s` (at most 300) | for a poll bobbin: up to this many seconds are added to each wait, from 0 to 300 |
+
+### Poll instances
+
+A poll bobbin is for a service that has no push of any kind (no webhook, no watch channel, no push subscription). Its
+manifest has a `[poll]` table instead of `[source]`, and its instance takes `every_s` and `jitter_s` but no window, `expect`
+or body keys. It has no URL: the intake answers `/hooks/<instance>` with 404, and there is no proxy line. The dispatcher
+enqueues one tick every `every_s` seconds plus a jitter, and the bobbin's `poller.py` asks the service what changed. The
+manifest's `[poll]` keys are in [Writing a bobbin](../bobbins/writing-a-bobbin.md#poll-bobbins).
+
+```toml
+[bobbins.tasks]
+bobbin = "acme.tasks"
+secrets.api_key = { file = "/etc/hookspool/secrets/tasks_api_key" }
+outputs = { changed = "hermes:tasks-changed" }
+every_s = 900                                   # optional: the manifest's value otherwise
+jitter_s = 60                                   # optional: 10% of every_s otherwise, at most 300
+```
+
+`hookspool status` shows each poll instance under `polls`: when the next tick is due, the last delivered tick, and
+whether it is stale. An instance with no delivered tick for three times `every_s` opens the issue `poll:<instance>:stale`.
 
 An instance may not collide with an explicit `[sources.<instance>]` or `[destinations."script:<instance>"]`. An unknown
 key, an unknown bobbin, a setting or output the manifest does not declare, and an output mapped to a destination that does
@@ -181,6 +204,8 @@ One table per source. `<name>` is also the URL path: the intake serves `/hooks/<
 | `store_raw` | `[spool] store_raw` | keep original request bodies for this source |
 | `event_header` | none | for a `hermes` destination: the header that carries the event type (the GitHub example sets `X-GitHub-Event`; a header hookspool sets itself is refused) |
 | `quiet_s`, `max_s`, `max_events`, `max_bytes` | inherited | window fields for this source (see [Windows](#windows)) |
+| `kind` | `"webhook"` | `"poll"` for a poll source; only a poll bobbin's expansion sets it (see [Poll instances](#poll-instances)). A poll source has no `module` and no URL |
+| `every_s`, `jitter_s` | none | a poll source's schedule, copied from its instance; only with `kind = "poll"` |
 
 Further keys depend on the plugin: the Plaid source takes `env`, and the template source takes the keys listed in
 [Writing a bobbin](../bobbins/writing-a-bobbin.md). `check` accepts exactly the keys the plugin declares.

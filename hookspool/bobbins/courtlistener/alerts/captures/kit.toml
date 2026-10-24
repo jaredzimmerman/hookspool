@@ -1,0 +1,5 @@
+# test values for `hookspool bobbin check`: the token the captures carry; it does not cover the body
+body_signed = false
+
+[secrets]
+secret = "test-template-secret-PAYLOAD-SENTINEL-7f3a"

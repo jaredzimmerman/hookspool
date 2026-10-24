@@ -9,6 +9,9 @@ For each watched mailbox (the owner's, and optionally an assistant's own):
 * the owner's mailbox: new inbox mail that asks for the owner's availability becomes ``scheduling``,
   carrying the owner's real free windows from Google free/busy;
 * the assistant's mailbox: new inbox mail becomes ``agent-mail``;
+* mail in the owner's mailbox that matches a mail rule (the ``rules`` and ``rule_packs`` settings, see
+  ``hookspool.mailrules``) becomes one ``mail-matched`` item, ahead of the scheduling classification; a message that
+  also names the assistant is left to the assistant, and the built-in packs never claim promotions/social/forums mail;
 * mail the deployment's hook claims becomes the item the hook returns (``agent-schedule`` in the
   reference deployment), see ``hooks.classify`` in README.md;
 * every pass that read new mail also reports ``mailbox-changed`` (one per mailbox per batch), so a
@@ -22,18 +25,21 @@ of each mailbox is its own ``processor = true`` secret.
 """
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from hookspool import mailrules
 from hookspool.providers import google as G
 
-OUTPUTS = ("scheduling", "agent-mail", "agent-schedule", "mailbox-changed")   # the manifest's [outputs]
+OUTPUTS = ("scheduling", "agent-mail", "agent-schedule", "mail-matched", "mailbox-changed")   # the manifest's [outputs]
 OWNER_STATE = "gmail_push_state"
 HANDLED_KEEP = 300
 MIN_WINDOW_MIN = 45
 DAYS_AHEAD = 7
 SCHEDULE_DAYS_AHEAD = 14
+BULK_LABELS = {"CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS"}   # built-in pack rules leave these alone
 SKIP_LABELS = {"CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS", "SPAM", "TRASH"}
 SCHEDULING = re.compile(
     r"\b(availability|available|avail|what (times?|days?) (work|suit)|times? that work|"
@@ -79,6 +85,12 @@ class Config:
         self.skip_domains = _names(s["skip_domains"])
         self.skip_keywords = [str(k).strip() for k in s["skip_keywords"] if str(k).strip()]
         self.important = _names(s["important_senders"])
+        try:
+            self.rules = mailrules.compile_rules(s["rules"], s["rule_packs"],
+                                                 mailrules.pack_dir(os.path.dirname(os.path.abspath(__file__))))
+        except ValueError as e:                        # a bad rule must not stop scheduling mail: drop the rules, say so once
+            self.rules = []
+            ctx.log(f"mail rules ignored for this batch: {e}")
         self.api = str(s["api_url"])
         self.freebusy_url = str(s["freebusy_url"])
         agent_state = str(s["agent_state"]).strip()
@@ -183,6 +195,15 @@ def _standard_fields(item: dict, msg: dict, account: str) -> dict:
     return item
 
 
+def _rule_item(msg: dict, cfg: Config, account: str, rule, extracted: dict) -> dict:
+    frm = msg["headers"].get("from", "")
+    return _standard_fields({
+        "event_type": "mail-matched", "rule": rule.name, "kind": rule.kind, "from": frm,
+        "from_address": G.address(frm), "subject": msg["headers"].get("subject", ""),
+        "received": _received(msg, cfg.tz), "snippet": (msg["snippet"] or msg["body"])[:200].strip(),
+        "extracted": extracted}, msg, account)
+
+
 def _hook_item(ctx, msg: dict, account: str) -> dict | None:
     """``hooks.classify(message, account, ctx)``: None to fall through, else a complete item."""
     classify = getattr(ctx.hooks, "classify", None) if ctx.hooks is not None else None
@@ -250,6 +271,13 @@ def _pass(ctx, cfg: Config, account: str, now: datetime) -> list[dict]:
         h = msg["headers"]
         if account == cfg.owner and cfg.agent and cfg.agent in (h.get("to", "") + h.get("cc", "")).lower():
             continue                                   # the agent is on this thread: it handles it, no draft here
+        # Rules read the owner's mailbox only: the same mail forwarded into the assistant's mailbox is one mail, not two.
+        if cfg.rules and account == cfg.owner and "INBOX" in msg["labels"] and not set(msg["labels"]) & {"SPAM", "TRASH"}:
+            found = mailrules.first_match(cfg.rules, G.address(h.get("from", "")), h.get("subject", ""), msg["body"],
+                                          bulk=bool(set(msg["labels"]) & BULK_LABELS))
+            if found is not None:                      # a rule claims it: never also a scheduling/agent-mail item
+                hits.append(_rule_item(msg, cfg, account, *found))
+                continue
         if skip_reason(msg, cfg, account):
             continue
         text = msg["body"]
@@ -266,7 +294,7 @@ def _pass(ctx, cfg: Config, account: str, now: datetime) -> list[dict]:
         owner_client = ctx.oauth(cfg.accounts[cfg.owner][1])
         if account == cfg.owner:
             # every request is reported: a coalesced batch can hold several, and one free/busy read serves all
-            plain = [x for x in hits if x["event_type"] != "agent-schedule"]
+            plain = [x for x in hits if x["event_type"] == "scheduling"]
             if plain:
                 windows = free_windows(owner_client, cfg, now)
                 text = "\n".join("- " + w for w in windows) or "- (no free working-hours window in the next week)"

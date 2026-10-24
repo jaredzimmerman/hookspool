@@ -23,7 +23,9 @@ from typing import Any
 
 class StubHttp:
     """Answers ``ctx.http`` calls from the kit's ``[[http]]`` stubs (method + URL prefix); an
-    unmatched call gets ``{}``. A stub with a non-2xx status raises what ``net.Http`` would."""
+    unmatched call gets ``{}``. A stub with a non-2xx status raises what ``net.Http`` would.
+    ``get_text`` answers from a stub's ``text`` (or its ``json``, serialized) and ``headers``, and a 304
+    stub is ``(304, "", headers)``, as ``net.Http.get_text`` returns it; unmatched, it is ``(200, "", {})``."""
 
     def __init__(self, stubs: list[dict], report: dict, fault: str | None = None):
         self.stubs = stubs
@@ -36,9 +38,7 @@ class StubHttp:
     def post(self, url: str, **kw: Any) -> Any:
         return self.request("POST", url, **kw)
 
-    def request(self, method: str, url: str, *, json: Any = None, form: dict | None = None,
-                params: dict | None = None, headers: dict | None = None, bearer: str | None = None,
-                timeout_s: float | None = None, label: str | None = None) -> Any:
+    def _match(self, method: str, url: str) -> tuple[str, dict | None]:
         from hookspool import net
         method = str(method).upper()
         host = urllib.parse.urlsplit(str(url)).hostname or "?"
@@ -51,12 +51,38 @@ class StubHttp:
         base = str(url).split("?", 1)[0]
         for s in self.stubs:
             if str(s.get("method", "GET")).upper() == method and base.startswith(str(s.get("url", ""))):
-                status = int(s.get("status", 200))
-                if not 200 <= status < 300:
-                    cls = net.classify_status(status) or net.Permanent
-                    raise cls(f"{method} {host}: HTTP {status}", status=status)
-                return s.get("json", {})
-        return {}
+                return host, s
+        return host, None
+
+    def request(self, method: str, url: str, *, json: Any = None, form: dict | None = None,
+                params: dict | None = None, headers: dict | None = None, bearer: str | None = None,
+                timeout_s: float | None = None, label: str | None = None) -> Any:
+        from hookspool import net
+        host, s = self._match(method, url)
+        if s is None:
+            return {}
+        status = int(s.get("status", 200))
+        if not 200 <= status < 300:
+            cls = net.classify_status(status) or net.Permanent
+            raise cls(f"{str(method).upper()} {host}: HTTP {status}", status=status)
+        return s.get("json", {})
+
+    def get_text(self, url: str, headers: dict | None = None, *, params: dict | None = None,
+                 bearer: str | None = None, timeout_s: float | None = None,
+                 label: str | None = None) -> tuple[int, str, dict]:
+        from hookspool import net
+        host, s = self._match("GET", url)
+        if s is None:
+            return 200, "", {}
+        status = int(s.get("status", 200))
+        hdrs = {str(k).lower(): str(v) for k, v in (s.get("headers") or {}).items()}
+        if status == 304:
+            return 304, "", hdrs
+        if not 200 <= status < 300:
+            cls = net.classify_status(status) or net.Permanent
+            raise cls(f"GET {host}: HTTP {status}", status=status)
+        text = s["text"] if isinstance(s.get("text"), str) else (json.dumps(s["json"]) if "json" in s else "")
+        return status, text, hdrs
 
 
 def main(argv: list[str]) -> int:
@@ -91,17 +117,23 @@ def main(argv: list[str]) -> int:
         def __init__(self, mod):
             self._mod = mod
 
-        def process(self, batch, ctx):
+        def _call(self, func, batch, ctx):
             report["process_calls"] += 1
             if mode == "raise" and not via_http:
                 raise RuntimeError("bobbin kit: injected failure")
             if mode == "permanent" and not via_http:
                 ctx.fail_permanent("bobbin kit: injected permanent failure")
-            items = self._mod.process(batch, ctx)
+            items = getattr(self._mod, func)(batch, ctx)
             if isinstance(items, list):
                 report["items"] = len(items)
                 report["event_types"] = sorted({str(i.get("event_type")) for i in items if isinstance(i, dict)})
             return items
+
+        def process(self, batch, ctx):
+            return self._call("process", batch, ctx)
+
+        def poll(self, batch, ctx):                 # a poll bobbin's poller.py (14.4)
+            return self._call("poll", batch, ctx)
 
     def load_processor(*a, **kw):
         return _Wrapped(real_load(*a, **kw))

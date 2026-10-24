@@ -143,6 +143,8 @@ def reclassifier(cfg: dict, loader: Callable[[str, str | None], Any] = _config.d
         if source not in cache:
             if source not in (cfg.get("sources") or {}):
                 raise PluginError(f"source {source} is not configured")
+            if _config.is_poll(cfg, source):
+                raise PluginError(f"source {source} is a poll source: it receives no requests")
             cache[source] = load_source(source, _config.source_cfg(cfg, source), loader)
         src = cache[source]
         hs = [(k, v) for k, v in (headers or {}).items() if not k.startswith(":")]
@@ -194,6 +196,8 @@ def _build(cfg: dict, loader) -> _Snapshot:
     sources: dict[str, Source] = {}
     caps: dict[str, int] = {}
     for name, s in (cfg.get("sources") or {}).items():
+        if _config.is_poll(cfg, name):
+            continue                     # a poll source has no URL (14.4): /hooks/<name> answers 404
         src = load_source(name, s if isinstance(s, dict) else {}, loader)
         sources[name] = src
         caps[name] = _config.source_max_body_bytes(cfg, name, plugin_span=src.span)
@@ -689,6 +693,8 @@ def source_test(cfg: dict, name: str, raw: RawRequest, *, now: float | None = No
     result carries no payload, only what the stages decided."""
     if name not in (cfg.get("sources") or {}):
         raise PluginError(f"source {name} is not configured")
+    if _config.is_poll(cfg, name):
+        raise PluginError(f"source {name} is a poll source: it has no URL and receives no requests")
     src = load_source(name, _config.source_cfg(cfg, name), loader)
     t = float(raw.meta["now"]) if now is None and raw.meta.get("now") else (time.time() if now is None else now)
     out: dict[str, Any] = {"source": name, "method": raw.method, "bytes": len(raw.body), "now": t}

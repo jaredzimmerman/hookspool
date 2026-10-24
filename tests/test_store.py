@@ -89,9 +89,9 @@ def test_schema_check_refuses_missing_older_and_newer(tmp_path):
     sqlite3.connect(p).close()
     with pytest.raises(SchemaError, match="older"):
         s.check_schema()
-    assert s.ensure_schema() == [1, 2]
+    assert s.ensure_schema() == [1, 2, 3]
     assert s.ensure_schema() == []                                        # idempotent
-    assert s.check_schema() == 2
+    assert s.check_schema() == 3
     assert len(s.instance_id()) == 12
     s._conn().execute("PRAGMA user_version=99")
     with pytest.raises(SchemaError, match="newer"):
@@ -102,8 +102,9 @@ def test_schema_check_refuses_missing_older_and_newer(tmp_path):
 
 
 def test_migration_files():
-    assert [n for n, _ in store_mod.migrations()] == [1, 2] and store_mod.SCHEMA_VERSION == 2
-    assert [os.path.basename(p) for _, p in store_mod.migrations()] == ["0001_v2.sql", "0002_unwrap.sql"]
+    assert [n for n, _ in store_mod.migrations()] == [1, 2, 3] and store_mod.SCHEMA_VERSION == 3
+    assert [os.path.basename(p) for _, p in store_mod.migrations()] == ["0001_v2.sql", "0002_unwrap.sql",
+                                                                        "0003_polls.sql"]
 
 
 def test_a_schema_1_spool_upgrades_in_place_keeping_its_attempts(tmp_path):
@@ -118,7 +119,7 @@ def test_a_schema_1_spool_upgrades_in_place_keeping_its_attempts(tmp_path):
     c.commit()
     c.close()
     s = Store(p, cfg())
-    assert s.ensure_schema() == [2] and s.check_schema() == 2
+    assert s.ensure_schema() == [2, 3] and s.check_schema() == 3
     assert [(a["batch_id"], a["events_delivered"], a["failed_event_id"]) for a in s.attempts(1)] == [(1, None, None)]
 
 
@@ -134,7 +135,7 @@ def test_an_old_or_missing_spool_names_the_upgrade_steps_that_work_under_the_uni
     s._conn().execute("UPDATE meta SET value='1' WHERE key='schema_version'")
     with pytest.raises(store_mod.SchemaError) as e:
         s.check_schema()
-    assert "older than 2: run `hookspool migrate` (stop the dispatcher first; see deploy/README.md, Upgrading)" \
+    assert "older than 3: run `hookspool migrate` (stop the dispatcher first; see deploy/README.md, Upgrading)" \
         in str(e.value)
 
 

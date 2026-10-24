@@ -1,0 +1,10 @@
+{
+  "description": "two items the poller has not seen",
+  "now": 1800000000,
+  "items": 2,
+  "http": [
+    {"method": "GET", "url": "https://feeds.example.com/v1/items", "status": 200,
+     "headers": {"ETag": "\"v2\"", "Content-Type": "application/json"},
+     "text": "{\"items\": [{\"id\": \"i1\"}, {\"id\": \"i2\"}]}"}
+  ]
+}

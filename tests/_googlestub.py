@@ -1,5 +1,6 @@
-"""A scripted stand-in for the Google endpoints the Gmail, Calendar and Drive bobbins call (Calendar events, Gmail
-history/messages/profile, free/busy, the Drive change feed, the OAuth token endpoint), on 127.0.0.1. Test values only."""
+"""A scripted stand-in for the Google endpoints the Gmail, Calendar, Drive and Meet bobbins call (Calendar events, Gmail
+history/messages/profile, free/busy, the Drive change feed, Meet conference records, participants and sessions, the
+OAuth token endpoint), on 127.0.0.1. Test values only."""
 from __future__ import annotations
 
 import json
@@ -23,6 +24,10 @@ class GoogleStub:
         self.fail_insert = False                # answer 500 to an event insert
         self.drive_start = "start-1"            # the answer to changes.getStartPageToken
         self.drive_pages: list = []             # popped per changes.list: dict body, or int status
+        self.meet_records: dict = {}            # "conferenceRecords/<id>" -> record dict, or int status; absent = 404
+        self.meet_participants: dict = {}       # record name -> list of page bodies (page N answers pageToken "pN"),
+        #                                         or int status
+        self.meet_sessions: dict = {}           # participant name -> list of sessions
         stub = self
 
         class H(BaseHTTPRequestHandler):
@@ -70,6 +75,19 @@ class GoogleStub:
                         nxt = stub.drive_pages.pop(0) if stub.drive_pages else {
                             "changes": [], "newStartPageToken": q.get("pageToken", "")}
                         return self._send(nxt, {"error": "scripted"}) if isinstance(nxt, int) else self._send(200, nxt)
+                    if p.startswith("/meet/"):
+                        name = p[len("/meet/"):]
+                        if name.endswith("/participantSessions"):
+                            part = name[:-len("/participantSessions")]
+                            return self._send(200, {"participantSessions": stub.meet_sessions.get(part, [])})
+                        if name.endswith("/participants"):
+                            pages = stub.meet_participants.get(name[:-len("/participants")], [])
+                            if isinstance(pages, int):
+                                return self._send(pages, {"error": "scripted"})
+                            i = int(q.get("pageToken", "p0")[1:])
+                            return self._send(200, pages[i] if i < len(pages) else {})
+                        rec = stub.meet_records.get(name, 404)
+                        return self._send(rec, {"error": "scripted"}) if isinstance(rec, int) else self._send(200, rec)
                     if p == "/gmail/profile":
                         return self._send(200, stub.profile)
                     if p == "/gmail/history":
@@ -115,6 +133,10 @@ class GoogleStub:
     def drive_settings(self) -> dict[str, str]:
         """The drive bobbin settings that point it at this stub."""
         return {"api_url": self.base + "/drive/"}
+
+    def meet_settings(self) -> dict[str, str]:
+        """The meet bobbin settings that point it at this stub."""
+        return {"api_url": self.base + "/meet/"}
 
     def count(self, method: str, prefix: str) -> int:
         return sum(1 for r in self.requests if r["method"] == method and r["path"].startswith(prefix))

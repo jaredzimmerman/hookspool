@@ -7,6 +7,10 @@ receives (`google.gmail`, `atlassian.trello`, `github.repo`; `hookspool.` is res
 hookspool). A deployment turns one on with a `[bobbins.<instance>]` table that names it (`bobbin = "google.gmail"`); see
 [the configuration reference](../configuration/README.md#bobbinsinstance).
 
+A service with no push of any kind gets a **poll bobbin**. Instead of a source, it has a `poller.py` that the
+dispatcher's clock starts every `every_s` seconds. It has no URL and asks the service what changed
+([Poll bobbins](writing-a-bobbin.md#poll-bobbins)). A service that can push always gets a webhook bobbin, never a poll.
+
 ## The catalogue
 
 Each name links to the bobbin's own README, which lists its settings, secrets, outputs and limits. `SETUP.md` in the
@@ -16,10 +20,14 @@ same directory is the step-by-step setup for a person, and `AGENTS.md` is the sa
 | bobbin | what it does |
 |---|---|
 | [`atlassian.trello`](../../hookspool/bobbins/atlassian/trello/README.md) | Trello board webhook: card and board actions, signed with HMAC-SHA1 over the body and the callback URL |
+| [`cloudflare.notifications`](../../hookspool/bobbins/cloudflare/notifications/README.md) | Cloudflare Notifications webhook destination: one JSON POST per alert, the shared secret sent in the cf-webhook-auth header |
+| [`courtlistener.alerts`](../../hookspool/bobbins/courtlistener/alerts/README.md) | CourtListener alert webhooks: docket, search, RECAP fetch and pray-and-pay events, authenticated by a secret token in the callback URL |
+| [`finnhub.earnings`](../../hookspool/bobbins/finnhub/earnings/README.md) | Finnhub earnings webhook: an announcement per watched symbol, verified by a shared secret header |
 | [`github.repo`](../../hookspool/bobbins/github/repo/README.md) | GitHub repository webhook: HMAC-SHA256 over the raw body; pings are acknowledged and not enqueued |
 | [`google.calendar`](../../hookspool/bobbins/google/calendar/README.md) | Google Calendar push (watch channel): conflicts, meeting-brief requests and a change notice for one calendar |
 | [`google.drive`](../../hookspool/bobbins/google/drive/README.md) | Google Drive push (watch channel): file changes, new files and files shared with the account, by id, never by content |
 | [`google.gmail`](../../hookspool/bobbins/google/gmail/README.md) | Gmail push (Cloud Pub/Sub): new mail in the owner's and an optional assistant's mailbox, read from Gmail's history |
+| [`google.meet`](../../hookspool/bobbins/google/meet/README.md) | Google Meet events (Workspace Events API over Cloud Pub/Sub): a call started, and who attended once it ended |
 | [`hookspool.webhook`](../../hookspool/bobbins/hookspool/webhook/README.md) | Any web service that sends a signed or tokened JSON POST: the template source, configured entirely by settings |
 | [`kaneo.projects`](../../hookspool/bobbins/kaneo/projects/README.md) | Kaneo generic webhook: project and task events, HMAC-SHA256 of the JSON body in X-Kaneo-Signature |
 | [`plaid.items`](../../hookspool/bobbins/plaid/items/README.md) | Plaid webhooks: items, transactions and link events, signed with an ES256 JWT checked against Plaid's published keys |
@@ -36,5 +44,6 @@ and `hookspool bobbin show <vendor>.<product>` prints one bobbin's provider page
 |---|---|
 | [Writing a bobbin](writing-a-bobbin.md) | the layout, the scaffold, the source (config template or code plugin), captures and the checks |
 | [The `hookspool.webhook` bobbin](webhook.md) | covering a service that has no bobbin of its own, and turning that into a dedicated bobbin |
+| [Mail rules and rule packs](mail-rules.md) | recognising mail from services that only send email (orders, reservations, court alerts) with the `google.gmail` bobbin |
 | [Private bobbins and hooks](private-bobbins.md) | changing behaviour without editing a built-in bobbin |
 | [Reviewing a bobbin](review.md) | `hookspool bobbin check`, what green means, and what a maintainer still checks |

@@ -23,6 +23,12 @@ says which of them retry, so do it in a quiet hour. A schema newer than the code
 the previous version while the schema is unchanged; once a migration has run, restore the backup instead
 ([Backup and restore](health-and-repair.md#backup-and-restore)).
 
+## Upgrading to schema 3 (poll sources)
+
+Schema 3 adds one table, `polls`: the dispatcher's clock for [poll bobbins](../bobbins/writing-a-bobbin.md#poll-bobbins).
+The migration only adds a table, so the intake may keep running. Follow the order above. Configs without a poll bobbin
+are unchanged.
+
 ## Upgrading to 0.2 (bobbins)
 
 0.2 turns the built-in services into bobbins: one `[bobbins.<instance>]` table per service in place of a hand-wired

@@ -1,6 +1,13 @@
-"""Google building blocks shared by the ``gmail``, ``gcal`` and ``drive`` bobbins (ARCHITECTURE 14.3.7).
+"""Google building blocks shared by the ``google.gmail``, ``google.calendar``, ``google.drive`` and ``google.meet``
+bobbins (ARCHITECTURE 14.3.7).
 
 Two halves, so that each bobbin stays a thin description of its own service.
+
+**Pub/Sub push (source side).** Gmail and Meet both deliver through a Cloud Pub/Sub push subscription. Pub/Sub cannot
+sign a push, so the subscription's endpoint URL carries a long random ``?token=...`` (an ``X-Push-Token`` header is
+accepted too, for a proxy that moves it), compared in constant time by ``verify_push``. ``push_message`` unwraps the
+envelope (``{"message": {"data": <base64 JSON>, "attributes": {...}, "messageId", "publishTime"}, "subscription"}``)
+or raises ``BadPayload``, so a push that does not decode is quarantined, never dropped.
 
 **Push channels (source side).** Calendar and Drive both use Google's watch channel: an empty POST with
 ``X-Goog-*`` headers, authenticated only by the ``token`` the channel was created with, which Google echoes
@@ -11,8 +18,9 @@ calendar or file id inside ``X-Goog-Resource-URI``) and ``channel_dedup_id`` are
 **API calls (processor side).** Functions that take an ``OAuthClient`` (``ctx.oauth(secret)``): token
 refresh, bearer header, timeouts, retries and the ``Retryable`` / ``Permanent`` mapping are the client's
 (``hookspool/net.py``). What is added here is only what Google's APIs mean: Gmail history paging and message
-parsing, Calendar sync-token listing, event insert and delete, free/busy, and the Drive change feed (a start
-page token, then changes from a stored page token). Three answers are not failures and become exceptions the
+parsing, Calendar sync-token listing, event insert and delete, free/busy, the Drive change feed (a start
+page token, then changes from a stored page token), and a Meet conference record with its participants and their
+sessions (Meet REST v2). Three answers are not failures and become exceptions the
 caller handles: ``HistoryGone`` (Gmail answered 404 to a stale history id), ``SyncGone`` (Calendar answered 410
 to an expired sync token) and ``PageTokenGone`` (Drive answered 404 or 410 to a stored page token); each means
 "start again from a fresh bootstrap". Everything else that is not 2xx is raised by the client as ``Retryable`` or ``Permanent``.
@@ -22,19 +30,72 @@ Base URLs are parameters, so a deployment (or a test) can point a processor else
 from __future__ import annotations
 
 import base64
+import binascii
+import json
 import re
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote, unquote
 
 from ..net import Permanent
-from ..plugin import Request, verify as v
+from ..plugin import BadPayload, Request, verify as v
 
-__all__ = ["CHANNEL_TOKEN_HEADER", "CHANNEL_AUTH_HEADERS", "verify_channel", "resource_state", "ignore_handshake",
+__all__ = ["PUSH_TOKEN_PARAM", "PUSH_TOKEN_HEADER", "PUSH_AUTH_HEADERS", "verify_push", "push_message",
+           "CHANNEL_TOKEN_HEADER", "CHANNEL_AUTH_HEADERS", "verify_channel", "resource_state", "ignore_handshake",
            "channel_payload", "resource_segment", "channel_dedup_id", "GMAIL_API", "CALENDAR_EVENTS_API",
            "FREEBUSY_API", "DRIVE_API", "HistoryGone", "SyncGone", "PageTokenGone", "gmail_profile", "gmail_history", "gmail_message",
            "parse_message", "body_text", "address", "calendar_events", "calendar_insert", "calendar_delete",
-           "freebusy", "drive_start_page_token", "drive_changes", "CHANGE_FIELDS"]
+           "freebusy", "drive_start_page_token", "drive_changes", "CHANGE_FIELDS",
+           "MEET_API", "MEET_RECORD_RE", "meet_conference", "meet_participants", "meet_sessions", "meet_participant",
+           "meet_attendance"]
+
+# ---- Pub/Sub push (source side) ----------------------------------------------------------------------
+PUSH_TOKEN_PARAM = "token"
+PUSH_TOKEN_HEADER = "X-Push-Token"
+PUSH_AUTH_HEADERS = (PUSH_TOKEN_HEADER,)               # never stored; the query string is never stored either
+
+
+def verify_push(req: Request, token: str) -> bool:
+    """The push token of the subscription's endpoint URL (``?token=``, else the ``X-Push-Token`` header), compared
+    in constant time. The query value wins when both are present."""
+    return v.static_token(req.query.get(PUSH_TOKEN_PARAM) or req.header(PUSH_TOKEN_HEADER), token)
+
+
+def _push_data(data: object) -> dict:
+    if not isinstance(data, str) or not data:
+        raise BadPayload("pub/sub message has no data")
+    try:
+        raw = base64.b64decode(data + "=" * (-len(data) % 4), validate=False)
+        inner = json.loads(raw.decode("utf-8"))
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        raise BadPayload("pub/sub data is not base64 JSON") from None
+    if not isinstance(inner, dict):
+        raise BadPayload("pub/sub data is not an object")
+    return inner
+
+
+def push_message(req: Request) -> dict:
+    """The Pub/Sub push envelope of ``req``, unwrapped::
+
+        {"data": <the decoded JSON object>, "attributes": {name: value} (strings only),
+         "messageId", "publishTime", "subscription"}    # the last three only when Pub/Sub sent them
+
+    Raises ``BadPayload`` when the body is not an envelope or its data is not base64 JSON of an object."""
+    env = req.json()
+    msg = env.get("message") if isinstance(env, dict) else None
+    if not isinstance(msg, dict):
+        raise BadPayload("not a pub/sub push envelope")
+    out: dict[str, Any] = {"data": _push_data(msg.get("data"))}
+    attrs = msg.get("attributes")
+    out["attributes"] = ({str(k): val for k, val in attrs.items() if isinstance(val, str)}
+                         if isinstance(attrs, dict) else {})
+    for f in ("messageId", "publishTime"):
+        if isinstance(msg.get(f), str) and msg[f]:
+            out[f] = msg[f]
+    if isinstance(env.get("subscription"), str) and env["subscription"]:
+        out["subscription"] = env["subscription"]
+    return out
+
 
 # ---- push channels (source side) ----------------------------------------------------------------------
 CHANNEL_TOKEN_HEADER = "X-Goog-Channel-Token"
@@ -316,3 +377,106 @@ def drive_changes(client, page_token: str, *, base: str = DRIVE_API, drive_id: s
             return changes, str(d.get("newStartPageToken") or token), True
         token = str(nxt)
     return changes, token, False
+
+
+# ---- Meet REST v2 ---------------------------------------------------------------------------------------
+MEET_API = "https://meet.googleapis.com/v2/"
+MEET_PAGE_SIZE = 250                     # the API's maximum for participants and sessions
+PARTICIPANT_PAGES = 20
+SESSION_PAGES = 5
+SESSION_LOOKUPS = 100                    # participants whose sessions are listed; the rest keep their own times
+MEET_RECORD_RE = re.compile(r"^conferenceRecords/[A-Za-z0-9_-]{1,128}$")
+_MEET_PARTICIPANT_RE = re.compile(r"^conferenceRecords/[A-Za-z0-9_-]{1,128}/participants/[A-Za-z0-9_-]{1,128}$")
+
+
+def _meet_url(base: str, name: str) -> str:
+    return base.rstrip("/") + "/" + quote(name, safe="/")
+
+
+def meet_conference(client, name: str, *, base: str = MEET_API) -> dict | None:
+    """The conference record ``name`` (``conferenceRecords/<id>``): ``{name, startTime, endTime, expireTime, space}``,
+    or None when Meet answers 404 (the record is gone or was never this account's)."""
+    if not MEET_RECORD_RE.match(name or ""):
+        raise Permanent("not a conference record name")
+    rec, status = _status_of(lambda: client.get(_meet_url(base, name), label="meet.conference"))
+    if status == 404:
+        return None
+    if status is not None:
+        raise rec
+    return rec if isinstance(rec, dict) else {}
+
+
+def _meet_list(client, url: str, field: str, label: str, max_pages: int) -> tuple[list[dict], bool]:
+    items: list[dict] = []
+    page = None
+    for _ in range(max_pages):
+        params: dict[str, Any] = {"pageSize": MEET_PAGE_SIZE}
+        if page:
+            params["pageToken"] = page
+        d = client.get(url, params=params, label=label)
+        d = d if isinstance(d, dict) else {}
+        items.extend(x for x in d.get(field) or [] if isinstance(x, dict))
+        page = d.get("nextPageToken")
+        if not page:
+            return items, True
+    return items, False
+
+
+def meet_participants(client, record: str, *, base: str = MEET_API,
+                      max_pages: int = PARTICIPANT_PAGES) -> tuple[list[dict], bool]:
+    """(every participant of the conference record, whether the listing was read to its end)."""
+    if not MEET_RECORD_RE.match(record or ""):
+        raise Permanent("not a conference record name")
+    return _meet_list(client, _meet_url(base, record + "/participants"), "participants", "meet.participants", max_pages)
+
+
+def meet_sessions(client, participant: str, *, base: str = MEET_API,
+                  max_pages: int = SESSION_PAGES) -> list[dict]:
+    """Every session (``{name, startTime, endTime}``) of one participant (``conferenceRecords/<id>/participants/<id>``)."""
+    if not _MEET_PARTICIPANT_RE.match(participant or ""):
+        raise Permanent("not a participant name")
+    return _meet_list(client, _meet_url(base, participant + "/participantSessions"), "participantSessions",
+                      "meet.sessions", max_pages)[0]
+
+
+def meet_participant(raw: dict, sessions: list[dict] | None = None) -> dict:
+    """One participant as plain facts::
+
+        {"display_name", "kind": "signedin" | "anonymous" | "phone" | "unknown",
+         "user_id": the id of a signed-in user ("" otherwise), "first_join", "last_leave", "sessions": count or None}
+
+    ``first_join`` / ``last_leave`` are the participant's own ``earliestStartTime`` / ``latestEndTime``, else the
+    earliest start and latest end of ``sessions``; "" when neither says (``last_leave`` is "" while still in the call)."""
+    kind, who = "unknown", {}
+    for k, f in (("signedin", "signedinUser"), ("anonymous", "anonymousUser"), ("phone", "phoneUser")):
+        if isinstance(raw.get(f), dict):
+            kind, who = k, raw[f]
+            break
+    user = str(who.get("user") or "") if kind == "signedin" else ""
+    starts = sorted(str(s["startTime"]) for s in sessions or [] if s.get("startTime"))
+    ends = sorted(str(s["endTime"]) for s in sessions or [] if s.get("endTime"))
+    return {"display_name": str(who.get("displayName") or ""), "kind": kind,
+            "user_id": user.rpartition("/")[2] if user else "",
+            "first_join": str(raw.get("earliestStartTime") or (starts[0] if starts else "")),
+            "last_leave": str(raw.get("latestEndTime") or (ends[-1] if ends else "")),
+            "sessions": None if sessions is None else len(sessions)}
+
+
+def meet_attendance(client, record: str, *, base: str = MEET_API,
+                    max_lookups: int = SESSION_LOOKUPS) -> tuple[list[dict], dict]:
+    """(each participant of the conference record as ``meet_participant`` facts, in order of first join; stats).
+
+    The sessions of the first ``max_lookups`` participants are listed; later ones keep their own times and carry
+    ``sessions: None``. ``stats``: ``participants`` (count), ``lookups`` (session listings made) and ``truncated``
+    (the participant listing hit its page cap)."""
+    raw, complete = meet_participants(client, record, base=base)
+    out, lookups = [], 0
+    for p in raw:
+        name = str(p.get("name") or "")
+        sessions = None
+        if lookups < max_lookups and _MEET_PARTICIPANT_RE.match(name):
+            sessions = meet_sessions(client, name, base=base)
+            lookups += 1
+        out.append(meet_participant(p, sessions))
+    out.sort(key=lambda x: (x["first_join"] == "", x["first_join"]))
+    return out, {"participants": len(out), "lookups": lookups, "truncated": not complete}

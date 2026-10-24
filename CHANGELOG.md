@@ -6,6 +6,55 @@ an interface, and the entry will say so.
 
 ## [Unreleased]
 
+### Added
+
+- Poll sources (ARCHITECTURE 14.4), for services with no push at all: a bobbin may declare `[poll]` (`every_s` >= 60,
+  `jitter_s`, `module = "poller"`) in place of `[source]`, and its `poller.py` answers `poll(batch, ctx)` with the same
+  batch, context, journal, staged state and emits as a processor. The dispatcher keeps a durable schedule in the new
+  `polls` table (schema 3, `0003_polls.sql`; run `hookspool migrate`) and enqueues one tick per window
+  (`{"tick", "instance"}`, key `poll`, dedup id `poll:<instance>:<scheduled next_at>`) in the same transaction as the
+  `next_at` update: a missed window makes one tick, never a burst, and no tick is enqueued while the previous one is
+  undelivered. A poll instance has no URL (`/hooks/<instance>` is 404) and may override `every_s` and `jitter_s`.
+  `hookspool status` shows each poll under `polls`, and `poll:<instance>:stale` opens after three windows without a
+  delivered tick.
+- `ctx.http.get_text(url, headers)` (and on `ctx.oauth(name)`): `(status, text, response_headers)`, with a 304 returned,
+  not raised, so a poller can make a conditional GET.
+- `hookspool bobbin new <vendor>.<product> --poll` scaffolds a poll bobbin. The conformance kit runs `poller.py` once per
+  `captures/poll-*.json` (stub API answers), and its `provider` row asks a poll bobbin for `api_docs`, `no_push_note` and
+  `no_push_docs` in place of `webhook_docs` and `signature_docs`; the documents' frontmatter carries `api_docs`.
+- The `google.meet` bobbin (`hookspool/bobbins/google/meet/`): Google Meet events from a Google Workspace Events
+  subscription on a user, delivered through a Cloud Pub/Sub push with the token in the URL. The source keys each
+  CloudEvent by its conference record and dedups on `ce-id`. The processor returns `meeting-started` for the first
+  batch of a call (no API call) and `meeting-ended` once the call ends: the conference id, space, start, end, and each
+  participant's display name, kind (`signedin`, `anonymous`, `phone`), user id, first join and last leave, read from
+  Meet REST v2. Subscription lifecycle events become `subscription-changed`. SETUP.md and AGENTS.md cover the topic,
+  the publisher grant, the numeric user id the target needs, and the daily renewal call. No transcripts.
+- A `meeting` span preset (60 s quiet, 900 s max), so a short call's start, joins, leaves and end are one batch.
+- `hookspool.providers.google`: `verify_push` and `push_message` (the Pub/Sub push token and envelope, now shared by
+  `google.gmail` and `google.meet`), and the Meet REST v2 helpers `meet_conference`, `meet_participants`,
+  `meet_sessions`, `meet_participant` and `meet_attendance`.
+- Mail rules in the `google.gmail` bobbin: the `rules` and `rule_packs` settings recognise mail from services that have no API or
+  push (orders, deliveries, reservations, court alerts) by sender and subject, and report one `mail-matched` item per message
+  with the rule name, its `kind` and the values the rule extracted. Seven built-in packs ship as data files under
+  `rule-packs/` (`amazon-orders`, `doordash-orders`, `resy-reservations`, `opentable-reservations`, `tock-reservations`,
+  `sevenrooms-reservations`, `courtlistener-alerts`); all are marked `unverified`. `hookspool bobbin show` lists a bobbin's
+  rule packs. The engine is `hookspool/mailrules.py`; the guide is `docs/bobbins/mail-rules.md`. Pack rules ask for order or
+  reservation context in the subject, veto policy, marketing, account and review-request subjects (`skip_subject`) and leave
+  promotions mail alone; `skip` and `skip_subject` match whole words and ignore double-quoted text in the subject; rules read the
+  owner's mailbox only; a bad rule drops the rules for that batch with one log line instead of failing it.
+- A pass over an owner's mailbox no longer reads free/busy unless a scheduling request was found.
+- The `cloudflare.notifications` bobbin (`hookspool/bobbins/cloudflare/notifications/`): a Cloudflare
+  Notifications webhook destination, a template bobbin with no Python. It checks the shared secret sent in the
+  `cf-webhook-auth` header, keys alerts on the notification policy's name and de-duplicates on the body's digest.
+- The `finnhub.earnings` bobbin (`hookspool/bobbins/finnhub/earnings/`): Finnhub earnings webhook, a fixed
+  shared-secret template (`X-Finnhub-Secret`) keyed by `data.0.symbol`, deduplicated by body SHA-256, span `immediate`.
+  Finnhub's webhook documentation is thin; the README says which parts are assumed and must be checked on a real delivery.
+- The `courtlistener.alerts` bobbin (`hookspool/bobbins/courtlistener/alerts/`): CourtListener alert webhooks (docket,
+  search, RECAP fetch, old docket alerts report and pray-and-pay events). CourtListener does not sign its deliveries, so
+  a fixed `url-token` template checks a secret token in the endpoint URL; `Idempotency-Key` is the dedup header and the
+  event type (`webhook.event_type`) is the batch key. README.md states that webhooks are agreement-based for
+  organizations and that alerts count against the membership allowance.
+
 ## [0.2.0] - 2026-10-23
 
 ### Added

@@ -8,8 +8,9 @@ push subscription POSTs each message to this endpoint as the usual Pub/Sub envel
 
 Verification is the push token: Pub/Sub cannot sign a push, so the subscription's endpoint URL
 carries a long random ``?token=...`` that only our subscription knows (an ``X-Push-Token`` header
-is accepted too, for a proxy that moves it). It is compared in constant time. The query string is
-never logged or stored. Hardening for later: verify the OIDC ``Authorization`` token Pub/Sub can
+is accepted too, for a proxy that moves it). It is compared in constant time; the check and the envelope
+decoding are ``hookspool.providers.google``'s (``verify_push``, ``push_message``), shared with ``google.meet``. The
+query string is never logged or stored. Hardening for later: verify the OIDC ``Authorization`` token Pub/Sub can
 attach (ARCHITECTURE section 10).
 
 ``payload`` is the decoded notification, normalised to ``{emailAddress, historyId, messageId,
@@ -30,46 +31,25 @@ results go. Secret: ``push_token``.
 """
 from __future__ import annotations
 
-import base64
-import binascii
-import json
-
-from hookspool.plugin import BadPayload, Request, Secrets, verify as v
+from hookspool.plugin import BadPayload, Request, Secrets
+from hookspool.providers import google as G
 
 name = "gmail"
 secrets = ("push_token",)
-auth_headers = ("X-Push-Token",)
+auth_headers = G.PUSH_AUTH_HEADERS
 keep_headers = ()
 span = "mail"
 expect_every_s = None
 sender_retries = True
 
-TOKEN_PARAM = "token"
-
 
 def verify(req: Request, secrets: Secrets) -> bool:
-    return v.static_token(req.query.get(TOKEN_PARAM) or req.header("X-Push-Token"), secrets["push_token"])
-
-
-def _decode(data: object) -> dict:
-    if not isinstance(data, str) or not data:
-        raise BadPayload("pub/sub message has no data")
-    try:
-        raw = base64.b64decode(data + "=" * (-len(data) % 4), validate=False)
-        inner = json.loads(raw.decode("utf-8"))
-    except (binascii.Error, UnicodeDecodeError, ValueError):
-        raise BadPayload("pub/sub data is not base64 JSON") from None
-    if not isinstance(inner, dict):
-        raise BadPayload("pub/sub data is not an object")
-    return inner
+    return G.verify_push(req, secrets["push_token"])
 
 
 def payload(req: Request) -> dict:
-    env = req.json()
-    msg = env.get("message") if isinstance(env, dict) else None
-    if not isinstance(msg, dict):
-        raise BadPayload("not a pub/sub push envelope")
-    inner = _decode(msg.get("data"))
+    msg = G.push_message(req)
+    inner = msg["data"]
     addr = inner.get("emailAddress")
     if not isinstance(addr, str) or "@" not in addr:
         raise BadPayload("notification has no emailAddress")
@@ -77,11 +57,11 @@ def payload(req: Request) -> dict:
     if isinstance(history, bool) or not isinstance(history, (str, int)) or str(history) == "":
         raise BadPayload("notification has no historyId")
     out = {"emailAddress": addr.strip().lower(), "historyId": str(history)}
-    for src, dst in (("messageId", "messageId"), ("publishTime", "publishTime")):
-        if isinstance(msg.get(src), str) and msg[src]:
-            out[dst] = msg[src]
-    if isinstance(env.get("subscription"), str) and env["subscription"]:
-        out["subscription"] = env["subscription"]
+    for f in ("messageId", "publishTime"):
+        if f in msg:
+            out[f] = msg[f]
+    if "subscription" in msg:
+        out["subscription"] = msg["subscription"]
     return out
 
 

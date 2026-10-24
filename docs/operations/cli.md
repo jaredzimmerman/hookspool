@@ -68,7 +68,13 @@ separate services so that either can be restarted without the other.
 Prints one JSON document: whether the spool is writable, the dispatcher heartbeat, batch counts by state, the oldest
 pending age, each destination's breaker state and each source's last event age. It is the same document `/healthz`
 serves. `degraded` lists soft problems in words ("dispatcher has not run", dead batches, an open breaker, a silent
-source).
+source, a stale poll).
+
+`polls` has one entry per poll instance ([poll bobbins](../bobbins/writing-a-bobbin.md#poll-bobbins)): `every_s`,
+`next_at` and `next_in_s` (when the next tick is due), `last_tick_at`, `delivered_at`, `delivered_tick_at` and
+`delivered_age_s` (the last tick the poller finished), `pending` (a tick is still waiting or dead, so the next window
+is skipped), `skipped` (how many windows were skipped that way) and `stale` (no tick delivered for three times
+`every_s`; the issue `poll:<instance>:stale` is open).
 
 ### hookspool list
 
@@ -257,7 +263,7 @@ and `check`:
 | form | does |
 |---|---|
 | `bobbin list` | the bobbins found (built in, then each `[spool] bobbin_path` directory): name, version, where it comes from, summary, and the `[bobbins.<instance>]` tables that use it |
-| `bobbin show <vendor>.<product>` | one bobbin: its provider and the provider's pages, its secrets, settings (type, required, default), outputs, span, whether the sender retries, the reverse-proxy note |
+| `bobbin show <vendor>.<product>` | one bobbin: its provider and the provider's pages, its secrets, settings (type, required, default), outputs, span, whether the sender retries, the reverse-proxy note, and the rule packs a bobbin ships (`google.gmail`, see [Mail rules](../bobbins/mail-rules.md)) |
 | `bobbin expand [<instance>]` | the ordinary tables one instance (or every instance) expands to, as TOML. Secret references stay references and `HOOKSPOOL_SECRET_REFS` is shown by secret name only: no secret value is ever read or printed. Exit 2 with every problem when the bobbins do not expand |
 | `bobbin new <vendor>.<product>` | a new bobbin directory, `<dir>/<vendor>/<product>/` (`--dir`, default the current directory; a new vendor directory in a Python package gets an empty `__init__.py`): a copy of the `hookspool.webhook` bobbin with its settings frozen into a fixed `[source] template` (`--set` chooses them), a `[provider]` table, an accepted and a rejected capture signed for the scheme, README, SETUP.md and AGENTS.md with their frontmatter. It passes `bobbin check` once its TODO placeholders are filled in |
 | `bobbin check <dir>` | run the conformance kit on one bobbin directory and print its scorecard: each check, pass / fail / skip, and every problem as `file:line` with how to fix it. Exit 0 when every required check passes, 1 when one fails, 2 when `<dir>` is not a bobbin. It reads no config and no real secret. CI runs this same command on every changed bobbin ([Reviewing a bobbin](../bobbins/review.md)) |
@@ -271,6 +277,7 @@ name for `new` and the bobbin directory for `check`.
 | `--set NAME=VALUE` | `new`: freeze a webhook setting (`scheme`, `header`, `prefix`, `key`, `dedup`, ...) into the template; the value is TOML (`--set 'key=["id"]'`) or a bare string, an empty value removes the key, and a key that takes only a string keeps the text as written (`--set prefix=1` is the string `1`); repeatable. `callback_url` (hmac-sha1-base64-url) is used for the captures and the kit instance but stays a required setting of the new bobbin, not part of its template. A value the template refuses stops `new` with the template's message |
 | `--code` | `new`: a `source.py` instead of the template |
 | `--processor` | `new`: include a `processor.py` and a `[processor]` table |
+| `--poll` | `new`: a poll bobbin for a service with no push at all: a `[poll]` table instead of `[source]`, a `poller.py` that makes a conditional GET, a `captures/poll-example.json` of stub API answers, and the documents with the poll frontmatter. It takes no `--code`, `--processor` or `--set` |
 | `--markdown` | `list`: print the catalogue table of `docs/bobbins/README.md` (name, linked to its README, and the manifest's summary), generated from the manifests |
 | `--report text\|md\|json` | `check`: the scorecard as aligned text (default), GitHub Markdown, or JSON (schema `hookspool.bobbin-check/1`) |
 | `--strict` | `check`: advisory checks (`provider-links`, `scope`) fail the run too |

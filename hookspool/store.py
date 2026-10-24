@@ -24,6 +24,7 @@ import fcntl
 import hashlib
 import json
 import os
+import random
 import re
 import secrets as _secrets
 import sqlite3
@@ -40,7 +41,7 @@ CLASSES = ("transport", "throttle", "batch", "config", "permanent", "poison", "q
 QUARANTINE = "quarantine"
 KEY_MAX_BYTES = 512
 ERROR_MAX = 500
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
 EMIT_KEYS = ("source", "key", "action", "payload", "route", "event_type", "dedup_id",
              "quiet_s", "max_s", "max_events", "max_bytes", "not_before")
@@ -53,7 +54,7 @@ HEARTBEAT_STALE_S = 30.0
 # the process at an exact line. Always None in production.
 # Points: enqueue:after_batch, enqueue:after_event, enqueue:after_seal, enqueue:after_tee, seal:mid,
 #         claim:after_update, deliver:after_emits, mark:after_update, recover:mid,
-#         replay:mid, quarantine:mid, reclassify:mid, split:mid, prune:mid
+#         replay:mid, quarantine:mid, reclassify:mid, split:mid, prune:mid, poll:after_enqueue
 _test_hook: Callable[[str], None] | None = None
 
 
@@ -90,6 +91,26 @@ class EnqueueResult:
     duplicate: bool = False  # dedup hit; nothing changed (intake answers "duplicate")
     replayed: bool = False   # dedup hit on a dead batch, which was replayed ("replayed")
     tees: tuple = ()         # one EnqueueResult per tee copy, in the order the tees were given
+
+
+@dataclass(frozen=True)
+class PollTick:
+    """What one ``poll_tick`` did (14.4). ``action`` is ``scheduled`` (a new instance's first ``next_at``),
+    ``rescheduled`` (``next_at`` was further out than a window allows, after a reload shortened ``every_s``),
+    ``enqueued`` (one tick event), ``duplicate`` (the tick's dedup id was already there: nothing added),
+    ``skipped`` (the previous tick is not delivered yet: no tick, ``next_at`` moved) or ``not_due``."""
+    action: str
+    next_at: float
+    batch_id: int | None = None
+    event_id: int | None = None
+
+
+POLL_PENDING = (*PENDING, "dead")      # a previous tick in any of these holds back the next one
+
+
+def poll_dedup_id(instance: str, scheduled: float) -> str:
+    """The dedup id of the tick scheduled at ``scheduled`` (14.4)."""
+    return f"poll:{instance}:{scheduled:.3f}"
 
 
 @dataclass(frozen=True)
@@ -1031,6 +1052,106 @@ class Store:
     def destination_list(self) -> list[dict]:
         return [dict(r) for r in self._read("SELECT * FROM destinations ORDER BY name")]
 
+    # ---- poll clock (§14.4) ---------------------------------------------------------------------------------
+    def poll_rows(self) -> dict[str, dict]:
+        """Every ``polls`` row by instance (a read; the dispatcher calls ``poll_tick`` only for the due ones)."""
+        return {r["instance"]: dict(r) for r in self._read("SELECT * FROM polls")}
+
+    @staticmethod
+    def _poll_delivered_txn(c, row: dict) -> dict:
+        """Record the last tick batch's delivery in its row, once (``delivered_at`` / ``delivered_tick_at``)."""
+        bid = row.get("last_batch_id")
+        if bid is None:
+            return row
+        b = c.execute("SELECT state, delivered_at FROM batches WHERE id=?", (bid,)).fetchone()
+        if b is not None and b["state"] == "delivered" and b["delivered_at"] is not None \
+                and b["delivered_at"] != row.get("delivered_at"):
+            c.execute("UPDATE polls SET delivered_at=?, delivered_tick_at=? WHERE instance=?",
+                      (b["delivered_at"], row.get("last_tick_at"), row["instance"]))
+            row = dict(row, delivered_at=b["delivered_at"], delivered_tick_at=row.get("last_tick_at"))
+        return row
+
+    def poll_tick(self, instance: str, action: str, every_s: float, jitter_s: float = 0.0, *,
+                  now: float | None = None, jitter: Callable[[float], float] | None = None) -> PollTick:
+        """The clock of one poll source, in one transaction (14.4).
+
+        A new instance gets ``next_at = now + jitter``. When ``now >= next_at``: if the previous tick's batch
+        is still pending or dead, nothing is enqueued (a slow or failing poller never piles up ticks); else ONE
+        event ``{"tick": <unix s>, "instance": <instance>}`` goes into source ``instance``, key ``poll``, with
+        the dedup id ``poll:<instance>:<scheduled next_at>`` and an immediate window. Either way ``next_at``
+        becomes ``now + every_s + jitter``, so a missed window (a stopped dispatcher) yields one tick, never a
+        burst. The enqueue and the ``next_at`` update commit together. ``jitter(jitter_s)`` draws the jitter
+        (uniform in ``[0, jitter_s]`` by default)."""
+        now = self.now() if now is None else now
+        draw = jitter or (lambda j: random.uniform(0.0, j))
+        every_s, jitter_s = float(every_s), max(0.0, float(jitter_s))
+
+        def nxt() -> float:
+            return now + every_s + min(jitter_s, max(0.0, float(draw(jitter_s))))
+        ev = self._prepare(instance, "poll", action, {"tick": int(now), "instance": instance}, event_type="poll",
+                           quiet_s=0, max_s=0)
+
+        def fn(c):
+            row = c.execute("SELECT * FROM polls WHERE instance=?", (instance,)).fetchone()
+            if row is None:
+                first = now + min(jitter_s, max(0.0, float(draw(jitter_s))))
+                c.execute("INSERT INTO polls (instance, next_at, created_at) VALUES (?, ?, ?)", (instance, first, now))
+                return PollTick("scheduled", first)
+            row = self._poll_delivered_txn(c, dict(row))
+            sched = float(row["next_at"])
+            if sched > now + every_s + jitter_s:
+                n = nxt()
+                c.execute("UPDATE polls SET next_at=? WHERE instance=?", (n, instance))
+                return PollTick("rescheduled", n)
+            if now < sched:
+                return PollTick("not_due", sched)
+            n = nxt()
+            prev = row.get("last_batch_id")
+            if prev is not None:
+                b = c.execute("SELECT state FROM batches WHERE id=?", (prev,)).fetchone()
+                if b is not None and b["state"] in POLL_PENDING:
+                    c.execute("UPDATE polls SET next_at=?, skipped = skipped + 1 WHERE instance=?", (n, instance))
+                    return PollTick("skipped", n, batch_id=int(prev))
+            res = self._enqueue_txn(c, now, dict(ev, dedup_id=poll_dedup_id(instance, sched)))
+            _hook("poll:after_enqueue")
+            c.execute("UPDATE polls SET next_at=?, last_tick_at=?, last_batch_id=COALESCE(?, last_batch_id)"
+                      " WHERE instance=?", (n, sched, res.batch_id, instance))
+            return PollTick("duplicate" if res.duplicate else "enqueued", n, batch_id=res.batch_id,
+                            event_id=res.event_id)
+        return self._write(fn)
+
+    def poll_refresh(self, instance: str) -> dict | None:
+        """The instance's ``polls`` row, with its last tick's delivery recorded (a write only when it changed)."""
+        def fn(c):
+            row = c.execute("SELECT * FROM polls WHERE instance=?", (instance,)).fetchone()
+            return None if row is None else self._poll_delivered_txn(c, dict(row))
+        return self._write(fn)
+
+    def poll_status(self, instance: str, every_s: float, now: float | None = None) -> dict:
+        """One poll instance for ``status`` (a read): its schedule, its last delivered tick, and ``stale``
+        (no tick delivered for longer than 3 x ``every_s``, counted from when it was first scheduled)."""
+        now = self.now() if now is None else now
+        c = self._conn()
+        row = c.execute("SELECT * FROM polls WHERE instance=?", (instance,)).fetchone()
+        out: dict[str, Any] = {"every_s": every_s, "next_at": None, "next_in_s": None, "last_tick_at": None,
+                               "delivered_at": None, "delivered_tick_at": None, "delivered_age_s": None,
+                               "pending": False, "skipped": 0, "stale": False}
+        if row is None:
+            return out
+        row = dict(row)
+        delivered, tick = row["delivered_at"], row["delivered_tick_at"]
+        if row["last_batch_id"] is not None:
+            b = c.execute("SELECT state, delivered_at FROM batches WHERE id=?", (row["last_batch_id"],)).fetchone()
+            if b is not None and b["state"] == "delivered" and b["delivered_at"] is not None:
+                delivered, tick = b["delivered_at"], row["last_tick_at"]
+            out["pending"] = b is not None and b["state"] in POLL_PENDING
+        base = delivered if delivered is not None else row["created_at"]
+        out.update(next_at=row["next_at"], next_in_s=round(row["next_at"] - now, 1), last_tick_at=row["last_tick_at"],
+                   delivered_at=delivered, delivered_tick_at=tick,
+                   delivered_age_s=None if delivered is None else round(now - delivered, 1),
+                   skipped=int(row["skipped"]), stale=now - float(base) > 3 * float(every_s))
+        return out
+
     # ---- issues (§11.4) ------------------------------------------------------------------------------------
     @staticmethod
     def _issue_open_txn(c, fingerprint, kind, now, *, destination=None, route=None, sample_batch_id=None,
@@ -1351,6 +1472,10 @@ class Store:
         for name, s in sorted(sources.items()):
             if s.get("silent"):
                 degraded.append(f"source {name} silent")
+        polls = {name: self.poll_status(name, p.every_s, now) for name, p in _config.poll_sources(self.config).items()}
+        for name, p in sorted(polls.items()):
+            if p["stale"]:
+                degraded.append(f"poll {name} stale (no tick delivered for over 3 x every_s)")
         if hb is None or hb > HEARTBEAT_STALE_S:
             degraded.append("dispatcher heartbeat stale" if hb is not None else "dispatcher has not run")
         spool_bytes = 0
@@ -1370,4 +1495,5 @@ class Store:
                                "pid": int(meta["dispatcher_pid"]) if meta.get("dispatcher_pid") else None},
                 "spool": {"last_enqueue_age_s": age("last_enqueue_at")},
                 "batches": counts, "oldest_pending_age_s": oldest, "destinations": dests, "sources": sources,
+                "polls": polls,
                 "issues_open": issues_open, "spool_bytes": spool_bytes, "disk_free_bytes": free}

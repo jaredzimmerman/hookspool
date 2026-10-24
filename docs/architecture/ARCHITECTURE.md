@@ -152,6 +152,9 @@ Runtime state, one row per destination name (created on first use).
 ### `alerts`
 `kind PRIMARY KEY, last_at, suppressed` — the persisted rate limit for outbound alerts.
 
+### `polls`
+`instance PRIMARY KEY, next_at, last_tick_at, last_batch_id, delivered_at, delivered_tick_at, skipped, created_at` (schema 3): the dispatcher's durable clock for poll sources (14.4), one row per poll instance. `last_tick_at` is the scheduled time of the last enqueued tick and `last_batch_id` the batch it joined; `delivered_at` / `delivered_tick_at` record that batch's delivery; `skipped` counts windows passed while the previous tick was undelivered.
+
 ### `sources`
 Not a table. Sources and routes are configuration. Per-source runtime state that must persist (last event time for `expect_every_s`) lives in `meta`.
 
@@ -256,7 +259,8 @@ Consequences to know: `immediate` still coalesces whatever arrives within one po
 | `mail` | 30 | 120 | mail, boards, tickets |
 | `calendar` | 45 | 180 | calendar edits (one editing session = one pass) |
 | `sync` | 60 | 300 | bank and data syncs that send several notifications per backfill |
-| `immediate` | 0 | 0 | meetings, security, anything where latency matters more than batching |
+| `meeting` | 60 | 900 | a call's start, joins, leaves and end (a short call = one batch) |
+| `immediate` | 0 | 0 | meeting alerts, security, anything where latency matters more than batching |
 
 **Ordering inside a batch** is `events.id` order, which is commit order. **Ordering across batches** of a group is FIFO (section 6.1).
 
@@ -451,7 +455,7 @@ Quarantine exists because of this table: with GitHub, a plugin bug that answered
 Both produce the same JSON:
 
 ```json
-{"ok": true, "degraded": [], "schema": 2,
+{"ok": true, "degraded": [], "schema": 3,
  "dispatcher": {"alive": true, "heartbeat_age_s": 4.0, "pid": 4242},
  "spool": {"last_enqueue_age_s": 12.0, "writable_checked_age_s": 20.0},
  "batches": {"open": 3, "sealed": 1, "retry": 0, "leased": 1, "delivered": 1412, "dead": 0, "dropped": 0, "quarantined": 0},
@@ -459,10 +463,12 @@ Both produce the same JSON:
  "destinations": {"hermes:github-ci": {"state": "closed", "inflight": 1, "oldest_pending_age_s": 41.0},
                   "script:gmail": {"state": "open", "opened_at": 1.7e9, "cooldown_s": 600, "oldest_pending_age_s": 259000.0, "last_error": "connection refused"}},
  "sources": {"github": {"last_event_age_s": 12.0}, "gcal": {"last_event_age_s": 90000.0, "expected_every_s": 86400, "silent": true}},
+ "polls": {"tasks": {"every_s": 900, "next_at": 1.7e9, "next_in_s": 412.0, "last_tick_at": 1.7e9, "delivered_at": 1.7e9,
+                     "delivered_tick_at": 1.7e9, "delivered_age_s": 488.0, "pending": false, "skipped": 0, "stale": false}},
  "issues_open": 1, "spool_bytes": 10485760, "disk_free_bytes": 40000000000}
 ```
 
-`/healthz` is 200 when `ok`, 503 when the spool is unwritable or a hard limit is active, and 200 with `degraded` listing soft problems (dead or quarantined batches, open breaker, silent source, dispatcher heartbeat older than 30 s). Writability is proven by the last successful enqueue when one happened in the last 30 s, otherwise by one tiny write at most every 30 s; a scrape never forces an fsync by itself. Per-destination `oldest_pending_age_s`, `opened_at` and `cooldown_s` make "degraded" actionable.
+`/healthz` is 200 when `ok`, 503 when the spool is unwritable or a hard limit is active, and 200 with `degraded` listing soft problems (dead or quarantined batches, open breaker, silent source, stale poll, dispatcher heartbeat older than 30 s). Writability is proven by the last successful enqueue when one happened in the last 30 s, otherwise by one tiny write at most every 30 s; a scrape never forces an fsync by itself. Per-destination `oldest_pending_age_s`, `opened_at` and `cooldown_s` make "degraded" actionable.
 
 ### 11.2 Metrics
 
@@ -484,6 +490,7 @@ An issue is a grouped failure with a fingerprint:
 |---|---|---|---|
 | `delivery` | `delivery:<destination>:<reason class>` (reason class: `unreachable`, `http_5xx`, `timeout`, `script_exit`, `batch` (a counted failure on a non-script destination), `exhausted` (a batch `dead` at `max_attempts`), `permanent`, `poison`, `ignored`) | a batch going `dead`, a breaker trip, a counted failure streak ≥ 3, a Hermes `ignored`/`coalesced` answer | a successful attempt on that destination (for `permanent`/`poison`/`exhausted`: only when the dead batches for it are replayed or dropped; for `ignored`: operator `resolve`) |
 | `source_silent` | `source_silent:<source>` | no event for > `expect_every_s` | the next event |
+| `source_silent` | `poll:<instance>:stale` | a poll source (14.4) with no delivered tick for > 3 x `every_s` (counted from when it was first scheduled) | the next delivered tick |
 | `spool` | `spool:<limit>` | a backpressure limit engaged | the limit clearing |
 | `config` | `config:file` (a reload that failed validation), `config:plugin:<source>` (quarantine), `config:delivery:<destination>` (a `config`-class outcome) | the failing check | a reload that succeeded / the quarantine batches reclassified or dropped / a successful attempt |
 
@@ -637,7 +644,9 @@ hookspool/bobbins/<vendor>/__init__.py   built in only: empty (no code the vendo
     bobbin.toml                        the manifest, with its [provider] table (required)
     source.py                           a code source plugin (14.1), optional
     processor.py                        post-commit work, optional (14.3.4)
+    poller.py                           a poll bobbin's poller, in place of a source and a processor (14.4)
     captures/*.http                     conformance captures (docs/bobbins/writing-a-bobbin.md, "Capture files"), required
+    rule-packs/*.toml                   data only, optional: ready-made mail rule packs a mail bobbin offers (14.3.7, docs/bobbins/mail-rules.md)
     README.md                           what it does, how it works, settings, outputs, limits; required
     SETUP.md                            human setup: provider-side steps, secrets to create, config table, verify, rollback; required
     AGENTS.md                           agent setup: the same procedure as numbered, executable steps (14.3.8); required
@@ -731,7 +740,7 @@ event" (the only key that may stand for more than one event type). `check` valid
 loads: unknown keys, a name that is not `<vendor>.<product>` (14.3.1) or not its `<vendor>/<product>/` directory,
 both or neither of `module`/`template`, a span that is not a preset, a setting without `type`, a `default` of the
 wrong type, a non-required setting without `default`, a `[provider]` value that is not a string, and an output key
-that is not an event-type token or `"*"` are errors.
+that is not an event-type token or `"*"` are errors. A poll bobbin has `[poll]` in place of `[source]` (14.4).
 
 **Provider and frontmatter.** `[provider]` is the bobbin's structured frontmatter, and the conformance kit
 (`hookspool bobbin check`, the `provider` row) requires it: `vendor` and `product` (display names), `homepage`,
@@ -909,7 +918,8 @@ emit lines ever reaches stdout. Unmapped event types are dropped with one log li
 - `hookspool bobbin list` — bobbins found (built-in, then each `spool.bobbin_path` dir): the `<vendor>.<product>`
   name, version, origin, summary, and which instances use them.
 - `hookspool bobbin show <vendor>.<product>` — the provider and its pages, secrets, settings
-  (type/required/default), outputs, span, sender_retries, proxy note.
+  (type/required/default), outputs, span, sender_retries, proxy note, and the rule packs the bobbin ships
+  (`rule-packs/*.toml`: name, status, rules; `google.gmail` only for now).
 - `hookspool bobbin expand [<instance>]` — 14.3.3.
 - `hookspool bobbin new <vendor>.<product> [--dir D] [--set NAME=VALUE ...] [--code] [--processor]` — a copy of the
   `hookspool.webhook` bobbin in `<D>/<vendor>/<product>/` with its settings frozen into a fixed `[source] template`
@@ -995,6 +1005,7 @@ Everything that is the same for two services is core, and a bobbin calls it:
 | settings | `ctx.settings`; a bobbin never reads the environment |
 | logging | `ctx.log` (processor) / the intake's logger (source); a bobbin never opens log files |
 | time | `ctx.now()` / `req.now` |
+| recognising mail by sender and subject, pulling named values out of it, loading rule packs (`rules`, `rule_packs`) | `hookspool/mailrules.py`: pure functions on rule tables and `rule-packs/<name>.toml` data files in the bobbin's directory (`os.path.dirname(__file__)`); a bobbin never reads the files itself |
 | helpers shared by several bobbins of one provider (Google free/busy, Gmail history paging) | `hookspool/providers/<provider>.py`, written once on `ctx.http` / `ctx.oauth` |
 
 Enforcement: the conformance kit walks the AST of every bobbin module and fails on imports of `hmac`,
@@ -1036,6 +1047,89 @@ configs with `[sources.gmail]` (implicit module) still load. The config template
 `examples/sources/*.toml` are the `github.repo`, `atlassian.trello` and `kaneo.projects` bobbins on the `template` source; the old files are
 one-line pointers kept for old links. A deployment that still runs the removed delta scripts moves to
 `[bobbins.*]` instances as [Upgrading](../operations/upgrading.md#upgrading-to-02-bobbins) describes.
+
+### 14.4 Poll sources
+
+**Only for a service with no push at all.** hookspool exists so that a service tells us when something changed:
+the sender retries, events arrive in order, nothing is asked twice. Polling a service that can push (a webhook, a
+watch channel, a push subscription, on any plan the deployment can use) gives all of that up, so a poll bobbin is
+written only for a service that has none (task lists, contact books, public filings feeds, sensor readouts that
+only offer a read API). A service that can push gets a webhook bobbin; the reviewer refuses the poll (docs/bobbins/review.md).
+
+**Manifest.** A poll bobbin declares `[poll]` and has no `[source]` and no `[processor]` (`check` refuses `[poll]`
+with either):
+
+```toml
+[poll]
+every_s = 900          # required, >= 60
+jitter_s = 90          # optional, 0-300; default 10% of every_s, at most 300
+module = "poller"      # poller.py in the bobbin (the only value)
+timeout_s = 120        # one poll's limit, as [processor] timeout_s (default 300)
+state = true           # default true: a state directory (the cursor), as [processor] state
+```
+
+It still declares secrets, settings and outputs. It has no URL, so no proxy line, no signature, no request captures;
+every secret it declares is its poller's (passed in `HOOKSPOOL_SECRET_REFS`, so an `{ env = ... }` reference is refused
+as for any processor secret). `[provider]` for a poll bobbin: `webhook_docs` and `signature_docs` are not used (the
+kit refuses them); `api_docs` (https) is required, with `no_push_note` (one plain sentence: why the service has no push)
+and `no_push_docs` (https: the provider's page or reference that shows there is no webhook, push or watch method).
+The documents' frontmatter is `bobbin`, `provider` and `api_docs`. A webhook bobbin may not declare `no_push_*`.
+
+**Instance and expansion.** `[bobbins.<i>]` is as usual and may override `every_s` and `jitter_s` (same bounds); the
+window, `expect` and body keys are refused (a poll has no sender and no window). Expansion makes
+
+- `sources.<i>` with `kind = "poll"`, `every_s`, `jitter_s`, `span = "immediate"`, `action = "script:<i>"` and the
+  secrets. A poll source has no `module`: `check` accepts only the keys a poll source has, and `kind = "poll"` only
+  from a poll bobbin's expansion. The intake loads no plugin for it, so `/hooks/<i>` answers 404 and `source test`
+  refuses it;
+- `destinations."script:<i>"` with `processor = "<i>"`, exactly as for a processor bobbin (14.3.3). The runtime reads
+  the manifest, sees `[poll]`, loads `poller.py` and calls
+
+```python
+def poll(batch: Batch, ctx: Context) -> list[dict]:
+    """Return items; each is {"event_type": ..., <payload fields>}; [] means nothing changed."""
+```
+
+with the same `Batch` and `Context` as `process` (14.3.4): journal, staged state, emits and exit codes unchanged.
+
+**The clock.** The dispatcher owns a durable schedule, the `polls` table (section 3, schema 3). On every poll of its
+own loop (before sealing), for each poll source it reads the rows and takes a write transaction only for an instance
+that is new, due, or scheduled further out than `every_s + jitter_s` (a reload shortened `every_s`). In that one
+`BEGIN IMMEDIATE`:
+
+1. a new instance gets `next_at = now + U(0, jitter_s)` (instances do not all fire at startup);
+2. a due instance (`now >= next_at`) whose previous tick batch (`last_batch_id`) is still `open`, `sealed`, `leased`,
+   `retry` or `dead` gets no tick: only `next_at` moves and `skipped` grows, so a slow or failing poller never piles
+   up ticks, and a dead one waits for an operator's `replay` or `drop` like any dead batch;
+3. otherwise ONE event `{"tick": <unix s>, "instance": "<i>"}` is enqueued into source `<i>`, key `poll`,
+   `event_type = "poll"`, dedup id `poll:<i>:<scheduled next_at>`, with an immediate window, and `last_tick_at`,
+   `last_batch_id` and `next_at = now + every_s + U(0, jitter_s)` are written in the same transaction.
+
+So a missed window (a dispatcher stopped for a day) yields one tick, never a burst, and a kill between the enqueue
+and the `next_at` update cannot happen (both or neither commit); the dedup id guards it as well, since a second
+attempt at the same window carries the same id. The tick's batch is delivered like any other (6, 6.6), so a poller
+that raises `Retryable` is retried with backoff and the breaker contains a provider outage.
+
+**Observability.** `hookspool status` (11.1) has `polls.<i>`: `every_s`, `next_at`, `next_in_s`, `last_tick_at`,
+the last delivered tick (`delivered_at`, `delivered_tick_at`, `delivered_age_s`), `pending`, `skipped` and `stale`.
+Maintenance opens `poll:<i>:stale` (kind `source_silent`) after 3 x `every_s` without a delivered tick, counted from
+the last delivery or, before the first, from when the instance was first scheduled; the next delivered tick resolves it.
+
+**The poller's rules.** 14.3.7 applies to `poller.py` unchanged: `ctx.http`, `ctx.oauth`, `ctx.load_state` /
+`ctx.save_state`, `ctx.log`, `ctx.now()`, raise `Retryable` / `Permanent`, never sleep or loop on time (the clock is the
+dispatcher's). Core adds what pollers share: `ctx.http.get_text(url, headers=None, *, params, bearer, timeout_s, label)
+-> (status, text, response_headers)` (and the same on `ctx.oauth(name)`), which returns a 304 as `(304, "", headers)`
+without raising, so a conditional GET (`If-None-Match` from the last `etag`, or `If-Modified-Since`) is possible. It has
+the same timeout, size cap and status mapping as the JSON methods; the text is decoded with the response's charset
+(UTF-8 by default) and header names are lower case.
+
+**Tooling.** `hookspool bobbin new <vendor>.<product> --poll` writes a poll bobbin (a `[poll]` table, a `poller.py` that
+makes a conditional GET, a `captures/poll-example.json`, the three documents with the poll frontmatter, `[provider]` with
+TODO placeholders). The conformance kit runs `poller.py` with a fake `Context` and stub HTTP once per
+`captures/poll-<name>.json` (`description`, optional `now` and `items`, and `http`: the stub answers, whose `text` and
+`headers` answer `get_text` and whose `status = 304` is the not-modified answer). It checks the outputs are declared,
+`items` when given, that a second run replays the journal, that nothing but emits reaches stdout, and the 75 / 65 exits.
+The `source-kit` row is skipped, request captures are refused, and AGENTS.md needs no `outward` step.
 
 ## 15. Configuration
 
@@ -1096,6 +1190,7 @@ burst = { quiet_s = 120, max_s = 600 }
 mail = { quiet_s = 30, max_s = 120 }
 calendar = { quiet_s = 45, max_s = 180 }
 sync = { quiet_s = 60, max_s = 300 }
+meeting = { quiet_s = 60, max_s = 900 }
 immediate = { quiet_s = 0, max_s = 0 }
 
 [bobbins.github]                       # a bobbin instance (14.3.3); it expands to [sources.github]
@@ -1182,6 +1277,7 @@ Precedence for a window field: route → source → `span` preset → `[coalesce
 | `pause <destination> [--reason …]` / `resume <destination>` | operator gate (destinations only) |
 | `issues [list\|ack\|resolve\|ignore <id>]` | section 11.4 |
 | `enqueue --source S --key K [--destination D] [--event-type T] [--dedup-id ID] (--file F \| stdin)` | manual or sweep injection, same validation as the intake |
+| `bobbin list \| show \| expand \| new \| check` | section 14.3.5; `bobbin new <vendor>.<product> --poll` scaffolds a poll bobbin (14.4) |
 | `source test <name> --request FILE` | replays a captured HTTP request (`.http` text: start line, headers, blank line, body) through verify/challenge/ignore/key/dedup/attrs offline; the way to develop a plugin against real captures with test secrets |
 | `check` | section 15; exit 2 on errors. Used as `ExecStartPre` |
 | `reload` | `check`, then touch the config so both processes reload together |
@@ -1197,6 +1293,7 @@ Exit codes: 0 ok, 1 "not found / nothing to do", 2 config or schema error, 3 loc
 ## 17. Schema versions and upgrades
 
 - `meta.schema_version` (also mirrored in `PRAGMA user_version`). Migrations are numbered SQL files under `hookspool/migrations/NNNN_<name>.sql`, applied in order inside one `BEGIN IMMEDIATE` transaction each (a migration that must rebuild a table under `foreign_keys=ON` turns the pragma off before `BEGIN` and runs `PRAGMA foreign_key_check` after). Only two callers apply them: the dispatcher at startup and `hookspool migrate`, both under `dispatch.lock`. The intake and the other CLI commands only read the version: older than known → exit 2 with "run hookspool migrate"; newer than known → exit 2 (downgrade is not supported; restore the older binary or the backup).
+- Schema 2 (`0002_unwrap.sql`) adds the unwrap columns of `attempts`; schema 3 (`0003_polls.sql`) adds the `polls` table (14.4). Both are additive.
 - v2 ships a single migration, `0001_v2.sql`, which creates the whole schema. The v1 draft on `l/T1` was never deployed and left no database to migrate; nothing supports its schema or its JSON config.
 - Upgrades on a live host: stop the dispatcher, `hookspool migrate`, start. The intake may keep running during an additive migration; a non-additive one needs both stopped (a few seconds of 502; section 9 says which senders retry, so schedule it in a quiet hour).
 

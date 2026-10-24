@@ -53,7 +53,8 @@ burst = { quiet_s = 120, max_s = 600 }     # code and CI
 mail = { quiet_s = 30, max_s = 120 }       # mail, boards
 calendar = { quiet_s = 45, max_s = 180 }
 sync = { quiet_s = 60, max_s = 300 }       # bank backfills
-immediate = { quiet_s = 0, max_s = 0 }     # meetings, security
+meeting = { quiet_s = 60, max_s = 900 }    # a call's start, joins, leaves and end
+immediate = { quiet_s = 0, max_s = 0 }     # meeting alerts, security
 
 # ---------------------------------------------------------------------------------------------
 # Bobbins. One [bobbins.<instance>] table per service, one proxy location each (deploy/nginx.example.conf).
@@ -111,6 +112,15 @@ secrets.cred = { file = "/etc/hookspool/google/owner.json" }
 settings = { own = ["owner@example.com"], skip_mime_types = ["application/vnd.google-apps.folder"] }
 outputs = { file-changed = "hermes:drive-changed", file-created = "hermes:drive-created", file-shared = "hermes:drive-shared" }
 expect = false                         # true: 7 days of silence opens a source_silent issue
+
+# Google Meet, as the `google.meet` bobbin (hookspool/bobbins/google/meet/README.md): a call started, and who attended once it
+# ended (Workspace Events over Pub/Sub; the push token is in the URL). The subscription lasts 7 days: renew it daily (SETUP.md).
+[bobbins.meet]
+bobbin = "google.meet"
+secrets.push_token = { file = "/etc/hookspool/secrets/meet_push_token" }
+secrets.cred = { file = "/etc/hookspool/google/meet.json" }
+outputs = { meeting-started = "hermes:meet-started", meeting-ended = "hermes:meet-ended", subscription-changed = "hermes:meet-subscription" }
+expect = false                         # true: 7 days of silence opens a source_silent issue (the subscription lapsed?)
 
 # Zoom event subscriptions, as the `zoom.meetings` bobbin (hookspool/bobbins/zoom/meetings/README.md). The URL-validation handshake is
 # answered only after the signature checks out.

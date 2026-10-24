@@ -56,6 +56,15 @@ The state directory (default `<home>/bobbins/gmail`) must be in the dispatcher u
 (`deploy/hookspool-dispatch.service`) and private (mode 0700). To keep the history ids of the previous delta
 script, set `state_dir` to its data directory.
 
+### Optional: mail rules
+
+To recognise mail from services that only send email (orders, deliveries, reservations, court alerts), add pack names
+or your own rules to the instance's `settings` (for example `rule_packs = ["amazon-orders", "resy-reservations"]`) and
+map the `mail-matched` output in `outputs`. `hookspool bobbin show google.gmail` lists the packs and whether each is `verified` or `unverified`. The rule format,
+and how a destination script routes by the item's `rule`, are in [Mail rules and rule packs](../../../../docs/bobbins/mail-rules.md).
+A misspelt pack name or a bad rule does not stop the batch: the rules are ignored and the log gets one line, `mail rules ignored for this batch`.
+Mail that arrives while the rules are broken is not matched later, even once they are fixed, so run step 4.4 right after every rules edit.
+
 ## 4. Verify
 
 1. `hookspool reload`.
@@ -63,7 +72,12 @@ script, set `state_dir` to its data directory.
 3. `hookspool list --source gmail` shows a batch for the mailbox after the `mail` span (30 s quiet); it ends
    `delivered`, and the Hermes route named in `outputs` receives a `scheduling` event. `hookspool status`
    shows the destination `script:gmail` closed.
-4. The first push for a mailbox only records the history id; mail that arrived before it is not reported.
+4. With rules on: nobody can send mail from a provider's domain, so a pack cannot be tried that way. Add a temporary
+   custom rule of your own, with the address you will send from in `from` and a word of your choice in `subject_any`,
+   send the owner a message from that address with that word in the subject, and check that the route mapped to
+   `mail-matched` receives one item whose `rule` is the temporary rule's name. Then remove the temporary rule. To see
+   that a pack loads, run `hookspool bobbin show google.gmail`, and check the log has no `mail rules ignored` line.
+5. The first push for a mailbox only records the history id; mail that arrived before it is not reported.
 
 ## 5. The sweep, and rollback
 

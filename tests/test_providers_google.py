@@ -1,9 +1,10 @@
-"""``hookspool.providers.google`` (ARCHITECTURE 14.3.7): the code the Gmail, Calendar and Drive bobbins share.
+"""``hookspool.providers.google`` (ARCHITECTURE 14.3.7): the code the Gmail, Calendar, Drive and Meet bobbins share.
 
 * the push-channel rules: the token header, the ``sync`` handshake, the header-built payload, the resource id
   inside the resource URI (a calendar id for Calendar, a file id for Drive), the dedup id;
 * the API calls, through a stub client: history paging and ``HistoryGone``, ``SyncGone``, a deleted message,
-  free/busy, and message parsing.
+  free/busy, and message parsing;
+* the Pub/Sub push token and envelope (Gmail and Meet), and the Meet conference record and attendance.
 """
 from __future__ import annotations
 
@@ -192,3 +193,70 @@ def test_the_body_falls_back_to_the_snippet_and_a_bad_message_does_not_raise():
     assert G.body_text({"snippet": "only a snippet", "payload": {"mimeType": "text/html"}}) == "only a snippet"
     m = G.parse_message({"id": "x", "internalDate": "not a number"})
     assert m["internal_date"] == 0 and m["labels"] == [] and m["headers"] == {} and m["body"] == ""
+
+
+# ---- Pub/Sub push (shared by google.gmail and google.meet) ----------------------------------------------------
+def push_req(body: bytes, query: str = "", headers: dict | None = None) -> Request:
+    return Request("POST", "/hooks/x" + query, list((headers or {}).items()), body, now=0)
+
+
+def test_the_push_token_is_the_query_value_else_the_header():
+    assert G.verify_push(push_req(b"{}", "?token=tok-1"), "tok-1") is True
+    assert G.verify_push(push_req(b"{}", headers={"X-Push-Token": "tok-1"}), "tok-1") is True
+    assert G.verify_push(push_req(b"{}", "?token=nope", {"X-Push-Token": "tok-1"}), "tok-1") is False
+    assert G.verify_push(push_req(b"{}"), "tok-1") is False and G.verify_push(push_req(b"{}", "?token="), "") is False
+    assert G.PUSH_AUTH_HEADERS == ("X-Push-Token",)
+
+
+def test_a_push_envelope_is_unwrapped():
+    import json
+    data = base64.b64encode(b'{"a": 1}').decode().rstrip("=")
+    body = json.dumps({"message": {"data": data, "attributes": {"ce-type": "t", "n": 5}, "messageId": "m",
+                                   "publishTime": ""}, "subscription": "projects/p/subscriptions/s"}).encode()
+    assert G.push_message(push_req(body)) == {"data": {"a": 1}, "attributes": {"ce-type": "t"}, "messageId": "m",
+                                              "subscription": "projects/p/subscriptions/s"}
+    for bad in (b"[]", b'{"message": 1}', b'{"message": {"data": ""}}', b'{"message": {"data": "!!"}}'):
+        with pytest.raises(G.BadPayload):
+            G.push_message(push_req(bad))
+
+
+# ---- Meet REST v2 ----------------------------------------------------------------------------------------------
+class MeetClient:
+    """Answers ``client.get`` by URL path, standing in for ``ctx.oauth(...)``."""
+
+    def __init__(self, answers: dict):
+        self.answers, self.calls = answers, []
+
+    def get(self, url, params=None, label=""):
+        self.calls.append((url, dict(params or {})))
+        a = self.answers.get(url)
+        if isinstance(a, list):
+            a = a.pop(0)
+        if isinstance(a, int):
+            raise Permanent("scripted", status=a)
+        return a if a is not None else {}
+
+
+def test_a_conference_record_is_read_and_a_missing_one_is_none():
+    c = MeetClient({G.MEET_API + "conferenceRecords/c-1": {"name": "conferenceRecords/c-1"},
+                    G.MEET_API + "conferenceRecords/c-2": 404, G.MEET_API + "conferenceRecords/c-3": 403})
+    assert G.meet_conference(c, "conferenceRecords/c-1") == {"name": "conferenceRecords/c-1"}
+    assert G.meet_conference(c, "conferenceRecords/c-2") is None
+    with pytest.raises(Permanent):
+        G.meet_conference(c, "conferenceRecords/c-3")
+    for bad in ("conferenceRecords/../x", "spaces/s-1", "conferenceRecords/c-1/participants", ""):
+        with pytest.raises(Permanent):
+            G.meet_conference(c, bad)
+
+
+def test_attendance_lists_participants_and_their_sessions_up_to_the_cap():
+    base = G.MEET_API + "conferenceRecords/c-1/participants"
+    people = [{"name": f"conferenceRecords/c-1/participants/p-{i}", "earliestStartTime": f"2026-10-23T10:0{i}:00Z",
+               "signedinUser": {"user": f"users/{i}", "displayName": f"P{i}"}} for i in (3, 1, 2)]
+    c = MeetClient({base: [{"participants": people[:2], "nextPageToken": "n"}, {"participants": people[2:]}],
+                    base + "/p-3/participantSessions": {"participantSessions": [{"endTime": "2026-10-23T10:09:00Z"}]}})
+    out, stats = G.meet_attendance(c, "conferenceRecords/c-1", max_lookups=1)
+    assert [p["user_id"] for p in out] == ["1", "2", "3"] and stats == {"participants": 3, "lookups": 1,
+                                                                        "truncated": False}
+    assert out[2]["last_leave"] == "2026-10-23T10:09:00Z" and out[2]["sessions"] == 1 and out[0]["sessions"] is None
+    assert [p.get("pageToken") for u, p in c.calls if u == base] == [None, "n"]

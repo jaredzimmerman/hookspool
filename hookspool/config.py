@@ -52,7 +52,8 @@ DEFAULTS: dict = {
         "mail": {"quiet_s": 30, "max_s": 120},         # mail, boards, tickets
         "calendar": {"quiet_s": 45, "max_s": 180},     # calendar edits
         "sync": {"quiet_s": 60, "max_s": 300},         # bank and data syncs
-        "immediate": {"quiet_s": 0, "max_s": 0},       # meetings, security
+        "meeting": {"quiet_s": 60, "max_s": 900},      # a call's start, joins, leaves and end
+        "immediate": {"quiet_s": 0, "max_s": 0},       # meeting alerts, security
     },
     "sources": {},
     "routes": [],
@@ -80,7 +81,12 @@ _BREAKER_KEYS = {"trip_after", "cooldown_initial_s", "cooldown_max_s"}
 _TOP_KEYS = set(_SECTION_KEYS) | {"spans", "sources", "routes", "destinations", "bobbins"}
 _INTERNAL_KEYS = {"_path", "_bobbins"}          # set by load_config, never read from the file
 SOURCE_KEYS = {"module", "span", "secrets", "dedup_window_s", "expect_every_s", "max_body_bytes", "action",
-               "keep_headers", "store_raw", "event_header", *WINDOW_FIELDS}
+               "keep_headers", "store_raw", "event_header", "kind", "every_s", "jitter_s", *WINDOW_FIELDS}
+SOURCE_KINDS = ("webhook", "poll")
+POLL_KIND = "poll"
+POLL_SOURCE_KEYS = ("kind", "every_s", "jitter_s")      # set on a source only by a poll bobbin's expansion (14.4)
+# what a poll source may carry: no plugin, no URL, so no module, headers or body cap
+POLL_SOURCE_ALLOWED = {"kind", "every_s", "jitter_s", "action", "span", "secrets", "dedup_window_s", "store_raw"}
 ROUTE_KEYS = {"name", "source", "match", "destination", "tee", *WINDOW_FIELDS}
 MAX_TEES = 8                         # tee routes per source (``check``) and copies per event (intake)
 _DEST_COMMON = {"type", "module", "timeout_s", "max_body_bytes", "max_inflight"}
@@ -235,6 +241,36 @@ def window_for(cfg: dict, source: str, route: str | None = None, *,
     out["max_s"] = float(out["max_s"])
     out["max_events"] = int(out["max_events"])
     out["max_bytes"] = int(out["max_bytes"])
+    return out
+
+
+def is_poll(cfg: dict, source: str) -> bool:
+    """True for a poll source (14.4): the dispatcher's clock feeds it, the intake has no URL for it."""
+    s = source_cfg(cfg, source)
+    return isinstance(s, dict) and s.get("kind") == POLL_KIND
+
+
+@dataclass(frozen=True)
+class PollSpec:
+    every_s: float
+    jitter_s: float
+    action: str
+
+
+def poll_sources(cfg: dict) -> dict[str, PollSpec]:
+    """Every poll source of a loaded config: name -> (every_s, jitter_s, action). A table ``check`` would refuse
+    (no action, a bad number) is left out, so a running dispatcher never schedules from it."""
+    out: dict[str, PollSpec] = {}
+    for name, s in (cfg.get("sources") or {}).items():
+        if not (isinstance(s, dict) and s.get("kind") == POLL_KIND):
+            continue
+        every, jitter, action = s.get("every_s"), s.get("jitter_s", 0), s.get("action")
+        if isinstance(every, bool) or not isinstance(every, (int, float)) or every <= 0:
+            continue
+        if isinstance(jitter, bool) or not isinstance(jitter, (int, float)) or jitter < 0:
+            jitter = 0
+        if isinstance(action, str) and action:
+            out[name] = PollSpec(float(every), float(jitter), action)
     return out
 
 
@@ -624,6 +660,22 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
             continue
         plugin = None
         unbound = None
+        kind = s.get("kind")
+        if kind is not None and kind not in SOURCE_KINDS:
+            rep.err(f"{where}.kind: {kind!r} is not one of {', '.join(SOURCE_KINDS)}")
+        if kind == POLL_KIND:
+            _check_poll_source(rep, cfg, name, where, s)
+            sec = s.get("secrets", {})
+            if not isinstance(sec, dict):
+                rep.err(f"{where}.secrets: must be a table of secret references")
+            elif check_secrets:
+                for sname, ref in sec.items():
+                    _check_secret(rep, f"{where}.secrets.{sname}", ref)
+            plugins[name] = None
+            continue
+        for k in POLL_SOURCE_KEYS:
+            if k in s and k != "kind":
+                rep.err(f"{where}.{k}: only for a poll source (kind = \"poll\", set by a poll bobbin)")
         if load_plugin is not None:
             try:
                 plugin = unbound = load_plugin(name, s.get("module"))
@@ -842,6 +894,31 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
 
 
 ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _check_poll_source(rep: Report, cfg: dict, name: str, where: str, s: dict) -> None:
+    """A ``kind = "poll"`` source (14.4): made by a poll bobbin's expansion, with ``every_s`` >= 60, ``jitter_s``
+    0-300 and an action; it has no plugin, no URL and no request keys."""
+    from . import bobbin_loader      # lazy: bobbin_loader imports this module
+    meta = (cfg.get("_bobbins") or {}).get(name) or {}
+    if not meta.get("poll"):
+        rep.err(f"{where}.kind: \"poll\" is set only by a poll bobbin's [bobbins.<instance>] expansion")
+    for k in s:
+        if k not in POLL_SOURCE_ALLOWED:
+            rep.err(f"{where}.{k}: not a key of a poll source (it has no plugin and no URL)"
+                    if k in SOURCE_KEYS else f"{where}.{k}: unknown key")
+    problem = bobbin_loader.poll_every_problem(s.get("every_s"))
+    if problem:
+        rep.err(f"{where}.every_s: {problem}")
+    if "jitter_s" in s:
+        problem = bobbin_loader.poll_jitter_problem(s["jitter_s"])
+        if problem:
+            rep.err(f"{where}.jitter_s: {problem}")
+    if s.get("span") is not None and s["span"] not in (cfg.get("spans") or {}):
+        rep.err(f"{where}.span: unknown span preset {s['span']!r}")
+    e = _action_ok(cfg, s.get("action"))
+    if e:
+        rep.err(f"{where}.action: {e}")
 
 
 def _check_script(rep: Report, cfg: dict, name: str, where: str, d: dict) -> None:
