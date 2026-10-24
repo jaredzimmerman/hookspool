@@ -1,0 +1,44 @@
+name: bobbin labels
+
+# Runs after the "bobbin" workflow, in the base repository, with a token that may label and comment.
+# It checks out the default branch only (trusted code), downloads the scorecards the pull request job
+# uploaded (untrusted data), confirms through the API that the pull request they name has this run's
+# head commit, then sets `bobbin-only` or `touches-core` and creates or updates one scorecard comment.
+# It never checks out, installs or runs the pull request's code.
+on:
+  workflow_run:
+    workflows: [bobbin]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  label:
+    name: label and comment
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read                   # download the triggering run's artifact
+      contents: read
+      issues: write                   # labels
+      pull-requests: write            # the scorecard comment
+    steps:
+      - uses: actions/checkout@v4    # the default branch: this script, never the pull request's
+        with:
+          persist-credentials: false
+      - name: Download the scorecards
+        continue-on-error: true       # no artifact (the run failed early): nothing to label
+        uses: actions/download-artifact@v4
+        with:
+          name: bobbin-reports
+          path: bobbin-reports
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Label and comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: python3 .github/scripts/bobbin_label.py --reports bobbin-reports --repo "$REPO" --head-sha "$HEAD_SHA"

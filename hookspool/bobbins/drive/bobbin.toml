@@ -1,0 +1,56 @@
+name = "drive"
+version = "1"
+summary = "Google Drive push (watch channel): file changes, new files and files shared with the account, by id, never by content"
+
+[source]
+module = "source"
+span = "calendar"
+sender_retries = true
+expect_every_s = 604800
+proxy = "nothing to keep: the authentication is the X-Goog-Channel-Token header, which Google sends"
+
+[secrets.channel_token]
+description = "the token given when the watch channel was created, which Google echoes in X-Goog-Channel-Token"
+
+[secrets.cred]
+description = "OAuth credential JSON (client_id, client_secret, refresh_token, token_uri) with read access to the Drive change feed"
+processor = true
+
+[settings.own]
+description = "addresses that are 'us' (the owner, the household, the agents): changes they make themselves are dropped"
+type = "list"
+default = []
+
+[settings.skip_mime_types]
+description = "MIME types to ignore, exact (application/vnd.google-apps.folder) or a family (image/*)"
+type = "list"
+default = []
+
+[settings.include_trashed]
+description = "also report files that are in the trash (reported as file-changed); off by default"
+type = "bool"
+default = false
+
+[settings.drive_id]
+description = "id of one shared drive to watch; empty watches the account's own change feed"
+type = "string"
+default = ""
+
+[settings.api_url]
+description = "Drive API base URL (change only to use a test server)"
+type = "string"
+default = "https://www.googleapis.com/drive/v3/"
+
+[processor]
+module = "processor"
+timeout_s = 300
+state = true
+
+[outputs.file-changed]
+description = "an existing file was edited, renamed, moved or untrashed by someone other than the configured accounts; carries the file id, name, MIME type, modified time, actor and link"
+
+[outputs.file-created]
+description = "a new file appeared in the feed; same fields"
+
+[outputs.file-shared]
+description = "a file was shared with the account; actor is the person who shared it; same fields"

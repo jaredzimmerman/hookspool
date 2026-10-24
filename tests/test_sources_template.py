@@ -3,23 +3,22 @@
 * validation of the source table (every rule, through ``bind`` and through ``config.check``)
 * each verification scheme against signatures computed here with ``hmac``/``hashlib`` directly
 * selector semantics (key, dedup, event_type, attrs, ignore), handshake, quarantine on an unreadable key
-* the shared conformance kit (``tests/sourcekit.py``) over EVERY ``examples/sources/*.toml``, the
-  captures in ``tests/captures/<name>/`` through ``hookspool source test``, and the CLI
+* the shared conformance kit (``tests/sourcekit.py``) over EVERY template bobbin (``hookspool/bobbins/
+  <name>/bobbin.toml`` with ``[source.template]``), the captures in the bobbin's ``captures/`` through
+  ``hookspool source test``, and the CLI
 
-Adding a template source is: ``examples/sources/<name>.toml`` (one ``[sources.<name>]`` table that
-sets ``secrets.secret``) plus ``tests/captures/<name>/event.http`` (a request signed with
-``TEMPLATE_SECRET``, expect queued); optional ``*.http`` captures for ping, tampered, HEAD.
-Regenerate signed captures with ``python tests/test_sources_template.py --write <name>``.
+Adding a template source is: a bobbin (``hookspool/bobbins/<name>/bobbin.toml`` with ``[source.template]``
+and ``secrets.secret``) plus ``captures/event.http`` (a request signed with ``TEMPLATE_SECRET``, expect
+queued); optional ``*.http`` captures for ping, tampered, HEAD. Regenerate signed captures with
+``python tests/test_sources_template.py --write <name>``.
 """
 from __future__ import annotations
 
 import base64
-import glob
 import hashlib
 import hmac
 import json
 import os
-import re
 import sys
 import tomllib
 
@@ -38,7 +37,7 @@ from hookspool.plugin import BadPayload, Request, Response, parse_capture  # noq
 from hookspool.sources import template as T  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXAMPLES = sorted(glob.glob(os.path.join(ROOT, "examples", "sources", "*.toml")))
+EXAMPLES = [sourcekit.bobbin_manifest(n) for n in ("github", "kaneo", "trello")]
 TEMPLATE_SECRET = "test-template-secret-" + SENTINEL
 MODULE = "hookspool.sources.template"
 
@@ -80,26 +79,29 @@ def _post(body: bytes | dict, headers: dict | None = None, target: str = "/hooks
 
 
 # ---- examples -> kits -------------------------------------------------------------------------------------
+def _name(path: str) -> str:
+    return os.path.basename(os.path.dirname(path))
+
+
 def load_example(path: str) -> tuple[str, dict]:
+    name = _name(path)
+    assert path == sourcekit.bobbin_manifest(name), f"{path}: expected the bobbin manifest"
     with open(path, "rb") as f:
-        doc = tomllib.load(f)
-    name = os.path.splitext(os.path.basename(path))[0]
-    assert list(doc) == ["sources"] and list(doc["sources"]) == [name], f"{path}: one [sources.{name}] table"
-    cfg = doc["sources"][name]
+        assert "secret" in tomllib.load(f).get("secrets", {}), f"{path}: declares secrets.secret"
+    cfg = sourcekit.bobbin_source_cfg(name)
     assert cfg.get("module") == MODULE, f"{path}: module must be {MODULE}"
-    assert "secret" in cfg.get("secrets", {}), f"{path}: sets secrets.secret"
     return name, cfg
 
 
 def example_kit(path: str) -> Kit:
     name, cfg = load_example(path)
-    event = os.path.join(sourcekit.CAPTURES, name, "event.http")
+    event = os.path.join(sourcekit.capture_dir(name), "event.http")
     assert os.path.exists(event), f"tests/captures/{name}/event.http is required"
     with open(event, "rb") as f:
         sample = _unsign(cfg, parse_capture(f.read()))
     sample.meta.clear()
     assert SENTINEL.encode() in sample.body, "the event capture must carry the sentinel in its body"
-    head = os.path.join(sourcekit.CAPTURES, name, "head.http")
+    head = os.path.join(sourcekit.capture_dir(name), "head.http")
     unauth = None
     if cfg.get("head_handshake"):
         with open(head, "rb") as f:
@@ -112,27 +114,27 @@ def example_kit(path: str) -> Kit:
 
 
 def test_there_are_examples():
-    assert {os.path.basename(p) for p in EXAMPLES} >= {"github.toml", "kaneo.toml", "trello.toml"}
+    assert {_name(p) for p in EXAMPLES} == {"github", "kaneo", "trello"}
 
 
-@pytest.mark.parametrize("path", EXAMPLES, ids=[os.path.basename(p) for p in EXAMPLES])
+@pytest.mark.parametrize("path", EXAMPLES, ids=[_name(p) for p in EXAMPLES])
 @pytest.mark.parametrize("case", sourcekit.CASES, ids=sourcekit.CASE_IDS)
 def test_conformance_kit_on_example(case, path, tmp_path, clock):
     sourcekit.run(case, example_kit(path), tmp_path, clock)
 
 
-CAPTURE_FILES = [(os.path.splitext(os.path.basename(p))[0], c) for p in EXAMPLES
-                 for c in sourcekit.captures(os.path.splitext(os.path.basename(p))[0])]
+CAPTURE_FILES = [(_name(p), c) for p in EXAMPLES
+                 for c in sourcekit.captures(_name(p))]
 
 
 @pytest.mark.parametrize("name,cap", CAPTURE_FILES, ids=[f"{n}/{os.path.basename(c)}" for n, c in CAPTURE_FILES])
 def test_captures(name, cap, tmp_path, clock):
-    kit = example_kit(os.path.join(ROOT, "examples", "sources", f"{name}.toml"))
+    kit = example_kit(sourcekit.bobbin_manifest(name))
     out = sourcekit.run_capture(cap, kit, tmp_path, clock)
     assert out["source"] == name
 
 
-@pytest.mark.parametrize("path", EXAMPLES, ids=[os.path.basename(p) for p in EXAMPLES])
+@pytest.mark.parametrize("path", EXAMPLES, ids=[_name(p) for p in EXAMPLES])
 def test_example_captures_cover_the_outcomes(path):
     name, cfg = load_example(path)
     results = {}
@@ -148,8 +150,7 @@ def test_example_captures_cover_the_outcomes(path):
 
 
 def _cli_config(tmp_path, name: str) -> str:
-    text = open(os.path.join(ROOT, "examples", "sources", f"{name}.toml")).read()
-    text = re.sub(r"(?m)^secrets\.secret\s*=.*$", "", text)
+    text = sourcekit.source_table_text(name)
     sec = tmp_path / "secret"
     sec.write_text(TEMPLATE_SECRET)
     os.chmod(sec, 0o600)
@@ -172,7 +173,7 @@ def test_source_test_cli_with_the_default_loader(name, cap, tmp_path, capsys):
     assert SENTINEL not in out
 
 
-@pytest.mark.parametrize("path", EXAMPLES, ids=[os.path.basename(p) for p in EXAMPLES])
+@pytest.mark.parametrize("path", EXAMPLES, ids=[_name(p) for p in EXAMPLES])
 def test_config_check_accepts_the_example(path, tmp_path):
     name, cfg = load_example(path)
     full = hs_config.merge(hs_config.DEFAULTS, {"sources": {name: cfg}, "alerts": {"argv": ["true"]}})
@@ -531,8 +532,8 @@ def test_url_token_source_end_to_end_and_the_query_is_not_stored(tmp_path, clock
 def write_captures(name: str) -> None:
     """Re-sign tests/captures/<name>/*.http with TEMPLATE_SECRET (run after editing a body). A
     capture with ``# tamper_of: <file>`` carries that file's signature over a changed body."""
-    _, cfg = load_example(os.path.join(ROOT, "examples", "sources", f"{name}.toml"))
-    d = os.path.join(sourcekit.CAPTURES, name)
+    _, cfg = load_example(sourcekit.bobbin_manifest(name))
+    d = sourcekit.capture_dir(name)
     for path in sourcekit.captures(name):
         with open(path, "rb") as f:
             raw = parse_capture(f.read())

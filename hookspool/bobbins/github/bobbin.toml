@@ -1,0 +1,25 @@
+name = "github"
+version = "1"
+summary = "GitHub repository webhook: HMAC-SHA256 over the raw body; pings are acknowledged and not enqueued"
+
+[source]
+span = "burst"
+sender_retries = false
+
+[source.template]
+scheme = "hmac-sha256-hex"
+header = "X-Hub-Signature-256"
+prefix = "sha256="
+key = "repository.full_name"
+dedup = "header:X-GitHub-Delivery"
+ignore = "header:X-GitHub-Event=ping"
+event_type = "header:X-GitHub-Event"
+event_header = "X-GitHub-Event"
+attrs = { repo = "repository.full_name", event = "header:X-GitHub-Event" }
+keep_headers = ["X-GitHub-Event", "X-GitHub-Delivery"]
+
+[secrets.secret]
+description = "the webhook secret typed into the repository's webhook settings"
+
+[outputs."*"]
+description = "every accepted delivery (pushes, pull requests, and the rest; the event type is in attrs)"

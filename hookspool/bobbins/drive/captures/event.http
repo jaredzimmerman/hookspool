@@ -1,0 +1,14 @@
+# capture: a change-feed notification with the channel token
+# now: 1800000000
+# expect: queued
+POST /hooks/drive HTTP/1.1
+X-Goog-Channel-ID: chan-1
+X-Goog-Resource-ID: res-1
+X-Goog-Resource-State: change
+X-Goog-Message-Number: 7
+User-Agent: APIs-Google
+X-Goog-Resource-URI: https://www.googleapis.com/drive/v3/changes?alt=json&pageToken=100-PAYLOAD-SENTINEL-7f3a
+X-Goog-Channel-Token: test-drive-channel-token-PAYLOAD-SENTINEL-7f3a
+Content-Length: 0
+
+

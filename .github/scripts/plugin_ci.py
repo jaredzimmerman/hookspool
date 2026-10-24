@@ -1,28 +1,40 @@
 #!/usr/bin/env python3
-"""Checks that .github/workflows/plugins.yml runs on a pull request (stdlib only).
+"""Checks that .github/workflows/plugins.yml and bobbin.yml run on a pull request (stdlib and this
+repository's own ``hookspool`` package only).
 
 Subcommands (each prints a result table and exits 1 when any row failed):
 
   discover   which source plugins / template configs the change touches
-  kit        run the shared conformance kit (tests/sourcekit.py) on each of them
+  kit        run the shared conformance kit (hookspool/testing/sourcekit.py) on each of them
+  bobbins    run ``hookspool bobbin check`` on every changed bobbin (or the directories given): the
+             scorecards go to the job summary, and with --report-dir to <dir>/<name>.json and .md
   guard      the core-has-no-per-source-code guard
   scan       secret / hostname / IP scan of the changed files
-  all        discover + kit + guard + scan, and the job summary table
+  all        discover + kit + bobbins + guard + scan, and the job summary table
 
 Everything runs locally the same way as in CI::
 
     python .github/scripts/plugin_ci.py all --base origin/main
     python .github/scripts/plugin_ci.py kit template:github code:zoom
+    python .github/scripts/plugin_ci.py bobbins --base origin/main
     python .github/scripts/plugin_ci.py scan --all
     python .github/scripts/plugin_ci.py scan --all --include-ladder   # the pre-publish gate: also the tracked .ladder/
 
 The table is also appended to ``$GITHUB_STEP_SUMMARY`` when that is set.
 
 What a "plugin" is
-  ``template:<name>``  ``examples/sources/<name>.toml``, run through ``tests/test_sources_template.py``
-                       (kit cases, captures, the capture-coverage check), selected by test id.
+  ``template:<name>``  ``hookspool/bobbins/<name>/bobbin.toml`` (captures in its ``captures/``), or the
+                       legacy ``examples/sources/<name>.toml`` with ``tests/captures/<name>/``; run through
+                       ``tests/test_sources_template.py`` (kit cases, captures, the capture-coverage check),
+                       selected by test id.
   ``code:<name>``      ``hookspool/sources/<name>.py``, run through ``tests/test_sources_<name>.py``, which
                        must parametrize over ``sourcekit.CASES`` (no kit, no merge).
+
+What a changed bobbin is
+  Any directory with a ``bobbin.toml`` that holds a changed file (``hookspool/bobbins/<name>/`` or one added
+  anywhere else in the pull request, except the kit's own fixtures under ``tests/fixtures/``), the bobbin whose
+  ``tests/bobbins/test_<name>.py`` changed, and every built-in bobbin when the machinery they run on changed.
+  Each gets exactly the check a contributor runs: ``hookspool bobbin check <dir>``.
 """
 from __future__ import annotations
 
@@ -34,14 +46,20 @@ import re
 import subprocess
 import sys
 import time
+import tomllib
 from dataclasses import dataclass, field
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT not in sys.path:                     # this repository's own package: the shared scan patterns, the kit
+    sys.path.insert(0, ROOT)
+from hookspool.testing import scan as _scan  # noqa: E402
+
 SOURCES_DIR = "hookspool/sources"
 EXAMPLES_DIR = "examples/sources"
+BOBBINS_DIR = "hookspool/bobbins"
 TEMPLATE_TESTS = "tests/test_sources_template.py"
 # Shared machinery: a change to any of these can break every source, so the kit runs on all of them.
-SHARED = {"tests/sourcekit.py", "tests/conftest.py", "hookspool/plugin.py", "hookspool/verify.py",
+SHARED = {"tests/sourcekit.py", "hookspool/testing/sourcekit.py", "tests/conftest.py", "hookspool/plugin.py", "hookspool/verify.py",
           "hookspool/intake.py", "hookspool/sources/template.py", TEMPLATE_TESTS}
 NOT_A_SOURCE = {"__init__", "template"}
 # Never scanned. ``.ladder/`` (the build ledger and task notes) is skipped for pull requests; it is tracked in
@@ -49,9 +67,20 @@ NOT_A_SOURCE = {"__init__", "template"}
 # ``scan --all --include-ladder`` as the pre-publish gate, not plain ``scan --all``.
 SKIP_TREES = (".git/", ".ladder/", "vps-src/", "deploy/local/")
 LADDER = ".ladder/"
-# Captures are requests signed with test keys; a Plaid capture carries a JWT by design.
-JWT_OK_UNDER = ("tests/captures/",)
+# Captures are requests signed with test keys; a capture from a JWT-signing sender carries a JWT by design.
+JWT_OK_UNDER = _scan.JWT_OK_UNDER
 CORE_ALLOWLIST = os.path.join(".github", "core-allowlist.txt")
+BOBBINS_DIR = "hookspool/bobbins"
+PROVIDERS_DIR = "hookspool/providers"        # helpers shared by the bobbins of one provider (14.3.7): per-vendor
+BOBBIN_MANIFEST = "bobbin.toml"
+BOBBIN_TESTS = re.compile(r"tests/bobbins/test_([a-z0-9_]+)\.py")
+# The machinery every bobbin runs on: a change to it re-checks every built-in bobbin.
+BOBBIN_SHARED = {"hookspool/bobbin_loader.py", "hookspool/processor.py", "hookspool/net.py", "hookspool/plugin.py",
+                 "hookspool/verify.py", "hookspool/intake.py", "hookspool/config.py", "hookspool/sources/template.py"}
+BOBBIN_SHARED_TREES = ("hookspool/testing/", PROVIDERS_DIR + "/")
+NOT_A_BOBBIN_UNDER = ("tests/fixtures/",)   # the kit's own fixtures, some broken on purpose
+# Bobbins named for a kind of sender rather than a vendor: their name is an ordinary word in core.
+GENERIC_BOBBINS = {"webhook"}
 
 
 # ---- results ---------------------------------------------------------------------------------------------
@@ -70,6 +99,7 @@ class Row:
 @dataclass
 class Report:
     rows: list[Row] = field(default_factory=list)
+    extra: list[str] = field(default_factory=list)       # sections after the table (the bobbin scorecards)
 
     def add(self, check: str, subject: str, ok: bool, detail: str = "") -> Row:
         row = Row(check, subject, ok, detail)
@@ -85,7 +115,7 @@ class Report:
         return head + "\n".join(r.md() for r in self.rows) + "\n"
 
     def emit(self, title: str) -> None:
-        text = f"### {title}\n\n{self.table()}"
+        text = f"### {title}\n\n{self.table()}" + "".join("\n" + e for e in self.extra)
         print(text)
         path = os.environ.get("GITHUB_STEP_SUMMARY")
         if path:
@@ -101,9 +131,36 @@ def _git(*args: str) -> str:
 
 
 # ---- discovery -------------------------------------------------------------------------------------------
+def _is_template_bobbin(path: str) -> bool:
+    try:
+        with open(path, "rb") as f:
+            return isinstance(tomllib.load(f).get("source", {}).get("template"), dict)
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+
+
 def all_templates() -> list[str]:
+    names: set[str] = set()
+    d = os.path.join(ROOT, BOBBINS_DIR)
+    if os.path.isdir(d):
+        names |= {n for n in os.listdir(d) if _is_template_bobbin(os.path.join(d, n, "bobbin.toml"))}
     d = os.path.join(ROOT, EXAMPLES_DIR)
-    return sorted(f[:-5] for f in os.listdir(d) if f.endswith(".toml")) if os.path.isdir(d) else []
+    if os.path.isdir(d):
+        names |= {f[:-5] for f in os.listdir(d) if f.endswith(".toml")}
+    return sorted(names)
+
+
+def template_manifest(name: str) -> str | None:
+    """The file that defines a template: its bobbin manifest, else the legacy examples table."""
+    for rel in (f"{BOBBINS_DIR}/{name}/bobbin.toml", f"{EXAMPLES_DIR}/{name}.toml"):
+        if os.path.exists(os.path.join(ROOT, rel)):
+            return rel
+    return None
+
+
+def capture_dir(name: str) -> str:
+    own = f"{BOBBINS_DIR}/{name}/captures"
+    return own if os.path.isdir(os.path.join(ROOT, own)) else f"tests/captures/{name}"
 
 
 def all_code_sources() -> list[str]:
@@ -146,10 +203,109 @@ def discover(files: list[str]) -> list[str]:
         m = re.fullmatch(r"tests/captures/([A-Za-z0-9_-]+)/.+", f)
         if m:
             name_hit(m.group(1))
+        m = re.fullmatch(rf"{BOBBINS_DIR}/([a-z][a-z0-9-]*)/.+", f)
+        if m:
+            name_hit(m.group(1))
         m = re.fullmatch(r"tests/test_sources_([A-Za-z0-9_]+)\.py", f)
         if m and m.group(1) != "template":
             name_hit(m.group(1))
     return sorted(found)
+
+
+# ---- bobbins ----------------------------------------------------------------------------------------------
+def all_bobbins() -> list[str]:
+    """The built-in bobbin directories, relative to the repository."""
+    d = os.path.join(ROOT, BOBBINS_DIR)
+    if not os.path.isdir(d):
+        return []
+    return sorted(f"{BOBBINS_DIR}/{n}" for n in os.listdir(d) if os.path.isfile(os.path.join(d, n, BOBBIN_MANIFEST)))
+
+
+def bobbin_of(rel: str) -> str | None:
+    """The bobbin directory (relative) that holds the file ``rel``, or None."""
+    if rel.startswith(NOT_A_BOBBIN_UNDER):
+        return None
+    d = os.path.dirname(rel)
+    while d:
+        if os.path.isfile(os.path.join(ROOT, d, BOBBIN_MANIFEST)):
+            return d
+        d = os.path.dirname(d)
+    return None
+
+
+def discover_bobbins(files: list[str]) -> list[str]:
+    """The bobbin directories a change touches (see the module docstring)."""
+    found: set[str] = set()
+    builtin = all_bobbins()
+    if any(f in BOBBIN_SHARED or f.startswith(BOBBIN_SHARED_TREES) for f in files):
+        found |= set(builtin)
+    by_module = {os.path.basename(b).replace("-", "_"): b for b in builtin}
+    for f in files:
+        m = BOBBIN_TESTS.fullmatch(f)
+        if m and m.group(1) in by_module:
+            found.add(by_module[m.group(1)])
+        b = bobbin_of(f)
+        if b:
+            found.add(b)
+    return sorted(found)
+
+
+def run_bobbin(rel_dir: str, report: Report, *, base: str | None = None, strict: bool = False,
+               report_dir: str | None = None, pending: list[tuple[str, dict, str]] | None = None) -> dict | None:
+    """``hookspool bobbin check <dir> --report json`` (the contributor's command, run the same way), one result
+    row, the Markdown scorecard in the job summary and, with ``report_dir``, ``<name>.json`` / ``<name>.md``.
+
+    With ``pending`` the files are not written here but queued for ``write_reports``: a report written into
+    the checkout between two checks would be an untracked file, and the next bobbin's ``scope`` check would
+    list it as a change outside the bobbin (``touches-core``)."""
+    from hookspool.testing import bobbinkit
+    argv = [sys.executable, "-m", "hookspool", "bobbin", "check", rel_dir, "--report", "json"]
+    if base:
+        argv += ["--base", base]
+    if strict:
+        argv.append("--strict")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = ROOT + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    t0 = time.monotonic()
+    p = subprocess.run(argv, cwd=ROOT, env=env, capture_output=True, text=True)
+    secs = time.monotonic() - t0
+    try:
+        doc = json.loads(p.stdout)
+        if not isinstance(doc, dict) or doc.get("schema") != bobbinkit.SCHEMA:
+            raise ValueError("not a scorecard")
+    except ValueError:
+        tail = " | ".join((p.stderr or p.stdout).strip().splitlines()[-2:])[:300]
+        report.add("bobbin", rel_dir, False, f"`hookspool bobbin check` exited {p.returncode} without a scorecard: {tail}")
+        return None
+    md = bobbinkit.render_md(doc)
+    report.add("bobbin", rel_dir, bool(doc["ok"]) and p.returncode == 0, f"{doc['summary']} ({secs:.1f}s)")
+    report.extra.append(md)
+    if report_dir:
+        name = re.sub(r"[^a-z0-9_-]", "_", str(doc.get("bobbin") or os.path.basename(rel_dir)))
+        if pending is not None:
+            pending.append((name, doc, md))
+        else:
+            write_reports(report_dir, [(name, doc, md)])
+    return doc
+
+
+def write_reports(report_dir: str, cards: list[tuple[str, dict, str]]) -> None:
+    """``<name>.json`` and ``<name>.md`` for every queued scorecard, written once every bobbin is checked."""
+    os.makedirs(report_dir, exist_ok=True)
+    for name, doc, md in cards:
+        with open(os.path.join(report_dir, f"{name}.json"), "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=1, sort_keys=True)
+        with open(os.path.join(report_dir, f"{name}.md"), "w", encoding="utf-8") as f:
+            f.write(md)
+
+
+def write_meta(report_dir: str, pr: str | None, names: list[str]) -> None:
+    """``meta.json`` for the labelling job: the pull request number (which that job verifies against the
+    run's head commit before trusting it) and the bobbins checked."""
+    os.makedirs(report_dir, exist_ok=True)
+    num = int(pr) if pr and pr.isdigit() else None
+    with open(os.path.join(report_dir, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump({"pr": num, "bobbins": names}, f, indent=1)
 
 
 # ---- the conformance kit ---------------------------------------------------------------------------------
@@ -193,26 +349,25 @@ def template_nodeids(name: str) -> list[str]:
     if code != 0:
         return []
     ids = [ln.strip() for ln in out.splitlines() if "::" in ln and "[" in ln]
-    # ids look like ``test_x[<case>-<name>.toml]`` or ``test_y[<name>/event.http]``; a case id has no hyphen,
+    # ids look like ``test_x[<case>-<name>]`` (or ``<name>.toml``) or ``test_y[<name>/event.http]``; a case id has no hyphen,
     # so a template ``page`` does not select the tests of ``status-page``.
-    pat = re.compile(rf"\[(?:\w+-)?{re.escape(name)}\.toml\]$|\[{re.escape(name)}/")
+    pat = re.compile(rf"\[(?:\w+-)?{re.escape(name)}(?:\.toml)?\]$|\[{re.escape(name)}/")
     return [i for i in ids if pat.search(i)]
 
 
 def run_kit(spec: str, report: Report, test_file: str | None = None) -> None:
     kind, _, name = spec.partition(":")
     if kind == "template":
-        toml = f"{EXAMPLES_DIR}/{name}.toml"
-        if not os.path.exists(os.path.join(ROOT, toml)):
-            report.add("kit", spec, False, f"{toml} does not exist")
+        if template_manifest(name) is None:
+            report.add("kit", spec, False, f"{BOBBINS_DIR}/{name}/bobbin.toml does not exist")
             return
-        if not os.path.exists(os.path.join(ROOT, "tests", "captures", name, "event.http")):
-            report.add("kit", spec, False, f"tests/captures/{name}/event.http is required (a request signed "
-                                           f"with the test secret)")
+        event = f"{capture_dir(name)}/event.http"
+        if not os.path.exists(os.path.join(ROOT, event)):
+            report.add("kit", spec, False, f"{event} is required (a request signed with the test secret)")
             return
         ids = template_nodeids(name)
         if not ids:
-            report.add("kit", spec, False, f"no tests collected for {name}.toml in {TEMPLATE_TESTS}")
+            report.add("kit", spec, False, f"no tests collected for {name} in {TEMPLATE_TESTS}")
             return
         code, out, secs = _pytest(ids)
     elif kind == "code":
@@ -255,18 +410,22 @@ def load_allowlist() -> dict[tuple[str, str], str]:
 
 
 def source_names() -> set[str]:
-    return set(all_templates()) | set(all_code_sources())
+    bobbins = {os.path.basename(b) for b in all_bobbins()} - GENERIC_BOBBINS
+    return set(all_templates()) | set(all_code_sources()) | bobbins
 
 
 def core_files() -> list[str]:
     """The files that must stay source-agnostic: everything under ``hookspool/`` except the per-source plugin
-    modules themselves. The shared machinery in ``hookspool/sources/`` (``__init__.py`` and the template
-    engine ``template.py``) is core and is guarded."""
+    modules themselves, the bobbins (``hookspool/bobbins/<name>/``) and the per-provider helpers they share
+    (``hookspool/providers/``). The shared machinery in ``hookspool/sources/`` (``__init__.py`` and the template
+    engine ``template.py``) and ``hookspool/bobbins/__init__.py`` are core and are guarded."""
     out = []
     for base, _dirs, files in os.walk(os.path.join(ROOT, "hookspool")):
         rel = os.path.relpath(base, ROOT).replace(os.sep, "/")
         if "__pycache__" in rel:
             continue
+        if rel.startswith(BOBBINS_DIR + "/") or rel == PROVIDERS_DIR or rel.startswith(PROVIDERS_DIR + "/"):
+            continue                      # a bobbin, or a provider's helpers: they name their own vendor
         for f in files:
             if not f.endswith(".py"):
                 continue
@@ -323,25 +482,14 @@ def run_guard(report: Report) -> None:
 
 
 # ---- secret / hostname scan ------------------------------------------------------------------------------
-SECRET_PATTERNS = {
-    "private key block": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    "GitHub token": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b"),
-    "Slack token": re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
-    "AWS access key id": re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
-    "Google API key": re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
-    "OpenAI/Anthropic-style key": re.compile(r"\bsk-[A-Za-z0-9_-]{24,}"),
-    "Telegram bot token": re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b"),
-    "JWT": re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
-    "credentials in a URL": re.compile(r"\b[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s:@]{3,}@[^/\s]+"),
-    "assigned secret": re.compile(
-        r"""(?i)\b(?:secret|token|password|passwd|api[_-]?key)\b["']?\s*[:=]\s*["']([A-Za-z0-9+/_=-]{24,})["']"""),
-}
+SECRET_PATTERNS = _scan.SECRET_PATTERNS          # one set of patterns for this scan and the bobbin kit
 # Hosts that may appear: reserved names (RFC 2606/6761), single-label names, the loopback and
 # documentation addresses, and the public API/docs hosts the shipped sources link to.
 HOST_OK_SUFFIX = (".example", ".test", ".invalid", ".localhost", ".example.com", ".example.org", ".example.net",
                   "googleapis.com", "google.com", "github.com", "githubusercontent.com", "zoom.us", "plaid.com",
                   "atlassian.com", "trello.com", "standardwebhooks.com", "python.org", "pypi.org",
-                  "readthedocs.io", "shields.io", "mermaid.js.org")
+                  "readthedocs.io", "shields.io", "mermaid.js.org",
+                  "w3.org", "hairline.lucasmarkes.com")      # the SVG namespace, and the style the banners follow
 HOST_OK_EXACT = {"localhost", "example.com", "example.org", "example.net", "127.0.0.1", "0.0.0.0", "[::1]"}
 URL_RE = re.compile(r"""\b(?:https?|wss?)://(?:[^/\s'"<>@]*@)?(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)""")
 # A bare host name (``server_name hooks.example.com;``, a path under /etc/nginx/sites-available/): labels, then a
@@ -354,8 +502,8 @@ FQDN_RE = re.compile(rf"(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-
 FQDN_TEXT_RE = re.compile(
     rf"(?<![A-Za-z0-9_.-])((?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+(?:{FQDN_TLDS}|{FQDN_TLDS_TEXT_ONLY}))"
     rf"(?![A-Za-z0-9_-])")
-IPV4_RE = re.compile(r"(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![\d.])")
-DOC_NETS = ((192, 0, 2), (198, 51, 100), (203, 0, 113))
+IPV4_RE = _scan.IPV4_RE
+DOC_NETS = _scan.DOC_NETS
 ALLOW_MARK = "hookspool-scan: allow"
 MAX_SCAN_BYTES = 8 * 1024 * 1024
 
@@ -384,14 +532,7 @@ def host_allowed(host: str) -> bool:
     return any(h == s.lstrip(".") or h.endswith(s if s.startswith(".") else "." + s) for s in HOST_OK_SUFFIX)
 
 
-def ip_allowed(a: int, b: int, c: int, d: int) -> bool:
-    if max(a, b, c, d) > 255:
-        return True                     # not an address (a version string, say)
-    if a == 127 or (a, b, c, d) == (0, 0, 0, 0) or (a, b, c) in DOC_NETS:
-        return True
-    if a == 10 or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168) or (a == 169 and b == 254):
-        return True                     # RFC 1918 / link-local: the SSRF tests need them, and they identify no one
-    return a == 255 or a == 0           # masks, wildcards
+ip_allowed = _scan.ip_allowed
 
 
 def scan_text(rel: str, text: str, deny: list[str] | None = None) -> list[tuple[int, str, str]]:
@@ -402,13 +543,8 @@ def scan_text(rel: str, text: str, deny: list[str] | None = None) -> list[tuple[
     for i, ln in enumerate(text.splitlines(), 1):
         if ALLOW_MARK in ln:
             continue
-        for kind, rx in SECRET_PATTERNS.items():
-            if kind == "JWT" and rel.startswith(JWT_OK_UNDER):
-                continue
-            m = rx.search(ln)
-            if m and not (kind == "assigned secret" and re.search(r"(?i)test|example|placeholder|dummy|sentinel|fake",
-                                                                  m.group(1))):
-                out.append((i, kind, _redact(m.group(0))))
+        for kind, excerpt in _scan.secret_hits(ln, rel):
+            out.append((i, kind, excerpt))
         seen_hosts = set()
         for m in URL_RE.finditer(ln):
             seen_hosts.add(m.group(1).lower())
@@ -429,8 +565,7 @@ def scan_text(rel: str, text: str, deny: list[str] | None = None) -> list[tuple[
     return out
 
 
-def _redact(s: str) -> str:
-    return s if len(s) <= 12 else s[:6] + "..." + f"({len(s)} chars)"
+_redact = _scan.redact
 
 
 def tracked_files(include_ladder: bool = False) -> list[str]:
@@ -489,8 +624,16 @@ def main(argv: list[str] | None = None) -> int:
                        help="merge-base ref to diff against (default: $BASE_SHA or origin/main)")
         p.add_argument("--json", action="store_true", help="discover: print the specs as JSON")
         if name == "all":
+            p.add_argument("--skip-bobbins", action="store_true",
+                           help="leave the bobbin scorecards to their own job (bobbin.yml)")
             p.add_argument("--all-files", action="store_true", help="scan every tracked file, not only changes")
             p.add_argument("--include-ladder", action="store_true", help="with --all-files: also the tracked .ladder/")
+    b = sub.add_parser("bobbins")
+    b.add_argument("dirs", nargs="*", help="bobbin directories (default: the bobbins the change touches)")
+    b.add_argument("--base", default=os.environ.get("BASE_SHA") or "origin/main")
+    b.add_argument("--report-dir", help="write <name>.json / <name>.md scorecards and meta.json here")
+    b.add_argument("--pr", default=os.environ.get("PR_NUMBER"), help="the pull request number, for meta.json")
+    b.add_argument("--strict", action="store_true", help="advisory checks fail too")
     k = sub.add_parser("kit")
     k.add_argument("specs", nargs="+", help="template:<name> or code:<name>")
     k.add_argument("--test-file", help="code: the kit test module (default tests/test_sources_<name>.py)")
@@ -514,6 +657,17 @@ def main(argv: list[str] | None = None) -> int:
         for spec in args.specs:
             run_kit(spec, report, args.test_file)
         report.emit("Conformance kit")
+    elif args.cmd == "bobbins":
+        dirs = args.dirs or discover_bobbins(changed_files(args.base))
+        if not dirs:
+            report.add("bobbins", "changed bobbins", True, "no bobbin touched")
+        pending: list[tuple[str, dict, str]] = []
+        for d in dirs:
+            run_bobbin(d, report, base=args.base, strict=args.strict, report_dir=args.report_dir, pending=pending)
+        if args.report_dir:        # written after the last check: see run_bobbin on why not in between
+            write_reports(args.report_dir, pending)
+            write_meta(args.report_dir, args.pr, [os.path.basename(d) for d in dirs])
+        report.emit("Bobbin scorecards")
     elif args.cmd == "guard":
         run_guard(report)
         report.emit("Core guard")
@@ -525,6 +679,12 @@ def main(argv: list[str] | None = None) -> int:
         specs = cmd_discover(args, report)
         for spec in specs:
             run_kit(spec, report)
+        files = changed_files(args.base)
+        bobbins = [] if args.skip_bobbins else discover_bobbins(files)
+        if not args.skip_bobbins:
+            report.add("discover", "changed bobbins", True, ", ".join(bobbins) if bobbins else "no bobbin touched")
+        for d in bobbins:
+            run_bobbin(d, report, base=args.base)
         run_guard(report)
         run_scan(report, tracked_files(args.include_ladder) if args.all_files else changed_files(args.base))
         report.emit("Plugin checks")

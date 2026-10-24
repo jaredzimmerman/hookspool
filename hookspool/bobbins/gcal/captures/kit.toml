@@ -1,0 +1,18 @@
+# test values for `hookspool bobbin check`
+body_signed = false            # the channel token authenticates the sender, not the body
+
+[secrets]
+channel_token = "test-gcal-channel-token-PAYLOAD-SENTINEL-7f3a"
+cred = '{"client_id": "test-client-id", "client_secret": "test-client-secret", "refresh_token": "test-refresh-token", "token_uri": "https://oauth2.example.com/token"}'
+
+[[http]]                       # the bootstrap listing: no events yet, and the sync token for the next pass
+method = "GET"
+url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+status = 200
+json = { items = [], nextSyncToken = "test-sync-token-1" }
+
+[[http]]                       # the OAuth refresh of the test credential
+method = "POST"
+url = "https://oauth2.example.com/token"
+status = 200
+json = { access_token = "test-access-token", expires_in = 3600 }

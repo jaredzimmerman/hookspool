@@ -490,3 +490,15 @@ def test_check(make_config, tmp_path):
     d = ScriptDestination(NAME, {"argv": [str(tmp_path / "not-exec")]}, make_config())
     (tmp_path / "not-exec").write_text("x")
     assert "not an executable" in " ".join(d.check())
+
+
+def test_exit_65_is_permanent_and_dead_letters_at_once_while_75_and_other_codes_retry(make_config, tmp_path):
+    """A processor's ``Permanent`` exits 65 (``hookspool.processor.EX_PERMANENT``): no retry can change it."""
+    d = dest(make_config, tmp_path, "import sys\nsys.stderr.write('bad credential')\nsys.exit(65)")
+    o = go(d)
+    assert (o.kind, o.klass, o.status, o.reason) == ("dead", "permanent", 65, "exit 65")
+    assert o.detail.startswith("exit 65: ") and "bad credential" in o.detail
+    for rc in (75, 1, 2, 64, 66, 255):
+        d = dest(make_config, tmp_path, f"import sys\nsys.exit({rc})", name=f"script:rc{rc}")
+        o = go(d)
+        assert (o.kind, o.klass, o.status) == ("retry", "batch", rc), rc

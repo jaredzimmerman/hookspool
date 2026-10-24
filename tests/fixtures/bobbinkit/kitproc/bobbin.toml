@@ -1,0 +1,31 @@
+name = "kitproc"
+version = "1"
+summary = "Kit fixture: a processor that asks an API what changed"
+
+[source]
+module = "source"
+span = "burst"
+sender_retries = false
+
+[secrets.token]
+description = "the push token"
+[secrets.api_key]
+description = "the API key the processor uses"
+processor = true
+
+[settings.owner]
+description = "whose account"
+type = "string"
+required = true
+[settings.limit]
+description = "items per pass"
+type = "int"
+default = 10
+
+[processor]
+module = "processor"
+timeout_s = 60
+state = true
+
+[outputs.changed]
+description = "an item changed"

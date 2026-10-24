@@ -16,6 +16,11 @@ Schemes:
 - ``static_token``    a shared token (Pub/Sub push URL token, Calendar channel token)
 - ``jwt_es256``       an ES256 JWT whose claims carry the body's SHA-256 (Plaid)
 
+A sender's published verification keys are looked up through ``KeyCache`` (TTL, negative
+cache, one fetch per cooldown, stale key served while a refresh fails), with ``jwks_fetcher``
+for a JWKS URL or ``key_fetcher`` for a per-key endpoint, and ``shared_key_cache`` for the
+cache every source of one sender shares; a source never fetches keys itself (ARCHITECTURE 14.3.7).
+
 Timestamped schemes take ``tolerance_s`` (default 300) and the check is two-sided,
 ``abs(now - t) <= tolerance_s``: a future-dated request is rejected like a stale one.
 Pass ``now=req.now`` so tests can drive the clock.
@@ -29,8 +34,12 @@ import binascii
 import hashlib
 import hmac
 import json
+import logging
+import threading
 import time
 from typing import Any, Callable
+
+log = logging.getLogger("hookspool.verify")
 
 DEFAULT_TOLERANCE_S = 300.0
 MAX_SIGNATURE_CHARS = 4096
@@ -40,7 +49,8 @@ _ALGOS = {"sha1": hashlib.sha1, "sha256": hashlib.sha256, "sha384": hashlib.sha3
 __all__ = ["DEFAULT_TOLERANCE_S", "equal", "hmac_digest", "sha256_hex", "within_tolerance",
            "hmac_hex", "hmac_b64", "hmac_prefixed", "timestamped", "standard_webhooks",
            "standard_webhooks_key", "standard_webhooks_sign", "static_token", "jwt_header",
-           "jwt_es256", "hmac_hex_sign", "hmac_b64_sign"]
+           "jwt_es256", "hmac_hex_sign", "hmac_b64_sign", "KeyCache", "jwks_fetcher", "key_fetcher",
+           "shared_key_cache", "reset_shared_key_caches"]
 
 
 # ---- primitives ---------------------------------------------------------------------------
@@ -349,6 +359,201 @@ def jwt_es256(token: Any, get_key: Callable[[str], Any], *, body: bytes, now: fl
         if not isinstance(claimed, str) or not equal(claimed.strip().lower(), sha256_hex(body)):
             return False
     return True
+
+
+# ---- verification keys (JWKS) fetch and cache ------------------------------------------------------
+KEY_TTL_S = 24 * 3600.0
+KEY_NEGATIVE_TTL_S = 600.0
+KEY_FETCH_COOLDOWN_S = 60.0
+KEY_MAX_CACHED = 256
+JWKS_MAX_KEYS = 64
+JWKS_MAX_BYTES = 64 * 1024
+JWKS_TIMEOUT_S = 5.0
+
+
+class KeyCache:
+    """A sender's published verification keys, by ``kid``, for a source's ``verify``.
+
+    ``fetch(kid)`` asks the sender and returns one of: the JWK dict for ``kid`` (a per-key
+    endpoint, such as Plaid's), a JWKS set ``{"keys": [...]}`` (every key in it is cached by its
+    ``kid``; ``jwks_fetcher`` builds such a fetch for a URL), or None (the sender does not know
+    ``kid``). It may raise; a failure is "no answer", never "unknown".
+
+    Rules, shared by every source that uses it:
+
+    - a known key is served for ``ttl_s``; an unknown ``kid`` is negative-cached for
+      ``negative_ttl_s``;
+    - a ``kid`` not in the cache (a rotation) or past its TTL triggers a fetch, but at most one
+      fetch per ``cooldown_s`` for the whole cache, so requests with random ``kid`` s cannot
+      amplify against the sender or tie up intake threads; the fetch runs outside the lock;
+    - a known key past its TTL is still served while a refresh is blocked by the cooldown or
+      fails, so a client holding the fetch slot cannot starve genuine requests; it is dropped
+      only when a successful fetch says it is unknown (a JWKS set that no longer lists it), or
+      ``usable(jwk)`` is false;
+    - at most ``max_cached`` entries per table.
+
+    ``fetch`` may be left out when each ``lookup`` brings its own (a fetch that needs the
+    request's credentials). A failed fetch is logged once, as ``<name> key fetch failed:`` and the
+    error's class (and, for a ``net.NetError``, its status and short provider code, never a body),
+    unless ``on_error`` is given.
+
+    ``now`` is the request clock (``req.now``)."""
+
+    def __init__(self, fetch: Callable[[str], Any] | None = None, *, ttl_s: float = KEY_TTL_S,
+                 negative_ttl_s: float = KEY_NEGATIVE_TTL_S, cooldown_s: float = KEY_FETCH_COOLDOWN_S,
+                 max_cached: int = KEY_MAX_CACHED, usable: Callable[[dict], bool] | None = None,
+                 on_error: Callable[[BaseException], None] | None = None, name: str = "verification"):
+        self.fetch = fetch
+        self.name = str(name)
+        self.ttl_s = float(ttl_s)
+        self.negative_ttl_s = float(negative_ttl_s)
+        self.cooldown_s = float(cooldown_s)
+        self.max_cached = int(max_cached)
+        self.usable = usable or (lambda jwk: True)
+        self.on_error = on_error
+        self.lock = threading.Lock()
+        self.keys: dict[str, tuple[float, dict]] = {}      # kid -> (expires, jwk)
+        self.unknown: dict[str, float] = {}                # kid -> expires
+        self.last_fetch_at = float("-inf")
+        self.fetches = 0
+
+    def _prune(self, now: float) -> None:
+        for table in (self.keys, self.unknown):
+            if len(table) > self.max_cached:
+                for k in [k for k, e in table.items() if (e[0] if isinstance(e, tuple) else e) <= now]:
+                    del table[k]
+                while len(table) > self.max_cached:
+                    del table[next(iter(table))]
+
+    def _store(self, kid: str, jwk: Any, now: float) -> None:
+        if isinstance(jwk, dict) and self.usable(jwk):
+            self.keys[kid] = (now + self.ttl_s, jwk)
+            self.unknown.pop(kid, None)
+        else:
+            self.unknown[kid] = now + self.negative_ttl_s
+            self.keys.pop(kid, None)
+
+    def _failed(self, e: BaseException) -> None:
+        if self.on_error is not None:
+            self.on_error(e)
+            return
+        from .net import NetError         # lazy, as key_fetcher does
+        status = code = None
+        if isinstance(e, NetError):           # only net's errors carry a status and a sanitised code
+            status, code = e.status, e.code
+        extra = f" http={status} error_code={code or '-'}" if status is not None or code is not None else ""
+        log.warning("%s key fetch failed: %s%s", self.name, e.__class__.__name__, extra)
+
+    def lookup(self, kid: str, now: float | None = None, *, fetch: Callable[[str], Any] | None = None) -> dict | None:
+        """The JWK for ``kid``, or None. ``fetch`` replaces the cache's own for this call."""
+        now = time.time() if now is None else float(now)
+        fetch = fetch or self.fetch
+        if not isinstance(kid, str) or not kid:
+            return None
+        with self.lock:
+            hit = self.keys.get(kid)
+            if hit is not None and hit[0] > now:
+                return hit[1]
+            stale = hit[1] if hit is not None else None          # past its TTL, still the best we know
+            if self.unknown.get(kid, float("-inf")) > now:
+                return None
+            if now - self.last_fetch_at < self.cooldown_s and now >= self.last_fetch_at:
+                return stale                                     # refresh blocked: keep serving the known key
+            if fetch is None:
+                raise ValueError("KeyCache has no fetch")
+            self.last_fetch_at = now
+            self.fetches += 1
+        try:
+            got = fetch(kid)
+        except Exception as e:  # noqa: BLE001 - a failed fetch keeps the known key; the sender retries
+            self._failed(e)
+            return stale
+        with self.lock:
+            if isinstance(got, dict) and isinstance(got.get("keys"), list):
+                for jwk in got["keys"][:JWKS_MAX_KEYS]:
+                    k = jwk.get("kid") if isinstance(jwk, dict) else None
+                    if isinstance(k, str) and k and len(k) <= 256:
+                        self._store(k, jwk, now)
+                listed = {jwk.get("kid") for jwk in got["keys"][:JWKS_MAX_KEYS] if isinstance(jwk, dict)}
+                for k in [k for k in self.keys if k not in listed]:
+                    del self.keys[k]                             # withdrawn from the set: revoked
+                if kid not in self.keys:
+                    self._store(kid, None, now)                  # not in the set: unknown
+            else:
+                self._store(kid, got, now)
+            self._prune(now)
+            hit = self.keys.get(kid)
+        return hit[1] if hit is not None else None
+
+    def reset(self) -> None:
+        with self.lock:
+            self.keys.clear()
+            self.unknown.clear()
+            self.last_fetch_at = float("-inf")
+
+
+def key_fetcher(url: str, *, method: str = "GET", body: Any = None, field: str | None = None,
+                unknown: Callable[[int | None, str], bool] | None = None, timeout_s: float = JWKS_TIMEOUT_S,
+                max_bytes: int = JWKS_MAX_BYTES, http: Any = None, label: str = "keys") -> Callable[[str], Any]:
+    """A ``KeyCache`` fetch that asks the sender for its key(s) through ``net.Http`` (errors carry no
+    URL, query or body).
+
+    ``body`` is a JSON object sent with the request, or a function of the ``kid``; ``field`` names the
+    member of the answer that holds the one key (a per-key endpoint), else the answer must be a JWKS
+    set (``{"keys": [...]}``, every key in it is cached). ``unknown(status, code)`` says whether a
+    refusal means "the sender has no such key" (the fetch then returns None and the ``kid`` is
+    negative-cached); any other failure raises (``net.Retryable`` / ``net.Permanent``) and the cache keeps
+    what it knows. ``status`` is the HTTP status and ``code`` the provider's short error code ("" when
+    it sent none)."""
+    from .net import Http, Permanent
+
+    client = http if http is not None else Http(timeout_s=timeout_s, max_response_bytes=max_bytes)
+
+    def fetch(kid: str) -> Any:
+        payload = body(kid) if callable(body) else body
+        try:
+            data = client.request(method, url, json=payload, label=label)
+        except Permanent as e:
+            if unknown is not None and unknown(e.status, e.code):
+                return None
+            raise
+        if field is not None:
+            key = data.get(field) if isinstance(data, dict) else None
+            return key if isinstance(key, dict) else None
+        if not isinstance(data, dict) or not isinstance(data.get("keys"), list):
+            raise ValueError("not a JWKS document")
+        return data
+
+    return fetch
+
+
+def jwks_fetcher(url: str, *, timeout_s: float = JWKS_TIMEOUT_S, max_bytes: int = JWKS_MAX_BYTES,
+                 http: Any = None) -> Callable[[str], dict]:
+    """A ``KeyCache`` fetch that GETs the JWKS set at ``url`` (through ``net.Http``, so
+    errors carry no URL or body). The ``kid`` argument is ignored: the whole set is fetched."""
+    return key_fetcher(url, timeout_s=timeout_s, max_bytes=max_bytes, http=http, label="jwks")
+
+
+_SHARED_KEY_CACHES: dict[str, KeyCache] = {}
+_SHARED_LOCK = threading.Lock()
+
+
+def shared_key_cache(name: str, **kw: Any) -> KeyCache:
+    """The process-wide ``KeyCache`` called ``name``, made with ``kw`` on first use. Sources that share a
+    sender's keys (every Plaid source of one environment) share one cache, so the one-fetch-per-cooldown
+    guard holds across them. ``name`` appears in the cache's log line, so it must carry no secret."""
+    with _SHARED_LOCK:
+        cache = _SHARED_KEY_CACHES.get(name)
+        if cache is None:
+            cache = _SHARED_KEY_CACHES[name] = KeyCache(name=name, **kw)
+        return cache
+
+
+def reset_shared_key_caches(prefix: str = "") -> None:
+    """Forget the shared caches whose name starts with ``prefix`` (tests)."""
+    with _SHARED_LOCK:
+        for k in [k for k in _SHARED_KEY_CACHES if k.startswith(prefix)]:
+            del _SHARED_KEY_CACHES[k]
 
 
 # ---- signing helpers (outbound deliveries, tests) --------------------------------------------------

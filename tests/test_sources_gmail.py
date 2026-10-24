@@ -47,6 +47,7 @@ def sign(raw, secrets, now):
 
 
 KIT = Kit(name="gmail", module=gmail, secrets={"push_token": TOKEN}, sign=sign, body_signed=False,
+          source_cfg={"action": "script:gmail"},
           sample=request("POST", "/hooks/gmail", {"Content-Type": "application/json"}, envelope()))
 
 
@@ -144,7 +145,7 @@ def test_the_envelope_is_normalised():
     assert c.payload == {"emailAddress": "owner@example.test", "historyId": "99", "messageId": "m-7",
                          "publishTime": "2026-10-23T10:00:00Z", "subscription": SUB}
     assert c.key == "owner@example.test" and c.dedup_id == "m-7" and c.event_type == "history"
-    assert c.attrs == {"account": "owner@example.test"} and c.default_action == "script:gmail_delta"
+    assert c.attrs == {"account": "owner@example.test"} and c.default_action is None
 
 
 def test_unpadded_base64_decodes():
@@ -193,7 +194,7 @@ def test_pushes_for_one_mailbox_coalesce_and_other_mailboxes_do_not(env):
     rows = {r["key"]: r for r in env.batches()}
     assert set(rows) == {ACCOUNT, "other@example.test"}
     assert rows[ACCOUNT]["count"] == 3 and rows["other@example.test"]["count"] == 1
-    assert rows[ACCOUNT]["destination"] == "script:gmail_delta"
+    assert rows[ACCOUNT]["destination"] == "script:gmail"
     assert (rows[ACCOUNT]["quiet_s"], rows[ACCOUNT]["max_s"]) == (30.0, 120.0)        # the mail span
 
 
@@ -212,7 +213,8 @@ def test_a_new_message_id_for_the_same_change_joins_the_batch(env):
 
 
 def test_declarations():
-    assert (gmail.span, gmail.sender_retries, gmail.action) == ("mail", True, "script:gmail_delta")
+    assert (gmail.span, gmail.sender_retries) == ("mail", True)
+    assert not hasattr(gmail, "action"), "an instance's outputs choose the action (ARCHITECTURE 14.3.3)"
     assert gmail.auth_headers == ("X-Push-Token",) and gmail.keep_headers == ()
     assert gmail.secrets == ("push_token",)
 
@@ -232,17 +234,18 @@ dry = true
 
 [sources.gmail]
 module = "hookspool.sources.gmail"
+action = "script:gmail"
 secrets.push_token = {{ file = "{sec}" }}
 
-[destinations."script:gmail_delta"]
-argv = ["{sys.executable}", "gmail_delta.py", "--batch"]
+[destinations."script:gmail"]
+argv = ["{sys.executable}", "-c", "pass"]
 state_dir = "{state}"
 ''')
     return str(p)
 
 
 def test_source_test_cli_with_the_default_loader(tmp_path, capsys):
-    cap = os.path.join(sourcekit.CAPTURES, "gmail", "event.http")
+    cap = os.path.join(sourcekit.capture_dir("gmail"), "event.http")
     rc = main(["--config", _config(tmp_path), "source", "test", "gmail", "--request", cap])
     doc = json.loads(capsys.readouterr().out)
     assert rc == 0 and doc["result"] == "queued", doc
@@ -256,7 +259,7 @@ def test_config_check_accepts_the_example(tmp_path):
 
 # ---- capture generation (maintenance) -------------------------------------------------------------------------------
 def write_captures() -> None:
-    d = os.path.join(sourcekit.CAPTURES, "gmail")
+    d = sourcekit.capture_dir("gmail")
     os.makedirs(d, exist_ok=True)
     hdr = [("Content-Type", "application/json"), ("User-Agent", "APIs-Google; (+https://developers.google.com/webmasters/APIs-Google.html)")]
 

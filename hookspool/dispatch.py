@@ -108,10 +108,12 @@ class Dispatcher:
     def __init__(self, store: Store | None = None, config: dict | None = None, *,
                  now: Callable[[], float] = time.time, config_path: str | None = None,
                  destination_factory: Callable[[dict, str], Destination] | None = None,
-                 jitter: Callable[[], float] | None = None, lock_path: str | None = None):
+                 jitter: Callable[[], float] | None = None, lock_path: str | None = None,
+                 cli_home: str | None = None):
+        self._cli_home = cli_home      # --home: reloads must expand with the same home as startup
         if config is None:
             config_path = config_path or _config.config_path()
-            config = _config.load_config(config_path)
+            config = _config.load_config(config_path, cli_home=cli_home)
         self._config_path = config_path if config_path is not None else config.get("_path")
         self._mtime = self._stat()
         self.config = config
@@ -274,7 +276,7 @@ class Dispatcher:
                 self._config_failed(now, f"{self._config_path} is missing; keeping the previous config")
             return False
         try:
-            new = _config.load_config(self._config_path)
+            new = _config.load_config(self._config_path, cli_home=self._cli_home)
             rep = _config.check(new, load_plugin=_config.default_plugin_loader, check_secrets=False)
             if not rep.ok:
                 raise _config.ConfigError("; ".join(rep.errors[:5]))
@@ -788,7 +790,8 @@ def cli(a, cfg: dict) -> int:
     db = _config.db_path(cfg, getattr(a, "db", None), getattr(a, "home", None))
     cfg_path = _config.config_path(getattr(a, "config", None), getattr(a, "home", None))
     store = Store(db, cfg, busy_timeout_s=30)
-    d = Dispatcher(store, cfg, config_path=cfg_path, lock_path=os.path.join(home, "dispatch.lock"))
+    d = Dispatcher(store, cfg, config_path=cfg_path, lock_path=os.path.join(home, "dispatch.lock"),
+                   cli_home=getattr(a, "home", None))
     try:
         d.start()
     except LockHeld as e:

@@ -24,8 +24,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEPLOY = os.path.join(ROOT, "deploy")
 
 
+OPS = os.path.join(os.path.dirname(DEPLOY), "docs", "operations")
+
+
 def read(*p: str) -> str:
     with open(os.path.join(DEPLOY, *p), encoding="utf-8") as f:
+        return f.read()
+
+
+def read_ops(name: str) -> str:
+    """A page of the operations guide, which holds the instructions for the files in deploy/."""
+    with open(os.path.join(OPS, name), encoding="utf-8") as f:
         return f.read()
 
 
@@ -118,7 +127,7 @@ def test_effective_source_cap_is_768_kib_and_the_docs_say_so():
     caps = {hc.source_max_body_bytes(CONFIG, name) for name in CONFIG["sources"]
             if "max_body_bytes" not in CONFIG["sources"][name]}
     assert caps == {786432}, caps
-    row = [ln for ln in read("README.md").splitlines() if ln.startswith("| **GitHub payload over")][0]
+    row = [ln for ln in read_ops("sweeps.md").splitlines() if ln.startswith("| **GitHub payload over")][0]
     assert "768 KiB" in row and "1 MiB by default" not in row
     assert "768 KiB" in read("nginx.example.conf")
 
@@ -146,7 +155,7 @@ def test_nginx_every_location_rate_limits_with_a_defined_zone_and_a_real_upstrea
         target = pp[0].partition("/hooks/")[2] or path.removeprefix("/hooks/")
         sources.append(target)
     # one location per source in the config example (github has two paths, one source)
-    assert set(sources) == set(CONFIG["sources"])
+    assert set(sources) == set(CONFIG["sources"]) | set(CONFIG.get("bobbins", {}))
 
 
 def test_nginx_route_hints_come_from_the_path_and_match_the_config_routes(nginx):
@@ -260,9 +269,10 @@ def rw(u):
 
 def test_dispatch_read_write_paths_cover_home_and_every_script_state_dir():
     home = CONFIG["spool"]["home"]
-    state_dirs = [d["state_dir"] for n, d in CONFIG["destinations"].items() if n.startswith("script:")]
-    assert len(state_dirs) == 2
+    state_dirs = [d["state_dir"] for n, d in CONFIG["destinations"].items() if n.startswith("script:") and "state_dir" in d]
     paths = rw(unit("hookspool-dispatch.service"))
+    # a bobbin's processor keeps its state in <home>/services/<instance>, below the home that is listed
+    assert CONFIG["bobbins"] and not any(b.get("state_dir") for b in CONFIG["bobbins"].values())
     assert home in paths
     for d in state_dirs:
         assert d in paths, f"{d} missing from ReadWritePaths"
@@ -300,7 +310,8 @@ def placed(tmp_path):
         .replace("~/.hermes/webhook_subscriptions.json", str(subs))
     cfg = tomllib.loads(text)
     (etc / "secrets").mkdir(parents=True)
-    for s in cfg["sources"].values():
+    (etc / "google").mkdir(parents=True)
+    for s in [*cfg["sources"].values(), *cfg["bobbins"].values()]:
         for ref in s.get("secrets", {}).values():
             if "file" in ref:
                 open(ref["file"], "w").write("test-secret\n")
@@ -309,7 +320,8 @@ def placed(tmp_path):
                 open(ref["env_file"], "w").write("PLAID_CLIENT_ID=a\nPLAID_SECRET=b\n")
                 os.chmod(ref["env_file"], 0o600)
     # the Hermes side, as an operator has it after step 5 of the README: no events, no coalesce
-    names = {r["destination"] for r in cfg["routes"]} | {s["action"] for s in cfg["sources"].values()}
+    names = {r["destination"] for r in cfg["routes"]} | {s["action"] for s in cfg["sources"].values()} \
+        | {d for b in cfg["bobbins"].values() for d in b["outputs"].values()}
     subs.write_text(json.dumps({n.split(":", 1)[1]: {"secret": "s", "prompt": "x"}
                                 for n in names if n.startswith("hermes:")}))
     path = tmp_path / "config.toml"
@@ -339,32 +351,41 @@ def test_config_example_check_catches_a_hermes_events_filter(placed, capsys, mon
 
 
 def test_config_example_every_source_is_covered_by_the_readme_sweep_table():
-    readme = read("README.md")
-    table = readme.split("## 4. Sweeps")[1].split("### Known limits")[0]
+    readme = read_ops("sweeps.md")
+    table = readme.split("# Sweeps\n")[1].split("### Known limits")[0]
     rows = {ln.split("|")[1].strip().lower(): ln for ln in table.splitlines() if ln.startswith("| ") and "---" not in ln}
-    for src in CONFIG["sources"]:
+    for src in [*CONFIG["sources"], *CONFIG["bobbins"]]:
         key = {"gmail": "gmail (pub/sub)", "gcal": "calendar"}.get(src, src)
         assert key in rows, f"no sweep row for {src}"
         cells = [c.strip() for c in rows[key].split("|")[1:-1]]
         assert len(cells) == 7 and all(cells), rows[key]
-        # the example ships 0 everywhere (README section 2: a source that was never moved would alert
-        # "silent" on day one); the value to set at cutover is named in the config comment and the README cell
-        assert CONFIG["sources"][src].get("expect_every_s", 0) == 0, src
-        if src in ("gmail", "gcal"):
-            text = re.search(rf"\[sources\.{src}\].*?(?=\n\[)", read("config.example.toml"), re.S).group(0)
-            (later,) = re.findall(r"then (\d+)", text)
-            assert f"`{later}`" in cells[4], f"{src}: README says {cells[4]!r}, config says {later}"
+        # the example ships 0 everywhere (the rollout order in running.md: a source that was never moved would alert
+        # "silent" on day one); the value to set at cutover is the bobbin's recommendation, named in the sweeps cell
+        if src in CONFIG["bobbins"]:
+            with open(os.path.join(ROOT, "hookspool", "bobbins", src, "bobbin.toml"), "rb") as f:
+                later = tomllib.load(f)["source"].get("expect_every_s")
+            if later is None:                    # the bobbin recommends no silence limit: the cell says 0
+                assert CONFIG["bobbins"][src].get("expect") is not True, src
+                assert cells[4].startswith("`0`"), f"{src}: README says {cells[4]!r}, the bobbin recommends none"
+            else:
+                assert CONFIG["bobbins"][src].get("expect") is False, src
+                assert f"`{later}`" in cells[4], f"{src}: README says {cells[4]!r}, the bobbin recommends {later}"
+        else:
+            assert CONFIG["sources"][src].get("expect_every_s", 0) == 0, src
     assert "removed" in table.lower() or "none" in table.lower()
 
 
 # ---- README ---------------------------------------------------------------------------------
-def test_readme_has_the_required_sections_and_rows():
-    r = read("README.md")
-    for h in ("## 1. Install", "## 2. Rollout order and rollback", "## 3. Gateway-down drill", "## 4. Sweeps",
-              "### Known limits", "## 5. Upgrading"):
-        assert h in r, h
+def test_operations_pages_have_the_required_sections_and_rows():
+    running, drills = read_ops("running.md"), read_ops("drills.md")
+    sweeps, upgrading = read_ops("sweeps.md"), read_ops("upgrading.md")
+    r = "\n".join((running, drills, sweeps, upgrading, read_ops("day-two.md")))
+    for page_text, h in ((running, "## Install"), (running, "## Rollout order and rollback"),
+                         (drills, "## Gateway-down drill"), (sweeps, "# Sweeps"),
+                         (sweeps, "### Known limits"), (upgrading, "# Upgrading")):
+        assert h in page_text, h
     # rollout: GitHub first, every step names its rollback
-    steps = [ln for ln in r.split("## 2. Rollout")[1].split("Per-step notes")[0].splitlines() if re.match(r"\| \d\.", ln)]
+    steps = [ln for ln in running.split("## Rollout")[1].split("Per-step notes")[0].splitlines() if re.match(r"\| \d\.", ln)]
     assert [re.match(r"\| \d\. (\w+)", s).group(1) for s in steps] == \
         ["install", "GitHub", "Plaid", "Gmail", "Calendar", "Trello", "Zoom", "retire"]
     assert all(len(s.split("|")) == 6 and s.split("|")[4].strip() for s in steps)    # a rollback in every row
@@ -378,8 +399,8 @@ def test_readme_has_the_required_sections_and_rows():
     assert re.search(r"\| GitHub \|[^\n]*\*\*No\.\*\*", r)
 
 
-def test_readme_cli_commands_exist():
-    r = read("README.md")
+def test_operations_cli_commands_exist():
+    r = "\n".join(read_ops(n) for n in ("running.md", "drills.md", "sweeps.md", "upgrading.md", "day-two.md"))
     code = "\n".join(re.findall(r"```\w*\n(.*?)```", r, re.S) + re.findall(r"`([^`\n]+)`", r))
     cmds = set(re.findall(r"(?<![\w/.-])(?<!-[ugo] )hookspool[ \t]+(?:--?[\w-]+[ \t]+)*([a-z]+)\b", code))
     assert {"status", "list", "issues", "enqueue", "reload", "migrate", "check", "pause", "export", "replay", "drop",

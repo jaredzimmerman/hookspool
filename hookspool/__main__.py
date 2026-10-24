@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import time
+import tomllib
 
 from . import config as _config
 from .store import STATES, InvalidEvent, LockHeld, SchemaError, SpoolError, Store, acquire_lock
@@ -89,6 +90,21 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("name")
     p.add_argument("--request", required=True, help=".http capture (start line, headers, blank line, body)")
     p.add_argument("--now", type=float, help="unix seconds to verify at (default: the capture's '# now:' or now)")
+    p = sub.add_parser("bobbin", help="bobbins: list | show <bobbin> | expand [<instance>] | new <name> | check <dir>")
+    p.add_argument("subcmd", choices=("list", "show", "expand", "new", "check"))
+    p.add_argument("name", nargs="?", help="the bobbin (show), the instance (expand), the new bobbin's name (new) or"
+                                           " the bobbin directory (check)")
+    p.add_argument("--dir", default=".", help="new: the parent directory (default: the current directory)")
+    p.add_argument("--code", action="store_true", help="new: a source.py bobbin instead of a copy of the webhook bobbin")
+    p.add_argument("--template", action="store_true", help=argparse.SUPPRESS)       # the default now; kept for old scripts
+    p.add_argument("--set", dest="set_", action="append", default=[], metavar="NAME=VALUE",
+                   help="new: freeze a webhook setting (scheme, header, prefix, key, ...) into the template;"
+                        " the value is TOML (--set 'key=[\"id\"]') or a bare string")
+    p.add_argument("--processor", action="store_true", help="new: include a processor.py")
+    p.add_argument("--report", choices=("text", "md", "json"), default="text",
+                   help="check: the scorecard format (default text)")
+    p.add_argument("--strict", action="store_true", help="check: advisory checks fail too")
+    p.add_argument("--base", help="check: the git ref the change is compared with (for the scope check)")
     sub.add_parser("check", help="validate config, secrets, plugins and the spool")
     sub.add_parser("reload", help="check, then touch the config so both processes reload")
     p = sub.add_parser("migrate", help="apply pending schema migrations")
@@ -111,12 +127,25 @@ def _out(a, obj, text: str | None = None) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     a = _parser().parse_args(argv)
+    if a.cmd == "bobbin" and a.subcmd == "check":
+        if not a.name:
+            _err("bobbin check: give the bobbin directory")
+            return EXIT_NOTHING
+        from .testing import bobbinkit       # needs no config: it checks one directory
+        return bobbinkit.main(a.name, report=a.report, strict=a.strict, base=a.base)
     try:
         cfg_path = _config.config_path(a.config, a.home)
-        cfg = _config.load_config(cfg_path)
+        cfg = _config.load_config(cfg_path, cli_home=a.home, expand=a.cmd != "bobbin")
     except _config.ConfigError as e:
-        _err(str(e))
+        errors = getattr(e, "errors", None)
+        if errors:
+            for m in errors:
+                print(f"error: {m}", file=sys.stderr)
+        else:
+            _err(str(e))
         return EXIT_CONFIG
+    if a.cmd == "bobbin":
+        return _bobbin(a, cfg)
     home = _config.home_dir(cfg, a.home)
     db = _config.db_path(cfg, a.db, a.home)
 
@@ -188,6 +217,113 @@ def main(argv: list[str] | None = None) -> int:
     except SpoolError as e:
         _err(str(e))
         return EXIT_CONFIG
+
+
+def _set_args(items: list[str]) -> dict | None:
+    """``--set NAME=VALUE`` pairs: the value is a TOML value, else the bare string. A template key that takes
+    only a string keeps the text as written (``prefix=1`` is the string ``1``, not an integer)."""
+    from .bobbin_loader import TEMPLATE_KEYS
+    out: dict = {}
+    for item in items:
+        k, eq, raw = item.partition("=")
+        k = k.strip()
+        if not eq or not k:
+            raise ValueError(f"--set {item!r}: expected NAME=VALUE")
+        try:
+            v = tomllib.loads("v = " + raw)["v"]
+        except tomllib.TOMLDecodeError:
+            v = raw
+        out[k] = raw if TEMPLATE_KEYS.get(k) == ("string",) and not isinstance(v, str) else v
+    return out or None
+
+
+def _bobbin(a, cfg: dict) -> int:
+    """``hookspool bobbin list | show | expand | new`` (ARCHITECTURE §14.3.5). ``cfg`` is the
+    file as written (not expanded)."""
+    from . import bobbin_loader
+    if a.subcmd in ("show", "new") and not a.name:
+        _err(f"bobbin {a.subcmd}: give a {'bobbin' if a.subcmd == 'show' else 'name'}")
+        return EXIT_NOTHING
+    if a.subcmd == "new":
+        if a.template and a.code:
+            _err("--template is the default; it cannot be combined with --code")
+            return EXIT_CONFIG
+        try:
+            d = bobbin_loader.scaffold(a.name, a.dir, code=a.code, processor=a.processor,
+                                       settings=_set_args(a.set_))
+        except ValueError as e:
+            _err(str(e))
+            return EXIT_CONFIG
+        except FileExistsError:
+            _err(f"{os.path.join(os.path.abspath(a.dir), a.name)} already exists")
+            return EXIT_NOTHING
+        print(f"created {d}")
+        return EXIT_OK
+    if a.subcmd == "expand":
+        try:
+            ex = bobbin_loader.expand(cfg, cli_home=a.home)
+        except bobbin_loader.BobbinError as e:
+            for m in e.errors:
+                print(f"error: {m}", file=sys.stderr)
+            return EXIT_CONFIG
+        if a.name is not None and a.name not in ex["_bobbins"]:
+            _err(f"no [bobbins.{a.name}] in the config")
+            return EXIT_NOTHING
+        if not ex["_bobbins"]:
+            _err("no [bobbins] in the config")
+            return EXIT_NOTHING
+        sys.stdout.write(bobbin_loader.render(ex, a.name))
+        return EXIT_OK
+    pkgs, errs = bobbin_loader.discover(cfg)
+    for m in errs:
+        print(f"warning: {m}", file=sys.stderr)
+    services = cfg.get("bobbins") if isinstance(cfg.get("bobbins"), dict) else {}
+    users: dict[str, list[str]] = {}
+    for inst, spec in services.items():
+        pname = spec.get("bobbin", inst) if isinstance(spec, dict) else inst
+        users.setdefault(str(pname), []).append(inst)
+    if a.subcmd == "list":
+        rows = [{"name": p.name, "version": p.version, "origin": p.origin, "summary": p.summary,
+                 "instances": users.get(p.name, []), "valid": not p.errors} for p in pkgs.values()]
+        lines = [f"{r['name']:<20} {r['version']:<8} {r['origin']:<10} {r['summary']}"
+                 + (f"  [instances: {', '.join(r['instances'])}]" if r["instances"] else "")
+                 + ("" if r["valid"] else "  (invalid)") for r in rows]
+        _out(a, rows, "\n".join(lines))
+        return EXIT_OK if rows else EXIT_NOTHING
+    p = pkgs.get(a.name)
+    if p is None:
+        _err(f"no bobbin {a.name!r} (see `hookspool bobbin list`)")
+        return EXIT_NOTHING
+    src = p.source
+    info = {"name": p.name, "version": p.version, "origin": p.origin, "dir": p.dir, "summary": p.summary,
+            "source": "template" if "template" in src else src.get("module"),
+            "span": src.get("span"), "sender_retries": src.get("sender_retries"),
+            "expect_every_s": src.get("expect_every_s"), "proxy": src.get("proxy"),
+            "processor": p.processor, "instances": users.get(p.name, []), "errors": p.errors,
+            "secrets": {k: {"description": v.get("description", ""), "processor": v.get("processor") is True}
+                        for k, v in p.secrets.items() if isinstance(v, dict)},
+            "settings": {k: {"type": v.get("type"), "required": v.get("required") is True,
+                             "default": v.get("default"), "description": v.get("description", "")}
+                         for k, v in p.settings.items() if isinstance(v, dict)},
+            "outputs": {k: (v.get("description", "") if isinstance(v, dict) else "") for k, v in p.outputs.items()}}
+    lines = [f"{p.name} {p.version} ({p.origin}: {p.dir})", f"  {p.summary}",
+             f"  source: {info['source']}  span: {info['span'] or '-'}  sender_retries: {info['sender_retries']}"
+             f"  expect_every_s: {info['expect_every_s'] or '-'}"]
+    if info["proxy"]:
+        lines.append(f"  proxy: {info['proxy']}")
+    if p.processor is not None:
+        lines.append(f"  processor: timeout_s={p.processor.get('timeout_s', bobbin_loader.DEFAULT_PROCESSOR_TIMEOUT_S)}"
+                     f" state={p.processor.get('state') is True}")
+    lines.append("  secrets:")
+    lines += [f"    {k}{' (processor)' if v['processor'] else ''}: {v['description']}" for k, v in info["secrets"].items()]
+    lines.append("  settings:")
+    lines += [f"    {k}: {v['type']}" + (" required" if v["required"] else f" default={json.dumps(v['default'])}")
+              + (f"  {v['description']}" if v["description"] else "") for k, v in info["settings"].items()]
+    lines.append("  outputs:")
+    lines += [f"    {k}: {v}" for k, v in info["outputs"].items()]
+    lines += [f"  error: {e}" for e in p.errors]
+    _out(a, info, "\n".join(lines))
+    return EXIT_OK
 
 
 def _run(a, st: Store, cfg: dict) -> int:

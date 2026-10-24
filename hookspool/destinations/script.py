@@ -1,14 +1,19 @@
 """``script:<name>`` destination (contract C3; ARCHITECTURE §6.6).
 
 Runs ``argv`` (no shell) with the batch document on stdin, in its own session so a timeout or
-the worker deadline can kill the whole process group. Environment (ARCHITECTURE §10): minimal. ``PATH``,
-``HOME`` and ``LANG`` from the dispatcher, then ``env_file`` (re-read every attempt), then
-``HOOKSPOOL_BATCH_ID`` and ``HOOKSPOOL_DELIVERY_ID`` (and ``HOOKSPOOL_STATE_DIR`` when
-``state_dir`` is configured; the directory is created). Nothing else of the dispatcher's
-environment reaches a script, so its secrets do not.
+the worker deadline can kill the whole process group. A bobbin's processor destination
+has ``processor = "<instance>"`` instead of ``argv``; the argv is then built at spawn as
+``[sys.executable, "-I", "-m", "hookspool.processor", "<instance>"]``, so the interpreter is always
+the dispatcher's own and the working directory is never on ``sys.path`` (ARCHITECTURE §14.3.3).
+Environment (ARCHITECTURE §10): minimal. ``PATH``, ``HOME`` and ``LANG`` from the dispatcher, then
+``env_file`` (re-read every attempt), then the ``env`` table, then ``HOOKSPOOL_BATCH_ID`` and
+``HOOKSPOOL_DELIVERY_ID`` (and ``HOOKSPOOL_STATE_DIR`` when ``state_dir`` is configured; the
+directory is created). Nothing else of the dispatcher's environment reaches a script, so its
+secrets do not.
 
-Outcomes: exit 0 is ``ok``; any other exit is ``batch`` (the script ran and failed on this
-batch: counted); cannot start, timeout and the worker deadline are ``transport``; an unreadable
+Outcomes: exit 0 is ``ok``; exit 65 (``hookspool.processor``'s ``Permanent``: sysexits EX_DATAERR) is
+``permanent`` and dead-letters the batch at once, since no retry can change it; any other exit is ``batch``
+(the script ran and failed on this batch: counted, retried; the processor's retry code is 75); cannot start, timeout and the worker deadline are ``transport``; an unreadable
 or undecodable ``env_file`` or an unwritable ``state_dir`` is ``config``. Stdout is capped at 1 MiB: past it the attempt
 fails (``batch``) rather than truncating, because dropping the tail would drop emits while
 marking the batch delivered.
@@ -25,6 +30,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 from typing import ClassVar
@@ -38,6 +44,8 @@ STDERR_TAIL = 2048
 READER_GRACE_S = 2.0
 _REQUIRED_EMIT = ("source", "key", "payload")
 ENV_ALLOW = ("PATH", "HOME", "LANG")
+PROCESSOR_MODULE = "hookspool.processor"
+EXIT_PERMANENT = 65                     # hookspool.processor.EX_PERMANENT
 _ENQUEUE_LINE = re.compile(r"""^\{\s*["']enqueue["']""")
 _ENQUEUE_LINE_B = re.compile(rb"""^\{\s*["']enqueue["']""")
 
@@ -139,13 +147,25 @@ class ScriptDestination(Destination):
     def __init__(self, name, spec, config):
         super().__init__(name, spec, config)
         a = self.spec.get("argv")
+        p = self.spec.get("processor")
+        self.processor = str(p) if isinstance(p, str) and p else None
         self.argv = [str(x) for x in a] if isinstance(a, list) else []
+        e = self.spec.get("env")
+        self.env = {str(k): str(v) for k, v in e.items()} if isinstance(e, dict) else {}
         self.cwd = os.path.expanduser(self.spec["cwd"]) if self.spec.get("cwd") else None
         self.env_file = os.path.expanduser(self.spec["env_file"]) if self.spec.get("env_file") else None
         self.state_dir = os.path.expanduser(self.spec["state_dir"]) if self.spec.get("state_dir") else None
 
+    def command(self) -> list[str]:
+        """The argv to spawn: ``argv``, or the processor runtime under the dispatcher's own
+        interpreter (``-I``: no working directory, user site or PYTHON* variables on the path)."""
+        if self.processor:
+            return [sys.executable, "-I", "-m", PROCESSOR_MODULE, self.processor]
+        return list(self.argv)
+
     def deliver(self, doc: dict, body: bytes, delivery_id: str, ctx: DeliveryContext) -> Outcome:
-        if not self.argv:
+        argv = self.command()
+        if not argv:
             return Outcome.config("script has no argv", detail=f"destination {self.name!r} has no argv")
         env = {k: os.environ[k] for k in ENV_ALLOW if k in os.environ}
         env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
@@ -154,9 +174,10 @@ class ScriptDestination(Destination):
                 env.update(_config.read_env_file(self.env_file))
             except (OSError, ValueError) as e:
                 return Outcome.config("env_file unreadable", detail=f"env_file unreadable: {e.__class__.__name__}")
+        env.update(self.env)
         if self.state_dir:
             try:
-                os.makedirs(self.state_dir, exist_ok=True)
+                os.makedirs(self.state_dir, mode=0o700, exist_ok=True)
             except OSError as e:
                 return Outcome.config("state_dir not writable",
                                       detail=f"state_dir not writable: {e.__class__.__name__}")
@@ -169,7 +190,7 @@ class ScriptDestination(Destination):
         if budget <= 0:
             return Outcome.transport(why, detail=why)
         try:
-            p = subprocess.Popen(self.argv, cwd=self.cwd, env=env, stdin=subprocess.PIPE,
+            p = subprocess.Popen(argv, cwd=self.cwd, env=env, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         except (OSError, ValueError) as e:
             return Outcome.transport(f"cannot start ({e.__class__.__name__})",
@@ -216,6 +237,8 @@ class ScriptDestination(Destination):
         if rc != 0:
             if rc < 0:
                 return Outcome.batch(f"killed by signal {-rc}", status=rc, detail=f"killed by signal {-rc}: {tail}")
+            if rc == EXIT_PERMANENT:
+                return Outcome.permanent(f"exit {rc}", status=rc, detail=f"exit {rc}: {tail}")
             return Outcome.batch(f"exit {rc}", status=rc, detail=f"exit {rc}: {tail}")
         if out.total > STDOUT_CAP:
             return Outcome.batch("stdout over 1 MiB", status=0,
@@ -229,10 +252,14 @@ class ScriptDestination(Destination):
 
     def check(self) -> list[str]:
         problems: list[str] = []
-        if not self.argv:
+        argv = self.command()
+        if not argv:
             return [f"{self.name}: argv is required"]
-        exe = self.argv[0]
-        if os.sep in exe:
+        exe = argv[0]
+        if self.processor:
+            if not (exe and os.path.isfile(exe) and os.access(exe, os.X_OK)):
+                problems.append(f"{self.name}: the dispatcher's interpreter {exe!r} is not an executable file")
+        elif os.sep in exe:
             if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
                 problems.append(f"{self.name}: argv[0] {exe} is not an executable file")
         else:

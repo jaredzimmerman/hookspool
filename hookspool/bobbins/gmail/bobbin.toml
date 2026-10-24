@@ -1,0 +1,99 @@
+name = "gmail"
+version = "1"
+summary = "Gmail push (Cloud Pub/Sub): new mail in the owner's and an optional assistant's mailbox, read from Gmail's history"
+
+[source]
+module = "source"
+span = "mail"
+sender_retries = true
+expect_every_s = 345600
+proxy = "keep the query string (?token=...); Pub/Sub cannot sign a push, the token in the URL is the authentication"
+
+[secrets.push_token]
+description = "the long random token in the Pub/Sub push endpoint URL (?token=...)"
+
+[secrets.cred_owner]
+description = "OAuth credential JSON (client_id, client_secret, refresh_token, token_uri) of the owner's mailbox; also used for the owner's free/busy"
+processor = true
+
+[secrets.cred_agent]
+description = "OAuth credential JSON of the assistant's own mailbox; leave out when there is no assistant mailbox"
+processor = true
+required = false
+
+[settings.owner]
+description = "the owner's mailbox address: scheduling requests in it get draft-reply facts and free windows"
+type = "string"
+required = true
+
+[settings.agent]
+description = "the assistant's own mailbox address (optional): its new mail is reported as agent-mail"
+type = "string"
+default = ""
+
+[settings.agent_state]
+description = "name of the assistant mailbox's state file (without .json) inside the state directory"
+type = "string"
+default = "gmail_push_state_agent"
+
+[settings.tz]
+description = "time zone for free windows and message times, e.g. America/New_York"
+type = "string"
+default = "UTC"
+
+[settings.hours]
+description = "working window for proposed times, 24-hour H:MM-H:MM"
+type = "string"
+default = "9:00-17:30"
+
+[settings.own_domains]
+description = "domains whose mail is 'from us' and is never reported"
+type = "list"
+default = []
+
+[settings.skip_domains]
+description = "sender domains (and their subdomains) whose mail is never reported; an entry with an @ in it is one exact address"
+type = "list"
+default = []
+
+[settings.skip_keywords]
+description = "whole words that, in a subject, keep the mail from being reported (recruiting words override them)"
+type = "list"
+default = []
+
+[settings.important_senders]
+description = "addresses or domains whose mail is never skipped by skip_domains, skip_keywords or the no-reply rule"
+type = "list"
+default = []
+
+[settings.api_url]
+description = "Gmail API base URL (change only to point at a test server)"
+type = "string"
+default = "https://gmail.googleapis.com/gmail/v1/users/me/"
+
+[settings.freebusy_url]
+description = "Calendar free/busy URL (change only to point at a test server)"
+type = "string"
+default = "https://www.googleapis.com/calendar/v3/freeBusy"
+
+[settings.hooks]
+description = "optional absolute path to a hooks module with classify(message, account, ctx); see README.md"
+type = "path"
+default = ""
+
+[processor]
+module = "processor"
+timeout_s = 300
+state = true
+
+[outputs.scheduling]
+description = "a message in the owner's mailbox asks for the owner's availability; carries the thread facts and the owner's free windows"
+
+[outputs.agent-mail]
+description = "new inbox mail in the assistant's own mailbox"
+
+[outputs.agent-schedule]
+description = "an item a deployment's hooks.classify hands off privately (for example the next step of a scheduling thread); carries the owner's free windows"
+
+[outputs.mailbox-changed]
+description = "a pass read new mail in a mailbox (one per mailbox per batch); lets a deployment wake jobs that watch mail"

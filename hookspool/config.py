@@ -20,6 +20,7 @@ import copy
 import importlib
 import json
 import os
+import re
 import stat
 import tomllib
 from dataclasses import dataclass, field
@@ -65,7 +66,7 @@ RESERVED_DESTINATIONS = ("quarantine",)
 
 # Known keys per section. A value of None means "free-form table" (spans, match, headers).
 _SECTION_KEYS: dict[str, set[str]] = {
-    "spool": {"home", "db", "store_raw"},
+    "spool": {"home", "db", "store_raw", "bobbin_path"},
     "intake": {"listen", "max_body_bytes", "busy_timeout_s", "threads"},
     "dispatch": {"parallel", "poll_s", "heartbeat_s", "lease_grace_s", "max_attempts", "backoff_base_s",
                  "backoff_cap_s", "breaker"},
@@ -76,7 +77,8 @@ _SECTION_KEYS: dict[str, set[str]] = {
     "hermes": {"base_url", "subscriptions_path", "timeout_s", "max_body_bytes", "legacy_signature"},
 }
 _BREAKER_KEYS = {"trip_after", "cooldown_initial_s", "cooldown_max_s"}
-_TOP_KEYS = set(_SECTION_KEYS) | {"spans", "sources", "routes", "destinations"}
+_TOP_KEYS = set(_SECTION_KEYS) | {"spans", "sources", "routes", "destinations", "bobbins"}
+_INTERNAL_KEYS = {"_path", "_bobbins"}          # set by load_config, never read from the file
 SOURCE_KEYS = {"module", "span", "secrets", "dedup_window_s", "expect_every_s", "max_body_bytes", "action",
                "keep_headers", "store_raw", "event_header", *WINDOW_FIELDS}
 ROUTE_KEYS = {"name", "source", "match", "destination", "tee", *WINDOW_FIELDS}
@@ -85,7 +87,7 @@ _DEST_COMMON = {"type", "module", "timeout_s", "max_body_bytes", "max_inflight"}
 _DEST_UNWRAP = {"unwrap", "event_header", "dedup_header"}       # one request per event (hermes, http)
 DEST_KEYS = {
     "hermes": _DEST_COMMON | _DEST_UNWRAP,
-    "script": _DEST_COMMON | {"argv", "cwd", "env_file", "state_dir"},
+    "script": _DEST_COMMON | {"argv", "processor", "cwd", "env_file", "env", "state_dir"},
     "http": _DEST_COMMON | {"url", "secret", "secret_previous", "headers", "allow_insecure"} | _DEST_UNWRAP,
 }
 # Keys that existed in the v1 draft or the first v2 draft and were removed on purpose.
@@ -151,20 +153,31 @@ def merge(base: dict, over: dict) -> dict:
     return out
 
 
-def parse_toml(text: str, origin: str = "<config>") -> dict:
+def parse_toml(text: str, origin: str = "<config>", *, expand: bool = True, cli_home: str | None = None) -> dict:
+    """DEFAULTS merged with the TOML text, with ``[bobbins]`` expanded (ARCHITECTURE §14.3.3)
+    unless ``expand`` is false. An expansion problem raises ``bobbin_loader.BobbinError`` (a
+    ConfigError whose ``errors`` lists every one)."""
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{origin} is not valid TOML: {e}") from None
-    return merge(DEFAULTS, data)
+    cfg = merge(DEFAULTS, data)
+    if expand:
+        from . import bobbin_loader      # lazy: bobbin_loader imports this module
+        cfg = bobbin_loader.expand(cfg, cli_home=cli_home)
+    return cfg
 
 
-def load_config(path: str | None = None, *, cli_home: str | None = None) -> dict:
-    """DEFAULTS merged with the TOML file. A missing file means defaults (no sources).
+def load_config(path: str | None = None, *, cli_home: str | None = None, expand: bool = True) -> dict:
+    """DEFAULTS merged with the TOML file, with every ``[bobbins.<instance>]`` expanded into
+    ordinary source, destination and route tables. A missing file means defaults (no sources).
 
-    A file that exists but does not parse raises ConfigError: silently running with
-    defaults would hide a broken deploy. The returned dict carries ``_path`` (the file
-    that was read, or None).
+    A file that exists but does not parse, or whose services do not expand, raises
+    ConfigError: silently running with defaults would hide a broken deploy. Every caller that
+    builds a config from a file (startup, ``check``, the intake's and the dispatcher's reload)
+    comes through here, so manifests and package directories are re-read on every load. The
+    returned dict carries ``_path`` (the file that was read, or None) and ``_bobbins``
+    (what each instance expanded to).
     """
     p = path or config_path(None, cli_home)
     try:
@@ -173,6 +186,7 @@ def load_config(path: str | None = None, *, cli_home: str | None = None) -> dict
     except FileNotFoundError:
         cfg = copy.deepcopy(DEFAULTS)
         cfg["_path"] = None
+        cfg["_bobbins"] = {}
         return cfg
     except OSError as e:
         raise ConfigError(f"cannot read config {p}: {e.__class__.__name__}") from None
@@ -180,7 +194,7 @@ def load_config(path: str | None = None, *, cli_home: str | None = None) -> dict
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         raise ConfigError(f"{p} is not UTF-8") from None
-    cfg = parse_toml(text, p)
+    cfg = parse_toml(text, p, expand=expand, cli_home=cli_home)
     cfg["_path"] = p
     return cfg
 
@@ -446,7 +460,7 @@ def _unknown(report: Report, where: str, table: Any, allowed: Iterable[str]) -> 
         return
     allowed = set(allowed)
     for k in table:
-        if k in allowed or (where == "" and k == "_path"):
+        if k in allowed or (where == "" and k in _INTERNAL_KEYS):
             continue
         dotted = f"{where}.{k}" if where else k
         tail = dotted.split(".", 1)[-1] if "." in dotted else dotted
@@ -469,15 +483,24 @@ def _num(report: Report, where: str, v: Any, *, minimum: float = 0, integer: boo
 
 
 def default_plugin_loader(name: str, module: str | None):
+    """The source plugin module: ``module`` (or ``hookspool.sources.<name>``) by import, or, for a
+    package under ``spool.bobbin_path``, its private module loaded by file path (never via sys.path)."""
+    from . import bobbin_loader      # lazy: bobbin_loader imports this module
+    if module and module.startswith(bobbin_loader.PATH_MODULE_PREFIX):
+        return bobbin_loader.load_path_module(module)
     return importlib.import_module(module or f"hookspool.sources.{name}")
 
 
 def bind_plugin(module: Any, name: str, source_cfg: dict | None):
     """A plugin module may define ``bind(name, source_cfg)`` and return the module-like object
     to use for that one source. This is how a configurable plugin (the ``template`` source)
-    gets per-source attributes such as ``auth_headers``. Plain plugins have no ``bind``."""
+    gets per-source attributes such as ``auth_headers``. Plain plugins have no ``bind``. A ``bind`` that
+    only validates the config (raising an error with ``errors``) returns None, and the module is used."""
     b = getattr(module, "bind", None)
-    return b(name, dict(source_cfg or {})) if callable(b) else module
+    if not callable(b):
+        return module
+    bound = b(name, dict(source_cfg or {}))
+    return module if bound is None else bound
 
 
 def _check_secret(report: Report, where: str, ref: Any) -> None:
@@ -740,9 +763,7 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
             if d.get(f) is not None:
                 _num(rep, f"{where}.{f}", d[f], minimum=1 if f != "timeout_s" else 0)
         if t == "script":
-            a = d.get("argv")
-            if not (isinstance(a, list) and a and all(isinstance(x, str) and x for x in a)):
-                rep.err(f"{where}.argv: must be a non-empty list of strings")
+            _check_script(rep, cfg, name, where, d)
             for f in ("cwd", "state_dir", "env_file"):
                 if d.get(f) is not None and not (isinstance(d[f], str) and os.path.isabs(os.path.expanduser(d[f]))):
                     rep.err(f"{where}.{f}: must be an absolute path")
@@ -763,9 +784,6 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
                 rep.err(f"{where}.headers: must be a table of strings")
         if t in ("hermes", "http"):
             _check_unwrap(rep, where, d)
-    for name in dests:
-        if name.startswith("script:") and not dests[name].get("argv"):
-            pass  # reported above
 
     # feeds: every (source, route, destination) the config can produce
     feeds = list(_feeds(cfg, sources, plugins))
@@ -773,6 +791,8 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
     for d in sorted(used_dests):
         if d.startswith("script:") and d not in dests:
             rep.err(f"destination {d}: no [destinations.\"{d}\"] table with argv")
+    from . import bobbin_loader      # lazy: bobbin_loader imports this module
+    bobbin_loader.check(cfg, rep)
     for src, route, dest in feeds:
         w = window_for(cfg, src, route if route != src else None,
                        plugin_span=getattr(plugins.get(src), "span", None))
@@ -819,6 +839,39 @@ def check(cfg: dict, *, load_plugin: Callable[[str, str | None], Any] | None = d
                     rep.err(f"hermes:{hr}: the gateway route sets 'coalesce' (in memory, keeps the last event"
                             " only). Remove it; hookspool coalesces")
     return rep
+
+
+ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _check_script(rep: Report, cfg: dict, name: str, where: str, d: dict) -> None:
+    """``argv`` or ``processor`` (exactly one), and the ``env`` table, of a script destination."""
+    from . import bobbin_loader      # lazy: bobbin_loader imports this module
+    expanded = bobbin_loader.is_expanded_destination(cfg, name)
+    proc = d.get("processor")
+    if proc is not None:
+        if "argv" in d:
+            rep.err(f"{where}: argv and processor are exclusive (processor builds the argv)")
+        if not expanded:
+            rep.err(f"{where}.processor: set only by a [bobbins.<instance>] expansion")
+        elif not (isinstance(proc, str) and proc):
+            rep.err(f"{where}.processor: must be the instance name")
+    else:
+        a = d.get("argv")
+        if not (isinstance(a, list) and a and all(isinstance(x, str) and x for x in a)):
+            rep.err(f"{where}.argv: must be a non-empty list of strings")
+    env = d.get("env")
+    if env is not None:
+        if not isinstance(env, dict):
+            rep.err(f"{where}.env: must be a table of NAME = \"value\"")
+        else:
+            for k, v in env.items():
+                if not (isinstance(k, str) and ENV_NAME_RE.match(k)):
+                    rep.err(f"{where}.env.{k}: names must match {ENV_NAME_RE.pattern}")
+                elif k.startswith("HOOKSPOOL_") and not expanded:
+                    rep.err(f"{where}.env.{k}: HOOKSPOOL_* names are set by hookspool, never by config")
+                if not isinstance(v, str):
+                    rep.err(f"{where}.env.{k}: must be a string")
 
 
 def _check_unwrap(rep: Report, where: str, d: dict) -> None:

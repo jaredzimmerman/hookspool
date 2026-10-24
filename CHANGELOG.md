@@ -10,6 +10,33 @@ The changes below will ship as 0.2.0.
 
 ### Added
 
+- The `webhook` bobbin: any web service that sends a signed or tokened JSON POST, configured entirely by settings
+  (`[source] template = "settings"`; five schemes). One rule now maps a bobbin setting named after a template key to that
+  key's value, for a fixed template (Trello's `callback_url`) and for `"settings"` alike; settings may be a `table`, and an
+  instance of a `"settings"` bobbin may map any event type next to `"*"`. `hookspool bobbin new <name>` now copies the
+  `webhook` shape and freezes its settings into a fixed template (`--set NAME=VALUE`, `--code` for a `source.py`). An
+  empty setting value is unset; `check` reports an error when outputs are mapped per event type without
+  `attrs.event_type`; a scaffolded `hmac-sha1-base64-url` bobbin keeps `callback_url` as a required setting.
+- The `drive` bobbin (`hookspool/bobbins/drive/`): Google Drive push (a watch channel on the change feed) with a processor
+  that reads `changes.list` from a stored page token and reports `file-changed`, `file-created` and `file-shared` items
+  (file id, name, MIME type, modified time, actor, link; never contents). It drops the configured accounts' own edits,
+  files in the trash and listed MIME types, re-bootstraps quietly when Drive rejects the page token, and replays a retried
+  batch from the journal. The Drive change-feed calls live in `hookspool.providers.google` next to the channel helpers the
+  `gcal` bobbin also uses.
+- `hookspool bobbin check <dir>`: the bobbin conformance kit (`hookspool.testing.bobbinkit`) on one directory, printed as a
+  scorecard (`--report text|md|json`, `--strict`, `--base`): manifest and one service per bobbin, files, TODOs, the 14.3.7
+  core-only rules, SETUP.md / AGENTS.md, captures (including a scan for secrets and personal data), the source kit per
+  capture, the processor through the real runtime with stub HTTP and the network blocked, the bobbin's own tests, and the
+  advisory scope. CI runs the same command on every changed bobbin (`.github/workflows/bobbin.yml`); a separate
+  `bobbin-label.yml` run labels the pull request `bobbin-only` or `touches-core` and keeps one scorecard comment.
+  `docs/bobbins/review.md` gives the merge criteria. `hookspool bobbin new` now also writes SETUP.md, AGENTS.md and a
+  rejected capture, and passes the kit once its TODOs are filled in. The source kit moved to `hookspool.testing.sourcekit`
+  (`tests/sourcekit.py` re-exports it).
+- `hookspool.processor`: the runtime for service-package processors (`python -m hookspool.processor <instance>`): a
+  per-batch state lock, a journal so a retried batch replays without calling `process` again, staged state writes, emits
+  addressed through the deployment's routes, typed settings, and exit codes 0 (done), 75 (retry), 65 (permanent). The
+  stand-alone copy mode of `deploy/scripts/hookspool_batch.py` is retired: it now re-exports the runtime, so the delta
+  scripts must run under the interpreter hookspool is installed in.
 - `unwrap = true` for `hermes` and `http` destinations: a batch is delivered as one request per event, in order, with the
   event's stored payload as the body, for receivers that expect the sender's original payload (a Hermes route whose prompt
   template reads `{pull_request.title}`). Each request carries Standard Webhooks headers with a per-event `webhook-id`
@@ -28,13 +55,58 @@ The changes below will ship as 0.2.0.
   more than 8 tee routes per source. The intake logs one `queued` line per copy (`tee: true` on the copies), and
   `hookspool source test` lists the `tees` a request would feed.
 
+- `hookspool/net.py`, the network module for service processors: `Http` (JSON over HTTP with a total timeout, statuses and
+  failures mapped to `Retryable` or `Permanent`, a TLS certificate failure `Permanent`, no bodies or query strings in
+  errors or logs, redirects never followed, proxies from the environment), `OAuth` refresh-token flows with the access
+  token cached in the runtime's state (the credential file is never written; a rotated refresh token is kept in state and
+  handed to an optional `persist` callback at once), `SecretAccess` and `make_context_extras(state, secret_resolver)`.
+- `hookspool.verify.KeyCache` and `jwks_fetcher`: a shared cache of a sender's verification keys (TTL, negative TTL, one
+  fetch per cooldown, stale keys served while the sender is unreachable).
+
+- The `gmail` and `gcal` bobbins (`hookspool/bobbins/`): the Gmail and Calendar push sources with their delta
+  logic as processors, settings instead of environment variables, one credential secret per Google account, a
+  `hooks.classify` hook for private mail hand-offs, a `hooks.travel` hook for travel blocks, and the outputs
+  `scheduling`, `agent-mail`, `agent-schedule`, `mailbox-changed` and `conflict`, `brief`, `changed` (the last replaces the
+  script that was started on the side). `hookspool/providers/google.py` holds what the Google bobbins share: the push-channel
+  check (token, `sync` handshake, header payload) and the Gmail, Calendar and free/busy calls on `ctx.oauth`.
+- A bobbin secret may be marked `required = false`, so an instance can leave it out.
+- The `zoom` and `plaid` bobbins (`hookspool/bobbins/`): the Zoom event subscription and the Plaid webhook sources, moved
+  from `hookspool/sources/` with their captures (`hookspool.sources.zoom` and `.plaid` still import and are the bobbins' own
+  modules). Both now call core only (ARCHITECTURE 14.3.7): Zoom's HMAC and URL validation answer through `hookspool.verify`,
+  and Plaid's key fetch and cache are `verify.key_fetcher` and `verify.shared_key_cache`, called through `hookspool/net.py`, with no
+  `urllib`, `threading` or `logging` of the bobbin's own. Plaid's `env` is the bobbin setting `env`.
+- `hookspool.verify.key_fetcher` (a key fetch for a per-key endpoint or a JWKS URL, with the "sender has no such key" refusals
+  mapped to None), `verify.shared_key_cache` and `reset_shared_key_caches`, and `KeyCache.lookup(..., fetch=)` for a fetch that
+  needs the request's credentials; a failed key fetch is logged once by `KeyCache` (class, HTTP status and the sender's short
+  error code, never a body; only a `net` error's status and code, so a caller's own exception adds nothing).
+- A bad Plaid `env` is refused when the config loads (`hookspool check` reports it) and not by a 503 on every webhook; a source
+  module's `bind` may return None to keep the module and only validate the config.
+- A bobbin manifest's `[source] config` refuses the names of source table keys the runtime sets (`module`, `action`, `secrets`,
+  `span`, the window overrides and so on).
+- A bobbin manifest's `[source] config = ["env", ...]` names the settings that become keys of the source's own table (the
+  source module's `config_keys`), for a code source that reads them.
+- The conformance kit answers a source's own HTTP calls (a sender's verification keys) from `captures/kit.toml` `[[http]]`,
+  as it does for a processor's `ctx.http`.
+
 ### Changed
 
+- A `script` exit 65 (a processor's `Permanent`) dead-letters the batch on the first attempt; every other non-zero exit is
+  still retried.
+- `deploy/scripts/gmail_delta.py` and `gcal_delta.py` are removed (they are the `gmail` and `gcal` bobbins; the README of each
+  lists the old variable for every setting). `hookspool.sources.gmail` and `.gcal` still import, but declare no `action`: an
+  instance's `outputs` choose it. Their captures moved to the bobbins' `captures/`.
 - Spool schema 2 (migration `0002_unwrap.sql` adds the two attempt columns). Stop the dispatcher and run `hookspool migrate`
-  (deploy/README.md, Upgrading): both services run `hookspool check` before they start and refuse a schema 1 spool, so a
+  (docs/operations/upgrading.md): both services run `hookspool check` before they start and refuse a schema 1 spool, so a
   restart alone does not migrate it.
 - The message for an old or missing spool now says to stop the dispatcher and run `hookspool migrate`, and points to
-  deploy/README.md; a Hermes 413 under `unwrap` says to exclude the event or raise `max_body_bytes` (one event, not a batch).
+  `deploy/README.md`, which now links to the upgrade page; a Hermes 413 under `unwrap` says to exclude the event or raise `max_body_bytes` (one event, not a batch).
+- The documentation is organised into folders (`docs/getting-started/`, `configuration/`, `bobbins/`, `operations/` and
+  `architecture/`, each with an index page), and the README is a short front page that links into them. The old pages moved:
+  `ARCHITECTURE.md` to `architecture/`, `CONFIGURATION.md` to `configuration/README.md`, `ADDING_A_SOURCE.md` to
+  `bobbins/writing-a-bobbin.md`, `ADDING_A_DESTINATION.md` to `configuration/destinations.md`, `BOBBIN_REVIEW.md` to
+  `bobbins/review.md`, `CLI.md` to `operations/cli.md`, and `OPERATIONS.md` and the body of `deploy/README.md` to pages under
+  `operations/`. `docs/ARCHITECTURE.md` stays as a pointer. Each section of the README and two of the folders carry a banner
+  drawing (`docs/assets/banners/`), and the configuration reference now documents `[bobbins.<instance>]`.
 
 ### Fixed
 
@@ -65,7 +137,7 @@ The changes below will ship as 0.2.0.
 - Sources: `github`, `trello` and `kaneo` as config-only templates (`examples/sources/`), and `zoom`, `plaid`, `gmail` and
   `gcal` as code plugins. The `template` source builds a source from a TOML table (five verification schemes, dotted-path
   and header selectors, no expression language).
-- The extension model: [docs/ADDING_A_SOURCE.md](docs/ADDING_A_SOURCE.md), [docs/ADDING_A_DESTINATION.md](docs/ADDING_A_DESTINATION.md),
+- The extension model: [docs/bobbins/writing-a-bobbin.md](docs/bobbins/writing-a-bobbin.md), [docs/configuration/destinations.md](docs/configuration/destinations.md),
   a conformance kit (`tests/sourcekit.py`) that exercises every source the same way, and `hookspool source test` to run a
   captured request through a source offline.
 - The command line: `status`, `list`, `show`, `replay`, `retry`, `split`, `exclude`, `drop`, `pause`, `resume`, `issues`,

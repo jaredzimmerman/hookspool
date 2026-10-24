@@ -1,0 +1,74 @@
+name = "webhook"
+version = "1"
+summary = "Any web service that sends a signed or tokened JSON POST: the template source, configured entirely by settings"
+
+[source]
+template = "settings"                  # no fixed template: every template key below comes from the instance's settings
+span = "burst"
+proxy = "keep the query string when scheme is url-token (?token=...)"
+
+[secrets.secret]
+description = "the signing secret or token the sender gives you for the webhook"
+
+[settings.scheme]
+description = "how the sender proves it is the sender: hmac-sha256-hex, hmac-sha256-base64, hmac-sha1-base64-url, shared-secret-header or url-token"
+type = "string"
+required = true
+
+[settings.header]
+description = "the request header that carries the signature or token (every scheme except url-token)"
+type = "string"
+default = ""
+
+[settings.prefix]
+description = "text in front of the signature or token in the header, for example sha256="
+type = "string"
+default = ""
+
+[settings.param]
+description = "url-token only: the query parameter that carries the token (default token)"
+type = "string"
+default = ""
+
+[settings.callback_url]
+description = "hmac-sha1-base64-url only: the exact URL the sender was given (it is part of the signed input)"
+type = "string"
+default = ""
+
+[settings.head_handshake]
+description = "answer the sender's unsigned HEAD request with 200 (some senders probe the URL when the webhook is created)"
+type = "bool"
+default = false
+
+[settings.key]
+description = "what events coalesce on: payload paths (a.b.0.c), header:Name or literal:text; several are joined with ':'"
+type = "list"
+required = true
+
+[settings.dedup]
+description = "the delivery id that recognises a redelivery: a payload path, header:Name or body_sha256"
+type = "string"
+default = ""
+
+[settings.ignore]
+description = "deliveries to acknowledge and not queue, each \"<payload path or header:Name>=<value>\""
+type = "list"
+default = []
+
+[settings.event_type]
+description = "the event type: a payload path, header:Name or literal:text"
+type = "string"
+default = ""
+
+[settings.attrs]
+description = "attributes copied onto the event, each name = a payload path, header:Name or literal:text"
+type = "table"
+default = {}
+
+[settings.sender_retries]
+description = "true when the sender retries a failed delivery by itself"
+type = "bool"
+default = false
+
+[outputs."*"]
+description = "every accepted delivery; add outputs per event type to route them (the event type is the one `event_type` reads)"

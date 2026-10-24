@@ -1,0 +1,13 @@
+# test values for `hookspool bobbin check`: the secret the captures are signed with, and one example instance
+[secrets]
+secret = "test-secret-bobbin"
+
+[settings]
+scheme = "hmac-sha256-hex"
+header = "X-Signature"
+prefix = "sha256="
+key = ["id"]
+dedup = "header:X-Delivery-Id"
+ignore = ["type=ping"]
+event_type = "type"
+attrs = { event_type = "type" }

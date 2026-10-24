@@ -36,4 +36,5 @@ jobs:
         # denylist (HOOKSPOOL_DENYLIST or deploy/local/denylist.txt) is applied locally, before publishing.
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python .github/scripts/plugin_ci.py all --base "$BASE_SHA"
+        # --skip-bobbins: the bobbin scorecards are their own job (bobbin.yml), so each bobbin is checked once
+        run: python .github/scripts/plugin_ci.py all --skip-bobbins --base "$BASE_SHA"

@@ -1,0 +1,6 @@
+# test values for `hookspool bobbin check`: the secret the captures are signed with
+[secrets]
+secret = "test-template-secret-PAYLOAD-SENTINEL-7f3a"
+
+[settings]                     # part of the signed input: the URL the captures were signed for
+callback_url = "https://hooks.example.test/hooks/trello"

@@ -1,0 +1,9 @@
+# capture: a push carrying the kit test token
+# now: 1800000000
+# expect: queued
+POST /hooks/kitproc HTTP/1.1
+Content-Type: application/json
+X-Kitproc-Token: test-secret-kitproc
+Content-Length: 64
+
+{"id":"evt_9","account":"acct-1","note":"PAYLOAD-SENTINEL-7f3a"}

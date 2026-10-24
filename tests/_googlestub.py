@@ -1,5 +1,5 @@
-"""A scripted stand-in for the Google endpoints the delta scripts call (Calendar events, Gmail
-history/messages/profile, free/busy, the OAuth token endpoint), on 127.0.0.1. Test values only."""
+"""A scripted stand-in for the Google endpoints the Gmail, Calendar and Drive bobbins call (Calendar events, Gmail
+history/messages/profile, free/busy, the Drive change feed, the OAuth token endpoint), on 127.0.0.1. Test values only."""
 from __future__ import annotations
 
 import json
@@ -20,6 +20,9 @@ class GoogleStub:
         self.messages: dict[str, dict] = {}
         self.busy: list[dict] = []              # free/busy intervals {"start","end"}
         self.token_calls = 0
+        self.fail_insert = False                # answer 500 to an event insert
+        self.drive_start = "start-1"            # the answer to changes.getStartPageToken
+        self.drive_pages: list = []             # popped per changes.list: dict body, or int status
         stub = self
 
         class H(BaseHTTPRequestHandler):
@@ -51,6 +54,8 @@ class GoogleStub:
                             nxt = stub.calendar_lists.pop(0) if stub.calendar_lists else {"items": [], "nextSyncToken": "s-same"}
                             return self._send(nxt, {"error": "scripted"}) if isinstance(nxt, int) else self._send(200, nxt)
                         if method == "POST":
+                            if stub.fail_insert:
+                                return self._send(500, {"error": "scripted"})
                             ev = json.loads(body or b"{}")
                             ev["id"] = f"created-{len(stub.created) + 1}"
                             stub.created.append(ev)
@@ -58,6 +63,13 @@ class GoogleStub:
                         if method == "DELETE":
                             stub.deleted.append(p.rsplit("/", 1)[-1])
                             return self._send(204)
+                    if p == "/drive/changes/startPageToken":
+                        return self._send(200, {"startPageToken": stub.drive_start}) if stub.drive_start \
+                            else self._send(200, {})
+                    if p == "/drive/changes":
+                        nxt = stub.drive_pages.pop(0) if stub.drive_pages else {
+                            "changes": [], "newStartPageToken": q.get("pageToken", "")}
+                        return self._send(nxt, {"error": "scripted"}) if isinstance(nxt, int) else self._send(200, nxt)
                     if p == "/gmail/profile":
                         return self._send(200, stub.profile)
                     if p == "/gmail/history":
@@ -92,10 +104,17 @@ class GoogleStub:
     def base(self) -> str:
         return f"http://127.0.0.1:{self.port}"
 
-    def env(self) -> dict[str, str]:
-        """The environment variables that point both scripts at this stub."""
-        return {"GCAL_DELTA_API": self.base + "/cal/events", "GMAIL_DELTA_API": self.base + "/gmail/",
-                "GMAIL_DELTA_FREEBUSY": self.base + "/freebusy"}
+    def gmail_settings(self) -> dict[str, str]:
+        """The gmail bobbin settings that point it at this stub."""
+        return {"api_url": self.base + "/gmail/", "freebusy_url": self.base + "/freebusy"}
+
+    def gcal_settings(self) -> dict[str, str]:
+        """The gcal bobbin settings that point it at this stub."""
+        return {"api_url": self.base + "/cal/events"}
+
+    def drive_settings(self) -> dict[str, str]:
+        """The drive bobbin settings that point it at this stub."""
+        return {"api_url": self.base + "/drive/"}
 
     def count(self, method: str, prefix: str) -> int:
         return sum(1 for r in self.requests if r["method"] == method and r["path"].startswith(prefix))

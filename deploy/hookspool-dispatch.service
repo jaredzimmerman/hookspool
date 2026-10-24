@@ -1,13 +1,13 @@
-# hookspool-dispatch.service: the single deliverer (docs/ARCHITECTURE.md section 2).
+# hookspool-dispatch.service: the single deliverer (docs/architecture/ARCHITECTURE.md section 2).
 # Install as /etc/systemd/system/hookspool-dispatch.service, then `systemctl daemon-reload`.
 # Replace User/Group and the paths as in hookspool-intake.service.
 #
-# ReadWritePaths MUST list the state dir and the state_dir of EVERY script destination in config.toml
-# (and any other directory a script writes: a GCAL_DELTA_DATA outside its state_dir, a credential file
-# the token refresh rewrites). ProtectSystem=strict makes everything else read-only, and a script that
-# cannot write its journal fails every batch with a "config"-class error. Every listed path must exist
+# ReadWritePaths MUST list the state dir and the state_dir of EVERY script destination in config.toml that
+# is outside it (a bobbin's processor keeps its state in <home>/services/<instance>, already covered), and
+# any other directory a script writes. ProtectSystem=strict makes everything else read-only, and a script
+# that cannot write its journal fails every batch with a "config"-class error. Every listed path must exist
 # before the unit starts (systemd fails with status 226/NAMESPACE otherwise): create them as in
-# deploy/README.md. A directory under /home is writable only if it is listed here, because
+# docs/operations/running.md. A directory under /home is writable only if it is listed here, because
 # ProtectHome=read-only is set.
 [Unit]
 Description=hookspool dispatcher (coalesce, deliver, retry)
@@ -22,7 +22,7 @@ User=hookspool
 Group=hookspool
 Environment=HOOKSPOOL_HOME=/var/lib/hookspool
 Environment=HOOKSPOOL_LOG=json
-# `check` exits 2 on an older schema, so after an upgrade run `hookspool migrate` first (deploy/README.md, Upgrading).
+# `check` exits 2 on an older schema, so after an upgrade run `hookspool migrate` first (docs/operations/upgrading.md).
 ExecStartPre=/usr/local/bin/hookspool check
 ExecStart=/usr/local/bin/hookspool dispatch
 ExecReload=/usr/local/bin/hookspool reload
@@ -31,7 +31,7 @@ RestartSec=2
 # A second dispatcher exits 3 on the flock. Do not restart it in a loop; `systemctl status` shows it.
 RestartPreventExitStatus=3
 # On stop systemd kills the whole cgroup, scripts included. A batch cut off that way is retried
-# (uncounted), and the delta scripts replay their journal, so a stop never loses or repeats a result.
+# (uncounted), and processors and journalled scripts replay their journal, so a stop never loses or repeats a result.
 TimeoutStopSec=30
 LimitNOFILE=4096
 
@@ -40,7 +40,7 @@ LimitNOFILE=4096
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/var/lib/hookspool /var/lib/hookspool/scripts/gcal /var/lib/hookspool/scripts/gmail
+ReadWritePaths=/var/lib/hookspool
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

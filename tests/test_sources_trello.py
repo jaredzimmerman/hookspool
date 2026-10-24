@@ -1,4 +1,4 @@
-"""Trello source (T6). The bridge is ported as CONFIG, not code: ``examples/sources/trello.toml`` on the
+"""Trello source (T6). The bridge is ported as CONFIG, not code: ``hookspool/bobbins/trello`` on the
 ``template`` plugin (T5b), because base64 HMAC-SHA1 over body + callback URL and an unauthenticated HEAD
 handshake are both template features. This file holds Trello's own acceptance: the shared kit on that
 config, the captures, the HEAD handshake, key/dedup, and parity of the signature check with
@@ -12,7 +12,6 @@ import hmac
 import json
 import os
 import sys
-import tomllib
 
 import pytest
 
@@ -28,11 +27,8 @@ from hookspool import plugin as P  # noqa: E402
 from hookspool.plugin import Request, parse_capture  # noqa: E402
 from hookspool.sources import template as T  # noqa: E402
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXAMPLE = os.path.join(ROOT, "examples", "sources", "trello.toml")
-SECRET = "test-template-secret-" + SENTINEL        # the secret tests/captures/trello/*.http are signed with
-with open(EXAMPLE, "rb") as _f:
-    CFG = tomllib.load(_f)["sources"]["trello"]
+SECRET = "test-template-secret-" + SENTINEL        # the secret the bobbin's captures are signed with
+CFG = sourcekit.bobbin_source_cfg("trello")
 CALLBACK = CFG["callback_url"]
 
 
@@ -45,7 +41,7 @@ def sign(raw, secrets, now):
 
 
 def _capture(name: str) -> P.RawRequest:
-    with open(os.path.join(sourcekit.CAPTURES, "trello", name), "rb") as f:
+    with open(os.path.join(sourcekit.capture_dir("trello"), name), "rb") as f:
         raw = parse_capture(f.read())
     raw.meta.clear()
     return raw
@@ -190,8 +186,7 @@ def test_config_check_accepts_the_example(tmp_path):
     sec = tmp_path / "secret"
     sec.write_text(SECRET)
     os.chmod(sec, 0o600)
-    text = open(EXAMPLE).read()
-    text = "\n".join(line for line in text.splitlines() if not line.startswith("secrets.secret"))
+    text = sourcekit.source_table_text("trello")
     p = tmp_path / "c.toml"
     p.write_text(f'[spool]\nhome = "{tmp_path / "home"}"\n[alerts]\ndry = true\n{text}\n'
                  f'secrets.secret = {{ file = "{sec}" }}\n')
