@@ -51,8 +51,14 @@ A rule is a table in the `rules` setting, which is a list of tables:
 | `subject_regex` | one regular expression, case-insensitive, searched in the subject |
 | `kind` | free text handed to the consumer |
 | `extract` | a table of `name = "regex"`. Each regex has **exactly one** capture group. It is tried on the subject first and then on the first 20,000 characters of the body text; the first match wins, and the captured text is whitespace-trimmed and cut at 200 characters |
-| `skip` | optional list of substrings. If one of them appears in the subject or the body, the rule does not match (the message goes on to the next rule) |
-| `skip_subject` | like `skip`, but looks at the subject only. Use it for words that are fine in a footer but not in a subject (`privacy`, `offer`, `survey`) |
+| `skip` | optional list of words or phrases. If one of them appears in the subject or the body, the rule does not match (the message goes on to the next rule) |
+| `skip_subject` | like `skip`, but looks at the subject only. Use it for words that are fine in a footer but not in a subject (`privacy`, `survey`, `rate your`) |
+
+Both veto lists match whole words, without regard to case: `sale` vetoes "Big sale today" but not "Wholesale Tacos" or
+"Casale", and `deal` leaves "Ideal Bistro" alone. A phrase that starts or ends with a symbol, such as `% off`, still
+matches "20% off". Text inside double quotes in the subject never vetoes, because that is where senders put an item name
+or a saved search (`Shipped: "Sale Rack Organizer"`, `New hits for your search alert: "sale of goods"`). A quote the
+sender cut off runs to the end of the subject.
 
 A rule needs at least one of `from`, `subject_any` and `subject_regex`. When both `subject_any` and `subject_regex` are
 given, either one is enough. When `from` is given, the sender must match as well.
@@ -86,7 +92,11 @@ need. Mistakes are caught when the batch runs: a rule without a
 name, an unknown key, a regular expression that does not compile, an `extract` pattern without exactly one capture
 group, two rules with the same name or an unknown pack name. The batch does not fail: all the rules are ignored for that batch,
 the log gets one line, `mail rules ignored for this batch: <what is wrong>`, and scheduling and assistant mail go on as
-usual. So after you edit rules, send a test message and look at the log. The line names the rule and the key, never the pattern or any mail.
+usual. The line names the rule and the key, never the pattern or any mail.
+
+Mail from that window is not matched later. The batch's messages still count as handled and the history id moves past
+them, so once you fix the rules, mail that arrived while they were broken stays where the normal handling put it. Send a
+test message right after every rules edit and look at the log.
 
 Keep a rule narrow. A word like `updated` or `booking` alone also turns up in newsletters and policy notices, so ask for
 the context as well (`subject_regex = 'reservation.{0,60}updated'`) and veto marketing words with `skip_subject`.
@@ -140,12 +150,14 @@ restaurant that sends from its own domain through the platform needs a rule of i
 becomes `verified` only after its patterns have been compared with real message shapes.
 
 Reservation packs share one layout. Their rules run in this order so that the general words do not swallow the specific
-ones: `cancellation`, `modification`, `waitlist`, `reminder`, `confirmation`. A message asking you to review a visit is
-skipped.
+ones: `cancellation`, `modification`, `waitlist`, `reminder`, `confirmation`. A message whose subject asks you to rate or
+review a visit is skipped.
 
 Every pack rule asks for order or reservation context in the subject (for example a reservation word near a status
-word, or `Delivered:` at the start), and vetoes subjects about policies, offers, promotions, surveys and sign-ups with
-`skip_subject`. Marketing and policy mail from the same senders is therefore left for the normal handling.
+word, or `Delivered:` at the start). With `skip_subject` it vetoes subjects about policies, offers, promotions,
+surveys, sign-ups, points, perks, memberships, earnings and review requests. Marketing and account mail from the same
+senders is therefore left for the normal handling. No pack rule vetoes on the body, so a real order or booking whose
+mail ends with "How was your delivery?" or "Recommended for you" is still claimed.
 
 ## Testing a rule
 
@@ -168,6 +180,7 @@ Do not paste real mail into a test, a bug report or a log. The bobbin's own logs
 * A regular expression runs over at most 20,000 characters of body text.
 * `extract` returns the first match; if a pattern is too loose it will return a wrong value, so keep the pattern tight
   and test it.
+* Mail that arrives while the rules are broken (see the log line above) is never matched, even after the fix.
 * Rules read the owner's mailbox only. Mail that reaches only the assistant's mailbox is not matched.
 * Mail from a forwarding address or a mailing-list wrapper carries the forwarder's address in `From`; name that address
   in `from`.

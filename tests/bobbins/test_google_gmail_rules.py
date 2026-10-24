@@ -64,6 +64,38 @@ def test_skip_subject_looks_at_the_subject_only():
     assert first(r, "x@example.test", "order shipped", "see our Privacy Notice below")      # a footer word is fine
 
 
+def test_vetoes_match_whole_words_only():
+    r = [rule(subject_any=["order", "reservation"], skip_subject=["sale", "deal"], skip=["promo"])]
+    for subject in ("Your order from Wholesale Tacos", "Your reservation at Casale", "Your reservation at Ideal Bistro",
+                    "Your order from Promotional Goods"):
+        assert first(r, "x@example.test", subject), subject
+    assert first(r, "x@example.test", "order", "Visit Promoland")                         # a body word inside a name
+    assert first(r, "x@example.test", "Big sale on your order") is None
+    assert first(r, "x@example.test", "Order deal-of-the-week") is None                   # a hyphen is a word edge
+    assert first(r, "x@example.test", "order", "use code PROMO at checkout") is None
+
+
+def test_a_veto_phrase_with_a_symbol_at_its_edge_still_matches():
+    r = [rule(subject_any=["order"], skip_subject=["% off"])]
+    assert first(r, "x@example.test", "Your next order: 20% off") is None
+    assert first(r, "x@example.test", "Your order shipped")
+
+
+def test_double_quoted_text_in_the_subject_never_vetoes():
+    r = [rule(subject_any=["shipped", "alert"], skip_subject=["sale", "privacy"], skip=["deal"])]
+    assert first(r, "x@example.test", 'Shipped: "Sale Rack Organizer"')
+    assert first(r, "x@example.test", 'Shipped: \u201cBig Deal Board Game\u201d')
+    assert first(r, "x@example.test", 'New hits for your search alert: "privacy policy"')
+    assert first(r, "x@example.test", 'Shipped: "Deal Kit, 12 pieces...')               # a quote the sender cut off
+    assert first(r, "x@example.test", 'Sale: everything shipped "free"') is None         # outside the quotes it still vetoes
+
+
+def test_a_rule_pack_entry_that_is_not_a_name_is_a_config_error():
+    for bad in ([{"name": "amazon-orders"}], [["amazon-orders"]], [3]):
+        with pytest.raises(ValueError, match="pack name"):
+            MR.compile_rules([], bad, PACKS)
+
+
 def test_builtin_pack_rules_leave_bulk_mail_alone_but_custom_rules_do_not():
     rules = MR.compile_rules([{"name": "mine", "subject_any": ["order"]}], ["amazon-orders"], PACKS)
     assert first(rules, "a@amazon.com", 'Ordered: "Widget"', bulk=True)[0].name == "mine"  # hookspool-scan: allow: the service's own sender domain
@@ -204,12 +236,21 @@ JUNK = {
                              "Welcome to the service", "Your alert has been disabled", "We updated our privacy policy",
                              "New features: docket tools and more"],
 }
+JUNK["amazon-orders"] += ["Your Prime membership receipt", "Your rewards balance is ready", "Rate your recent order",
+                          "How was your delivery?", "Write a review of your order"]
+JUNK["doordash-orders"] += ["Your Dasher earnings summary", "Your DashPass receipt", "Your DashPass membership has renewed",
+                            "Rate your order from Corner Cafe", "How was your order from Corner Cafe?",
+                            "Your Dasher rewards this week"]
 for _p in ("resy-reservations", "opentable-reservations", "tock-reservations", "sevenrooms-reservations"):
     JUNK[_p] = ["We updated our Privacy Policy", "We updated our terms of service", "Email confirmation needed",
                 "Confirm your email address", "Openings coming up near you", "Booking platform news",
                 "Join our waitlist for new locations", "Reservations open for next month", "Book your next table: 20% off",
                 "Your account has been updated", "Special offer: your next booking", "Rate your last visit",
-                "Our reservation policy has changed", "Tickets and gift cards on sale", "Take our survey about your booking"]
+                "Our reservation policy has changed", "Tickets and gift cards on sale", "Take our survey about your booking",
+                "Reminder: your dining points and upcoming reservation perks", "Your reservation rewards are waiting",
+                "How was your reservation at Corner Bistro?", "Leave a review of your reservation at Corner Bistro"]
+JUNK["opentable-reservations"] = JUNK["opentable-reservations"] + [
+    "Reminder: your OpenTable points and upcoming reservation perks"]
 SENDER = {"amazon-orders": "store-news@amazon.com", "doordash-orders": DD, "courtlistener-alerts": CL, **RES}  # hookspool-scan: allow: the service's own sender domain
 JUNK_CASES = [(p, s) for p, subs in JUNK.items() for s in subs]
 
@@ -236,9 +277,59 @@ def test_other_mail_is_not_claimed(pack, frm, subject):
     assert first(MR.compile_rules([], [pack], PACKS), frm, subject, "hello") is None
 
 
-def test_the_review_request_after_a_delivery_is_vetoed():
-    rules = MR.compile_rules([], ["amazon-orders"], PACKS)
-    assert first(rules, AMZ, 'Delivered: "Widget"', "How was your delivery? Write a review") is None
+# Real order and reservation mail whose names hold a veto word, or whose body ends in a feedback or recommendations
+# block: every one must still be claimed.
+NAMED = [
+    ("amazon-orders", AMZ, 'Shipped: "Ideal Protein Bars, 12 count"', "shipped"),
+    ("amazon-orders", AMZ, 'Delivered: "Salem Candle, large"', "delivered"),
+    ("amazon-orders", AMZ, 'Delivered: "Promo Poster Frame"', "delivered"),
+    ("doordash-orders", DD, "Your order from Wholesale Tacos has been delivered", "status"),
+    ("doordash-orders", DD, "Your order from Ideal Noodles is on its way", "status"),
+    ("doordash-orders", DD, "Your Dasher is on the way with your order", "status"),
+    ("courtlistener-alerts", CL, 'New hits for your search alert: "sale of goods"', "search-alert"),
+    ("courtlistener-alerts", CL, "New hits for your search alert: privacy policy disputes", "search-alert"),
+    ("courtlistener-alerts", CL, 'New filing for Deal v. Sale (1:23-cv-04567)', "docket-alert"),
+]
+for _pack, _frm in RES.items():
+    for _place in ("Ideal Bistro", "Casale", "Rosales", "Five Points Grill", "Offerman House"):
+        NAMED.append((_pack, _frm, f"Your reservation at {_place} is confirmed", "confirmation"))
+
+
+@pytest.mark.parametrize("pack,frm,subject,name", NAMED)
+def test_a_veto_word_inside_a_name_does_not_hide_real_mail(pack, frm, subject, name):
+    m = first(MR.compile_rules([], [pack], PACKS), frm, subject, "hello")
+    assert m is not None and m[0].name == f"{pack}.{name}"
+
+
+FOOTERS = ["How was your delivery? Rate your order and your Dasher.", "Recommended for you: widgets and more",
+           "Leave a review. Write a review. Rate your experience."]
+
+
+@pytest.mark.parametrize("footer", FOOTERS)
+@pytest.mark.parametrize("pack,frm,subject,name", [
+    ("amazon-orders", AMZ, 'Delivered: "USB cable"', "delivered"),
+    ("amazon-orders", "auto-confirm@amazon.com", 'Ordered: "USB cable"', "placed"),  # hookspool-scan: allow: the service's own sender domain
+    ("doordash-orders", DD, "Your order from Corner Cafe has been delivered", "status"),
+    ("doordash-orders", DD, "Order Confirmation for Pat from Corner Cafe", "receipt"),
+    ("resy-reservations", RES["resy-reservations"], "Your reservation at Corner Bistro is confirmed", "confirmation"),
+])
+def test_a_feedback_or_recommendations_footer_in_the_body_does_not_veto(pack, frm, subject, name, footer):
+    m = first(MR.compile_rules([], [pack], PACKS), frm, subject, f"Order # {ORD}\n{footer}")
+    assert m is not None and m[0].name == f"{pack}.{name}"
+
+
+@pytest.mark.parametrize("pack,frm,subject", [
+    ("amazon-orders", AMZ, 'How was your delivery of "USB cable"?'),
+    ("amazon-orders", AMZ, 'Rate your order: "USB cable" was delivered'),
+    ("doordash-orders", DD, "Rate your order from Corner Cafe: it was delivered"),
+    ("resy-reservations", RES["resy-reservations"], "How was your reservation at Corner Bistro?"),
+])
+def test_a_review_request_subject_is_vetoed(pack, frm, subject):
+    assert first(MR.compile_rules([], [pack], PACKS), frm, subject, "Delivered. Your order is complete.") is None
+
+
+def test_no_pack_rule_vetoes_on_the_body():
+    assert all(not r.skip for p in ALL_PACKS for r in MR.load_pack(PACKS, p).rules)
 
 
 # ---- through the processor -----------------------------------------------------------------------------------
@@ -343,7 +434,8 @@ def test_mail_outside_the_inbox_or_in_spam_is_not_matched(make, google):
 
 def test_a_mistyped_pack_or_rule_drops_the_rules_and_keeps_scheduling_working(make, google):
     for n, over in enumerate(({"rule_packs": ["no-such-pack"]}, {"rules": [{"name": "r"}]},
-                              {"rules": [{"name": "r", "subject_regex": "(zz"}]})):
+                              {"rules": [{"name": "r", "subject_regex": "(zz"}]},
+                              {"rule_packs": [{"name": "amazon-orders"}]}, {"rule_packs": [["amazon-orders"]]})):
         rig = make(**over)
         m = gmsg("m1", "Pat <pat@sender.example.test>", "Your availability?", "Are you available for a call next week?")
         rig.seed_state(gm.OWNER_STATE, {"historyId": "100", "handled": []})

@@ -75,7 +75,7 @@ type = "list"
 default = []
 
 [settings.rules]
-description = "mail rules: a list of tables (name, from, subject_any, subject_regex, kind, extract, skip); a matching message becomes one mail-matched item, see docs/bobbins/mail-rules.md"
+description = "mail rules: a list of tables (name, from, subject_any, subject_regex, kind, extract, skip, skip_subject); a matching message becomes one mail-matched item, see docs/bobbins/mail-rules.md"
 type = "list"
 default = []
 

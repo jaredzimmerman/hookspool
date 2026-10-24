@@ -12,8 +12,11 @@ A rule is a table::
     subject_regex  a case-insensitive regular expression searched in the subject
     kind         free text for the consumer: order, delivery, receipt, reservation, cancellation, alert, ...
     extract      name -> regular expression with exactly ONE capture group; tried on the subject, then on the body
-    skip         case-insensitive substrings; one of them in the subject or the body vetoes the rule
-    skip_subject case-insensitive substrings; one of them in the subject (only) vetoes the rule
+    skip         case-insensitive words or phrases; one of them in the subject or the body vetoes the rule
+    skip_subject case-insensitive words or phrases; one of them in the subject (only) vetoes the rule
+
+``skip`` and ``skip_subject`` match whole words (``sale`` does not veto "Wholesale" or "Salem"), and they do not look
+inside double-quoted text in the subject (an item name or a saved search: 'Shipped: "Deal Kit"' is not vetoed by ``deal``).
 
 ``subject_any`` and ``subject_regex`` together match when either does. A rule needs at least a ``from``,
 a ``subject_any`` or a ``subject_regex``. Rules are tried in order and the first that matches wins, so a message
@@ -194,6 +197,8 @@ def compile_rules(custom, pack_list, directory: str) -> list[Rule]:
         raise ValueError("rule_packs: must be a list of pack names")
     seen_packs = set()
     for n in pack_list:
+        if not isinstance(n, str):                     # a table or a list here is unhashable: say so as a config error
+            raise ValueError("rule_packs: each entry must be a pack name (a string)")
         if n in seen_packs:
             raise ValueError(f"rule_packs: {n!r} is listed twice")
         seen_packs.add(n)
@@ -218,6 +223,29 @@ def _sender_hit(address: str, entries: tuple[str, ...]) -> bool:
     return False
 
 
+_QUOTED = re.compile(r'"[^"\n]*(?:"|$)|\u201c[^\u201d\n]*(?:\u201d|$)|\u00ab[^\u00bb\n]*(?:\u00bb|$)')
+
+
+def _unquoted(subject: str) -> str:
+    """The subject without its double-quoted spans (item names, saved-search queries), which never veto a rule.
+    A quote the sender cut off (no closing mark) runs to the end of the subject."""
+    return _QUOTED.sub(" ", subject)
+
+
+def _word_hit(phrase: str, text: str) -> bool:
+    """Is ``phrase`` in ``text`` as whole words? An edge that is a letter or digit must not touch another one, so
+    ``sale`` is not found in "wholesale" and ``% off`` is still found in "50% off". Both are lower case."""
+    at = text.find(phrase)
+    while at != -1:
+        end = at + len(phrase)
+        left_ok = not phrase[0].isalnum() or at == 0 or not text[at - 1].isalnum()
+        right_ok = not phrase[-1].isalnum() or end == len(text) or not text[end].isalnum()
+        if left_ok and right_ok:
+            return True
+        at = text.find(phrase, at + 1)
+    return False
+
+
 def _clean(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()[:VALUE_LIMIT]
 
@@ -232,12 +260,14 @@ def matches(rule: Rule, address: str, subject: str, body: str) -> bool:
         by_regex = rule.subject_regex is not None and rule.subject_regex.search(subject) is not None
         if not (by_text or by_regex):
             return False
-    if any(s in subj for s in rule.skip_subject):
-        return False
-    if rule.skip:
-        hay = subj + "\n" + body[:BODY_LIMIT].lower()
-        if any(s in hay for s in rule.skip):
+    if rule.skip_subject or rule.skip:
+        veto_subj = _unquoted(subj)
+        if any(_word_hit(s, veto_subj) for s in rule.skip_subject):
             return False
+        if rule.skip:
+            hay = veto_subj + "\n" + body[:BODY_LIMIT].lower()
+            if any(_word_hit(s, hay) for s in rule.skip):
+                return False
     return True
 
 

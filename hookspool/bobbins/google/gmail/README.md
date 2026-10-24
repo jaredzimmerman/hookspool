@@ -80,7 +80,7 @@ the clear, so a `state_dir` you set yourself must be private (mode 0700, owned b
 | `skip_domains` | list | `[]` | sender domains (and subdomains) never reported; an entry with `@` in it is one exact address |
 | `skip_keywords` | list | `[]` | whole words that keep a subject from being reported |
 | `important_senders` | list | `[]` | never skipped by the three skip rules |
-| `rules` | list of tables | `[]` | your own mail rules: `name`, `from`, `subject_any`, `subject_regex`, `kind`, `extract`, `skip` |
+| `rules` | list of tables | `[]` | your own mail rules: `name`, `from`, `subject_any`, `subject_regex`, `kind`, `extract`, `skip`, `skip_subject` |
 | `rule_packs` | list | `[]` | names of built-in rule packs to apply after your own rules, in the order listed |
 | `api_url`, `freebusy_url` | string | the Google URLs | change only to point at a test server |
 | `hooks` | path | `""` | absolute path of a hooks module, see below |
@@ -124,7 +124,9 @@ dropped, HTTP 404) only records Gmail's current history id; nothing is reported 
   how many pages and records it read.
 * Rules read the sender, the subject and the first 20,000 characters of the text; not attachments. Mail outside the
   inbox or in spam or trash is never matched, and neither is mail read from the assistant's mailbox. A bad rule, or an
-  unknown pack name, drops all the rules for that batch with one log line; scheduling and assistant mail go on.
+  unknown pack name, drops all the rules for that batch with one log line; scheduling and assistant mail go on. That
+  batch's messages still count as handled and the history id moves past them, so mail that arrived while the rules were
+  broken is never matched, even after the fix. Send a test mail right after every rules edit.
 * `agent` may not be the owner's mailbox: the batch is refused as permanent (exit 65).
 * The `handled` list keeps the last 300 message ids.
 * A Gmail watch lasts seven days: renew it (a `users.watch` call) daily; see SETUP.md for the sweep.
