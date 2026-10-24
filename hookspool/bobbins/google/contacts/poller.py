@@ -12,6 +12,12 @@ process, and the item carries resource names (``people/c123``) and counts. A dep
 3. Google refused the token (it expires seven days after a full read): read the whole list again, keep the new
    token and report ``full_resync``: ``changed`` is then every contact that exists now and ``deleted`` is empty.
 
+An item is bounded. Resource names go out on the processor's stdout (capped at 1 MiB) and on to a destination with
+a body limit of its own, so an item names at most ``MAX_NAMES`` contacts, ``changed`` and ``deleted`` together. A
+pass that finds more (a weekly full read of a large book, or a bulk import) sends both lists empty, sets
+``truncated`` true and keeps ``total_changed`` as the real count. The token still advances, so the consumer must
+read the whole address book itself when it sees ``truncated``.
+
 State: ``contacts_sync`` ``{"connections": {"token", "page_size"}, "other": {...}}``. The runtime applies it only
 after its journal holds the result, so a retried batch reports the same item and advances each token once.
 """
@@ -22,6 +28,9 @@ from hookspool.providers import google as G
 STATE = "contacts_sync"
 EVENT = "contacts-changed"
 LISTS = (("connections", False), ("other", True))
+# Worst case an item is MAX_NAMES names of about 175 bytes: 350 KB, so two items (both lists) stay under the
+# 1 MiB stdout cap of the processor and the 1 MiB body limit of a destination.
+MAX_NAMES = 2000
 
 
 def _read(client, cursor: dict, cfg: dict, other: bool) -> tuple[dict | None, dict | None]:
@@ -39,8 +48,10 @@ def _read(client, cursor: dict, cfg: dict, other: bool) -> tuple[dict | None, di
         return fresh, None                                   # the bootstrap: a token, no report
     if not (changed or deleted or resync):
         return fresh, None
-    return fresh, {"event_type": EVENT, "changed": changed, "deleted": deleted, "full_resync": resync,
-                   "total_changed": len(changed) + len(deleted)}
+    total = len(changed) + len(deleted)
+    cut = total > MAX_NAMES
+    return fresh, {"event_type": EVENT, "changed": [] if cut else changed, "deleted": [] if cut else deleted,
+                   "full_resync": resync, "truncated": cut, "total_changed": total}
 
 
 def poll(batch, ctx) -> list[dict]:
@@ -64,8 +75,9 @@ def poll(batch, ctx) -> list[dict]:
             items.append(item)
         log.append(f"{name} " + ("bootstrap" if not cursor.get("token") and item is None else
                                   "idle" if item is None else
-                                  f"changed={len(item['changed'])} deleted={len(item['deleted'])}"
-                                  + (" full_resync" if item["full_resync"] else "")))
+                                  f"total={item['total_changed']}"
+                                  + (" full_resync" if item["full_resync"] else "")
+                                  + (" truncated" if item["truncated"] else "")))
     ctx.save_state(STATE, fresh)
     ctx.log("poll " + "; ".join(log))
     return items

@@ -121,7 +121,7 @@ def test_a_later_pass_sends_the_stored_token_and_reports_changed_and_deleted(mak
     rc, emits, err = rig.run(tick(2))
     assert rc == 0 and len(emits) == 1
     assert items(emits) == [{"event_type": "contacts-changed", "changed": ["people/c1", "people/c3"],
-                             "deleted": ["people/c2"], "full_resync": False, "total_changed": 3}]
+                             "deleted": ["people/c2"], "full_resync": False, "truncated": False, "total_changed": 3}]
     assert emits[0]["action"] == "hermes:contacts-changed" and emits[0]["key"] == "k"
     assert people.calls(CONN)[0]["query"]["syncToken"] == "sync-1"
     assert state_of(rig)["connections"]["token"] == "sync-2"
@@ -182,7 +182,7 @@ def test_an_expired_token_reads_everything_again_and_says_so(make, people, statu
     rc, emits, err = rig.run(tick())
     assert rc == 0
     assert items(emits) == [{"event_type": "contacts-changed", "changed": ["people/c1", "people/c2", "people/c3"],
-                             "deleted": [], "full_resync": True, "total_changed": 3}]
+                             "deleted": [], "full_resync": True, "truncated": False, "total_changed": 3}]
     first, *rest = [r["query"] for r in people.calls(CONN)]
     assert first["syncToken"] == "sync-1" and first["pageSize"] == "500"
     assert all("syncToken" not in q for q in rest) and rest[0]["pageSize"] == "1000"
@@ -194,7 +194,7 @@ def test_a_resync_of_an_empty_book_is_still_reported(make, people):
     seed(rig)
     people.connections = [410, page(token="sync-9")]
     [item] = items(rig.run(tick())[1])
-    assert item == {"event_type": "contacts-changed", "changed": [], "deleted": [], "full_resync": True,
+    assert item == {"event_type": "contacts-changed", "changed": [], "deleted": [], "full_resync": True, "truncated": False,
                     "total_changed": 0}
 
 
@@ -329,10 +329,10 @@ def test_each_list_reports_on_its_own(make, people):
     rc, emits, err = rig.run(tick())
     assert rc == 0
     assert items(emits) == [
-        {"event_type": "contacts-changed", "changed": ["people/c1"], "deleted": [], "full_resync": False,
+        {"event_type": "contacts-changed", "changed": ["people/c1"], "deleted": [], "full_resync": False, "truncated": False,
          "total_changed": 1},
         {"event_type": "contacts-changed", "changed": ["otherContacts/c8"], "deleted": ["otherContacts/c9"],
-         "full_resync": False, "total_changed": 2}]
+         "full_resync": False, "truncated": False, "total_changed": 2}]
     assert people.calls(OTHER)[0]["query"]["syncToken"] == "other-1"
     assert people.calls(CONN)[0]["query"]["syncToken"] == "sync-1"
 
@@ -354,6 +354,80 @@ def test_switching_other_contacts_off_drops_their_token(make, people):
     people.connections = [page(token="sync-2")]
     rig.run(tick())
     assert "other" not in state_of(rig) and people.calls(OTHER) == []
+
+
+# ---- a bounded item --------------------------------------------------------------------------------------
+def max_names() -> int:
+    """The per-item limit, read from the poller file itself (a bobbin directory is not an importable package)."""
+    ns: dict = {}
+    with open(os.path.join(DIR, "poller.py"), encoding="utf-8") as fh:
+        exec(compile(fh.read(), "poller.py", "exec"), ns)
+    return ns["MAX_NAMES"]
+
+
+def book(first: int, n: int, size: int = 1000, token="sync-9"):
+    """Pages of n contacts named c<first>.., ``size`` to a page, the last one carrying the sync token."""
+    out = []
+    for i in range(0, n, size):
+        chunk = [{"resourceName": f"people/c{first + j}", "metadata": {"sources": []}} for j in range(i, min(n, i + size))]
+        out.append(page(*chunk, nxt=f"p{i + size}" if i + size < n else None, token=token if i + size >= n else None))
+    return out
+
+
+def test_a_full_resync_of_a_large_book_stays_under_the_stdout_cap(make, people):
+    """About 33k names went over the processor's 1 MiB stdout cap and killed the tick on every retry."""
+    rig = make()
+    seed(rig)
+    n = 60_000
+    people.connections = [410] + book(1_000_000, n)
+    rc, emits, err = rig.run(tick())
+    assert rc == 0, err
+    assert items(emits) == [{"event_type": "contacts-changed", "changed": [], "deleted": [], "full_resync": True,
+                             "truncated": True, "total_changed": n}]
+    assert len(json.dumps(emits)) < 1024
+    assert state_of(rig)["connections"]["token"] == "sync-9"
+
+
+def test_the_biggest_book_the_page_cap_reads_still_fits_in_two_items(make, people):
+    rig = make(include_other_contacts=True)
+    seed(rig, other="other-1")
+    people.connections = [410] + book(1_000_000, G.PEOPLE_PAGES * 1000)
+    people.other = [410] + [{("otherContacts" if k == "connections" else k): v for k, v in p.items()}
+                            for p in book(2_000_000, G.PEOPLE_PAGES * 1000)]
+    rc, emits, err = rig.run(tick())
+    assert rc == 0, err
+    assert [i["total_changed"] for i in items(emits)] == [100_000, 100_000] and all(i["truncated"] for i in items(emits))
+    assert len(json.dumps(emits)) < 1024
+
+
+def test_an_incremental_pass_lists_up_to_the_limit_and_summarises_beyond_it(make, people):
+    cap = max_names()
+    rig = make()
+    seed(rig)
+    people.connections = book(1, cap)
+    [item] = items(rig.run(tick())[1])
+    assert item["truncated"] is False and len(item["changed"]) == cap and item["total_changed"] == cap
+    seed(rig)
+    people.connections = book(1, cap + 1)
+    [item] = items(rig.run(tick(2), bid="2")[1])
+    assert item["truncated"] is True and item["changed"] == [] and item["deleted"] == []
+    assert item["total_changed"] == cap + 1
+
+
+def test_a_full_item_is_well_under_the_stdout_cap(make, people):
+    """MAX_NAMES names at the longest name the parser accepts, two lists, must not reach 1 MiB."""
+    long = "c" + "x" * 150
+    rig = make(include_other_contacts=True)
+    seed(rig, other="other-1")
+    def pg(field, prefix):
+        return page(*[{"resourceName": f"{prefix}/{long}{i:05d}", "metadata": {}} for i in range(max_names())],
+                    token="t", field=field)
+
+    people.connections, people.other = [pg("connections", "people")], [pg("otherContacts", "otherContacts")]
+    rc, emits, err = rig.run(tick())
+    assert rc == 0, err
+    assert [len(i["changed"]) for i in items(emits)] == [max_names()] * 2
+    assert 600_000 < len(json.dumps(emits)) < 800_000
 
 
 # ---- no personal data -------------------------------------------------------------------------------------
@@ -378,7 +452,7 @@ def test_personal_data_in_the_answers_never_reaches_an_emit_a_log_or_the_state(m
     seen = json.dumps(emits) + err + everything_written(rig)
     for needle in (SENTINEL, "Ada", "example.test", "555", "displayName", "emailAddresses"):
         assert needle not in seen, needle
-    assert set(items(emits)[0]) == {"event_type", "changed", "deleted", "full_resync", "total_changed"}
+    assert set(items(emits)[0]) == {"event_type", "changed", "deleted", "full_resync", "truncated", "total_changed"}
 
 
 def test_a_failed_pass_logs_no_resource_names_or_tokens(make, people):
@@ -396,7 +470,7 @@ def test_logs_carry_counts_only(make, people):
     seed(rig)
     people.connections = [page(person("c1"), person("c2", deleted=True), token="sync-2")]
     rc, emits, err = rig.run(tick())
-    assert "connections changed=1 deleted=1" in err
+    assert "connections total=2" in err
     for needle in ("c1", "c2", "sync-1", "sync-2", "people/"):
         assert needle not in err, needle
 
@@ -443,7 +517,7 @@ def test_the_manifest_is_a_valid_poll_manifest_and_the_outputs_are_the_ones_the_
     prov = pkg.manifest["provider"]
     assert "webhook_docs" not in prov and "signature_docs" not in prov
     assert prov["no_push_note"] == "The People API has no watch method; incremental sync uses a sync token."
-    assert prov["no_push_docs"] == prov["api_docs"]
+    assert prov["no_push_docs"] == "https://developers.google.com/people/api/rest"
     for f in ("README.md", "SETUP.md", "AGENTS.md", "bobbin.toml", "poller.py"):
         assert os.path.isfile(os.path.join(DIR, f)), f
     assert not os.path.exists(os.path.join(DIR, "source.py"))

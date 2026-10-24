@@ -37,7 +37,10 @@ answer). The runtime handles HTTP, the OAuth refresh, retries and timeouts.
 3. **Expired token.** Google expires a sync token seven days after the full read it came from. When it refuses the
    token (HTTP 410, reason `EXPIRED_SYNC_TOKEN`), the pass reads the whole list again, stores the new token and emits
    an item with `full_resync` true. This happens about once a week. Google's reference names the reason but not the
-   status code, so a 400 answer to a request that carried a token is handled the same way.
+   status code, so a 400 answer to a request that carried a token is handled the same way. If a 400 comes back for
+   another reason on every request that carries a token, the symptom is a `full_resync` item on every tick, each
+   one a full read of the list. The remedy is to find out why Google rejects the request, not to wait it out: read
+   the log line (`full_resync` on every tick) and call the People API by hand with the same token and page size.
 
 ## Outputs
 
@@ -50,7 +53,13 @@ answer). The runtime handles HTTP, the OAuth refresh, retries and timeouts.
 | `changed` | resource names that were added or edited (`people/...`; `otherContacts/...` for the other list) |
 | `deleted` | resource names that were deleted |
 | `full_resync` | true when Google refused the stored token and the whole list was read again: `changed` is then every contact that exists now and `deleted` is empty, so a consumer should drop anything it holds that is not in `changed` |
-| `total_changed` | the number of names in `changed` and `deleted` together |
+| `truncated` | true when more than 2000 contacts changed in the pass, `changed` and `deleted` together. Both lists are then empty and `total_changed` is the real count. The sync token has moved on, so the consumer must read the whole address book itself. With `full_resync` also true, this is how a large book arrives |
+| `total_changed` | the number of names in `changed` and `deleted` together, counted before any limit |
+
+An item is bounded on purpose. Resource names leave the process on its standard output, which the runtime caps at
+1 MiB, and then go to a destination with a body limit of its own. A weekly full read of a large book would
+otherwise go over the cap, fail every retry and stop the polls of that instance. A pass with 2000 names or fewer
+lists them; one with more sends the count only.
 
 With `include_other_contacts` on, each list reports on its own. A pass can emit two items, one for `people/...`
 names and one for `otherContacts/...` names, and `full_resync` on one says nothing about the other. Items carry no
@@ -86,6 +95,8 @@ next tick bootstrap. Turning `include_other_contacts` off drops that list's toke
 
 ## Limits
 
+* An item names at most 2000 contacts (`changed` and `deleted` together); beyond that it carries `truncated` and the
+  count, see the table above.
 * A pass reads at most 100 pages of `page_size` contacts for each list (100 000 contacts at the default). A longer
   list stops the pass with a permanent error, because Google sends a sync token only with the last page.
 * Google says writes can take several minutes to appear in an incremental sync, which is not meant for

@@ -54,8 +54,13 @@ private (mode 0700). It holds the sync tokens.
 ## 4. What to expect, and rollback
 
 About once a week Google expires the sync token. The next tick then reads the whole list again and emits one item
-with `full_resync` true, where `changed` is every contact that exists. A job that mirrors the address book should
-read that as "replace everything", not as a burst of edits.
+with `full_resync` true. Up to 2000 contacts, `changed` is every contact that exists; above that the item has
+`truncated` true, empty lists and the real count in `total_changed`. A job that mirrors the address book should
+read either as "read everything again", not as a burst of edits. The same `truncated` item appears after a bulk
+import of more than 2000 contacts.
+
+If you see a `full_resync` item on every tick instead of about once a week, Google is rejecting the request with a
+400 that is not an expired token. Check the credential's scope and the People API quota.
 
 The dispatcher retries a tick that fails, with backoff. If no tick is delivered for three intervals,
 `hookspool issues` shows `poll:contacts:stale`. To roll back, remove the `[bobbins.contacts]` table and run

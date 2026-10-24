@@ -59,7 +59,9 @@ an interface, and the entry will say so.
   with a token of its own when `include_other_contacts` is on) and emits `contacts-changed` with `changed` and `deleted`
   resource names, `full_resync` and `total_changed`, and nothing else. The request asks for `metadata` only, so no name,
   address or number reaches hookspool. The first pass stores the token and emits nothing. An expired token (HTTP 410)
-  makes one full read and sets `full_resync`. A stored token keeps the page size it was issued with.
+  makes one full read and sets `full_resync`. A stored token keeps the page size it was issued with. An item names at
+  most 2000 contacts; a pass with more (a weekly full read of a large book, a bulk import) sends empty lists, `truncated`
+  true and the real `total_changed`, so it cannot outgrow the processor's 1 MiB stdout cap and kill the tick.
 - `hookspool.providers.google.people_changes`: the People API sync-token listing, shared by anything that polls contacts.
 - The wheel now carries `captures/poll-*.json`, the stub API answers of a poll bobbin's conformance captures.
 

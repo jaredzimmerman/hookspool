@@ -5,10 +5,10 @@ summary = "Google Contacts (People API), polled with a sync token because the AP
 [provider]
 vendor = "Google"
 product = "Contacts"
-homepage = "https://developers.google.com/people"
+homepage = "https://contacts.google.com"
 api_docs = "https://developers.google.com/people/api/rest/v1/people.connections/list"
 no_push_note = "The People API has no watch method; incremental sync uses a sync token."
-no_push_docs = "https://developers.google.com/people/api/rest/v1/people.connections/list"
+no_push_docs = "https://developers.google.com/people/api/rest"
 
 [poll]
 every_s = 900
@@ -36,4 +36,4 @@ type = "string"
 default = "https://people.googleapis.com/v1/"
 
 [outputs.contacts-changed]
-description = "contacts were added, edited or deleted since the last poll; carries resource names and counts only, never a name, address or number"
+description = "contacts were added, edited or deleted since the last poll; carries resource names and counts only, never a name, address or number; past 2000 names it carries the count and no names (truncated)"

@@ -25,8 +25,10 @@ The secret used below is `cred`. There are no required settings.
 1. **Check the host.** Goal: hookspool is installed and its dispatcher runs. Run `hookspool status`; expect an ok
    status. If the dispatcher is not running, stop and ask the person.
 2. **Place the credential.** Goal: `<CRED_FILE>` is a regular file, mode 0600, owned by the hookspool user, with JSON
-   keys `client_id`, `client_secret`, `refresh_token`. Check with
-   `python3 -c "import json,sys; print(sorted(json.load(open(sys.argv[1]))))" <CRED_FILE>` (key names only). If the
+   keys `client_id`, `client_secret`, `refresh_token`. Check as that user, since a
+   0600 file is not readable by anyone else:
+   `sudo -u <HOOKSPOOL_USER> python3 -c "import json,sys; print(sorted(json.load(open(sys.argv[1]))))" <CRED_FILE>`
+   (key names only). If the
    file is missing, unreadable by the hookspool user, or lacks a key, stop and ask the person for a correct
    credential; do not try to produce a refresh token yourself.
 3. **Add the configuration.** Goal: the instance expands and checks clean. Add:
@@ -52,6 +54,8 @@ The secret used below is `cred`. There are no required settings.
    yet. `retry` means a transient error (`hookspool show <BATCH_ID> --attempts`); `dead` with `exit 65` means Google
    refused the credential or the request (a missing scope or a disabled People API): tell the person. To see a
    report, ask the person to change a contact, then check the next ticks: one `contacts-changed` item with resource
-   names and counts, no personal data. Google can take a few minutes to show a write to an incremental sync.
+   names and counts, no personal data (past 2000 names it has `truncated` true and the count only; tell the person
+   their job must then reread the address book). A `full_resync` item on every tick means a 400 that is not an
+   expired token: tell the person. Google can take a few minutes to show a write to an incremental sync.
 
 Rollback: remove the `[bobbins.contacts]` table and run `hookspool reload`. Nothing in the spool is lost.
