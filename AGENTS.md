@@ -95,7 +95,8 @@ The reasons are in [ARCHITECTURE](docs/architecture/ARCHITECTURE.md), and the te
 - At-least-once delivery with order per key; a batch is retried until the destination accepts it (section 6).
 - A bobbin that raises after verification quarantines the request; it never answers 5xx for our bug. Do not swallow errors
   to avoid that.
-- Nothing is discarded automatically. Only `hookspool drop`, run by an operator, discards.
+- No undelivered batch is discarded automatically: a `dead` batch stays until an operator replays it or runs `hookspool drop`.
+  Retention prunes only delivered and dropped data ([section 8](docs/architecture/ARCHITECTURE.md#8-retention)).
 - Only the dispatcher delivers, and only one dispatcher runs (the `dispatch.lock` file).
 
 ### Add a bobbin

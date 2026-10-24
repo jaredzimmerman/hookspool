@@ -29,19 +29,61 @@ def _subcommands(parser: argparse.ArgumentParser) -> dict[str, argparse.Argument
     return dict(sub.choices) if sub else {}
 
 
-def test_every_hookspool_command_named_in_agents_md_exists():
-    top = _subcommands(cli._parser())
+def _second_words(parser: argparse.ArgumentParser) -> set[str]:
+    """What may follow the command name: nested subparser names, or a positional's fixed choices (`bobbin` uses `subcmd`)."""
+    out = set(_subcommands(parser))
+    for a in parser._actions:
+        if not a.option_strings and a.choices and not isinstance(a, argparse._SubParsersAction):
+            out |= set(a.choices)
+    return out
+
+
+def _flags(parser: argparse.ArgumentParser) -> set[str]:
+    out = set()
+    for a in parser._actions:
+        out |= set(a.option_strings)
+    return out
+
+
+def check_agents_commands(text: str) -> set[str]:
+    """Assert every `hookspool <cmd> [<sub>] [--flag]` in the text is real; return the commands seen."""
+    root = cli._parser()
+    top = _subcommands(root)
     seen = set()
-    for ln in _spans(read("AGENTS.md")):
+    for ln in _spans(text):
         for m in re.finditer(r"(?<![\w/.-])hookspool((?:\s+--(?:home|config)\s+\S+|\s+--json)*)\s+([a-z]+)\b(?:\s+([a-z]+)\b)?", ln):
             cmd, nxt = m.group(2), m.group(3)
             assert cmd in top, f"`hookspool {cmd}` is not a command: {ln.strip()!r}"
             seen.add(cmd)
-            nested = _subcommands(top[cmd])
-            if nested and nxt:
-                assert nxt in nested, f"`hookspool {cmd} {nxt}` is not a subcommand"
+            words = _second_words(top[cmd])
+            if words and nxt:
+                assert nxt in words, f"`hookspool {cmd} {nxt}` is not a subcommand: {ln.strip()!r}"
+            # flags on the rest of this command line, up to a shell separator
+            rest = re.split(r"[|;#]|&&", ln[m.end(2):])[0]
+            known = _flags(top[cmd]) | _flags(root)
+            for flag in re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]*)", rest):
+                assert flag in known, f"`hookspool {cmd}` has no {flag} option: {ln.strip()!r}"
+    return seen
+
+
+def test_every_hookspool_command_named_in_agents_md_exists():
+    seen = check_agents_commands(read("AGENTS.md"))
     # the commands the guide's procedures depend on
     assert {"check", "reload", "status", "list", "issues", "bobbin", "migrate", "drop", "pause"} <= seen
+
+
+def test_command_check_rejects_a_bogus_subcommand_flag_or_command():
+    import pytest
+
+    check_agents_commands("`hookspool bobbin list`\n`hookspool list --source x`")
+    for bad in ("`hookspool bobbin frobnicate`", "`hookspool list --sauce x`", "`hookspool frobnicate`",
+                "```\nhookspool bobbin check x --nope\n```"):
+        with pytest.raises(AssertionError):
+            check_agents_commands(bad)
+    doctored = read("AGENTS.md").replace("hookspool bobbin list", "hookspool bobbin frobnicate").replace("--source", "--sauce")
+    assert doctored != read("AGENTS.md")
+    with pytest.raises(AssertionError):
+        check_agents_commands(doctored)
 
 
 def test_every_path_named_in_agents_md_exists():
