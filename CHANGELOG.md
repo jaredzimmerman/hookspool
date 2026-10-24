@@ -43,6 +43,9 @@ an interface, and the entry will say so.
   promotions mail alone; `skip` and `skip_subject` match whole words and ignore double-quoted text in the subject; rules read the
   owner's mailbox only; a bad rule drops the rules for that batch with one log line instead of failing it.
 - A pass over an owner's mailbox no longer reads free/busy unless a scheduling request was found.
+- The `cloudflare.notifications` bobbin (`hookspool/bobbins/cloudflare/notifications/`): a Cloudflare
+  Notifications webhook destination, a template bobbin with no Python. It checks the shared secret sent in the
+  `cf-webhook-auth` header, keys alerts on the notification policy's name and de-duplicates on the body's digest.
 
 ## [0.2.0] - 2026-10-23
 
