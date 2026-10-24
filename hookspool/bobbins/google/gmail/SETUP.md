@@ -40,10 +40,18 @@ bobbin = "google.gmail"
 secrets.push_token = { file = "/etc/hookspool/secrets/gmail_push_token" }
 secrets.cred_owner = { file = "/etc/hookspool/google/owner.json" }
 secrets.cred_agent = { file = "/etc/hookspool/google/assistant.json" }   # leave out with no assistant mailbox
-settings = { owner = "owner@example.com", agent = "assistant@example.com", tz = "America/New_York" }
 outputs = { scheduling = "hermes:mail-scheduling", agent-mail = "hermes:assistant-mail", agent-schedule = "hermes:assistant-schedule", mailbox-changed = "hermes:mail-changed" }
 expect = true
+
+[bobbins.gmail.settings]
+owner = "owner@example.com"
+agent = "assistant@example.com"
+tz = "America/New_York"
 ```
+
+Write `settings` as its own `[bobbins.gmail.settings]` table, after the keys above it. TOML does not let you add to an
+inline table (`settings = { ... }`), so with that form the `rule_packs` and `[[bobbins.gmail.settings.rules]]` lines of
+the next section are a parse error.
 
 Leave out the outputs you do not want. Check it and look at what it expands to:
 
@@ -59,7 +67,7 @@ script, set `state_dir` to its data directory.
 ### Optional: mail rules
 
 To recognise mail from services that only send email (orders, deliveries, reservations, court alerts), add pack names
-or your own rules to the instance's `settings` (for example `rule_packs = ["amazon-orders", "resy-reservations"]`) and
+or your own rules to the instance's `settings` (for example `rule_packs = ["amazon-orders", "resy-reservations"]` under `[bobbins.gmail.settings]`) and
 map the `mail-matched` output in `outputs`. `hookspool bobbin show google.gmail` lists the packs and whether each is `verified` or `unverified`. The rule format,
 and how a destination script routes by the item's `rule`, are in [Mail rules and rule packs](../../../../docs/bobbins/mail-rules.md).
 A misspelt pack name or a bad rule does not stop the batch: the rules are ignored and the log gets one line, `mail rules ignored for this batch`.

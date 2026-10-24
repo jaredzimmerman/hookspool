@@ -149,6 +149,27 @@ copy the pack's rule into `rules`) where a subject or a body differs. Sender ent
 restaurant that sends from its own domain through the platform needs a rule of its own with its domain in `from`. A pack
 becomes `verified` only after its patterns have been compared with real message shapes.
 
+### What is still missing
+
+No pack is `verified` yet. A pack is verified when at least 95% of the service's transactional mail from its sender
+domains lands on the right kind and its marketing and newsletter mail is not claimed. That has to be measured on a real
+mailbox, and the measurement has not been done for any of the seven. The report to produce for each pack is: messages
+matched, the count per kind, and the most common subject shapes (digits replaced by `#`, names by a placeholder) from the
+service's sender domains that no rule claimed. Only counts and shapes may leave the mailbox.
+
+Changes made without a mailbox, from the review of the first version:
+
+* `courtlistener-alerts` lists only the alert service's own domain. Its parent organisation's domain also sends
+  newsletters and appeals.
+* `amazon-orders.shipped` also matches the long classic subject ("Your ... order of ... has shipped") and a first set of
+  German, French, Spanish and Italian shipping subjects. The foreign-language phrases are guesses from common wording.
+  Check them on real mail before relying on them.
+* Veto words are matched as whole words and never inside quoted text, so a venue called "Perks Tavern" is not hidden,
+  and a quote mark right after a digit is read as an inch mark (24"), not as the start of a quoted item name.
+
+Still open: the other storefront-language subjects (receipts, delivered, out for delivery), the sender domains of each
+reservation platform's transactional mail, and the per-kind recall figures.
+
 Reservation packs share one layout. Their rules run in this order so that the general words do not swallow the specific
 ones: `cancellation`, `modification`, `waitlist`, `reminder`, `confirmation`. A message whose subject asks you to rate or
 review a visit is skipped.

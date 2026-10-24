@@ -90,6 +90,22 @@ def test_double_quoted_text_in_the_subject_never_vetoes():
     assert first(r, "x@example.test", 'Sale: everything shipped "free"') is None         # outside the quotes it still vetoes
 
 
+def test_an_inch_mark_is_not_a_quote():
+    r = [rule(subject_any=["shipped"], skip_subject=["sale"])]
+    assert first(r, "x@example.test", 'Sale: shipped 24" monitor') is None             # the inch mark does not open a quote
+    assert first(r, "x@example.test", 'Shipped: 24" monitor, "sale" edition')           # a real quote still shields its text
+    assert first(r, "x@example.test", 'Shipped: 24" sale monitor') is None
+
+
+@pytest.mark.parametrize("field", ["subject_regex", "extract"])
+def test_an_overflowing_pattern_is_a_config_error_not_a_crash(field):
+    bad = "(a){99999999999}"
+    raw = {"name": "r", "subject_any": ["x"]}
+    raw.update({"subject_regex": bad} if field == "subject_regex" else {"extract": {"k": bad}})
+    with pytest.raises(ValueError):
+        MR.parse_rule(raw, "rules")
+
+
 def test_a_rule_pack_entry_that_is_not_a_name_is_a_config_error():
     for bad in ([{"name": "amazon-orders"}], [["amazon-orders"]], [3]):
         with pytest.raises(ValueError, match="pack name"):
@@ -532,3 +548,24 @@ def test_bobbin_show_lists_the_rule_packs(capsys, tmp_path):
     for p in ALL_PACKS:
         assert p in out
     assert "[unverified]" in out
+
+
+# ---- shapes added after the first review (synthetic) ---------------------------------------------------------------
+@pytest.mark.parametrize("subject", [
+    'Your Amazon.com order of "' + "Widget, blue, assorted sizes " * 4 + '" has shipped!',  # hookspool-scan: allow: the service's own brand name in a subject
+    "Your Amazon.com order of Widget has shipped!",  # hookspool-scan: allow: the service's own brand name in a subject
+    "Versandbestätigung für Ihre Bestellung",
+    "Ihre Bestellung wurde versandt",
+    "Votre commande a été expédiée",
+    "Tu pedido ha sido enviado",
+    "Il tuo ordine è stato spedito",
+])
+def test_amazon_shipped_mail_in_the_classic_and_other_storefront_shapes(subject):
+    m = first(MR.compile_rules([], ["amazon-orders"], PACKS), AMZ, subject, "Order # 123-4567890-1234567")
+    assert m is not None and m[0].name == "amazon-orders.shipped"
+
+
+def test_courtlistener_alerts_ignore_the_parent_organisations_domain():
+    rules = MR.compile_rules([], ["courtlistener-alerts"], PACKS)
+    assert first(rules, CL, "New filings in a followed case")
+    assert first(rules, "news@free.law", "New filings and new results this month") is None  # hookspool-scan: allow: the service's parent domain
