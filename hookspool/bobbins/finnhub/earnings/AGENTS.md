@@ -37,26 +37,39 @@ Secret used below: `secret`. There are no settings.
    Then run `hookspool check` and `hookspool reload`. **Check:** both exit 0 and `hookspool bobbin expand earnings`
    shows the secret as a reference only. **If it fails:** read the error; it names the missing secret or output. Fix
    the table, not the bobbin.
-3. **Goal:** the reverse proxy forwards `POST /hooks/earnings` unchanged, including the body and the `X-Finnhub-Secret`
-   header, and the intake answers on the public URL `https://<HOOKS_HOST>/hooks/earnings`. **Check:** a captured
-   delivery sent through the public URL with the wrong secret is refused, and one with the right secret is queued.
-   **If it fails:** fix the proxy (it must not strip or rewrite headers on this path). Do not go on to step 4 until this
-   check passes, because the bobbin does not assume the sender retries.
+3. **Goal:** the intake loads the bobbin with the configured secret, and the proxy forwards `POST /hooks/earnings`
+   unchanged, including the body and the `X-Finnhub-Secret` header. **Check:** two commands. First the local replay,
+   which sends nothing and never reads the secret value into the output:
+   ```sh
+   hookspool source test earnings --request hookspool/bobbins/finnhub/earnings/captures/bad_signature.http
+   ```
+   It must print `"result": "unverified"` and exit 1; `secret_unavailable` or exit 2 means the config or the secret
+   file is wrong. Then one wrong-secret delivery through the public URL, which must be refused with 401:
+   ```sh
+   curl -sS -w '\n%{http_code}\n' -X POST -H 'Content-Type: application/json' -H 'X-Finnhub-Secret: wrong-test-secret' \
+     --data '{"data":[{"symbol":"TEST","period":"2026-09-30","actual":9.99,"estimate":1.1}],"type":"earnings","note":"made-up test payload PAYLOAD-SENTINEL-7f3a"}' \
+     https://<HOOKS_HOST>/hooks/earnings
+   ```
+   Do not send a delivery with the real secret: the agent does not handle its value, and a made-up `TEST` event would
+   be queued to the real output. The right-secret path is checked by the first real delivery in step 5. **If it
+   fails:** fix the proxy (it must not strip or rewrite headers on this path); a 2xx answer to the wrong secret means
+   the request is not reaching the intake as sent. Do not go on to step 4 until both checks pass, because the bobbin
+   does not assume the sender retries.
 4. **Outward, ask first:** set the destination URL and the secret on the Finnhub account. **Unconfirmed:** the pages
    checked do not say where this is set, and the `webhook/add` call below carries only `event` and `symbol`. Find the
    setting in the account (the Webhooks section of the dashboard is where third-party guides point). If there is no
    such setting, stop and report it to the human. Then create one webhook per ticker `<SYMBOL>`:
    ```sh
    printf 'header = "X-Finnhub-Token: %s"\n' "$(cat /etc/hookspool/secrets/finnhub_api_key)" |
-     curl -sS -K - -H 'Content-Type: application/json' -X POST https://finnhub.io/api/v1/webhook/add \
-       --data '{"event":"earnings","symbol":"<SYMBOL>"}'
+     curl -sS -K - -H 'Content-Type: application/json' -X POST -w '\n%{http_code}\n' \
+       https://finnhub.io/api/v1/webhook/add --data '{"event":"earnings","symbol":"<SYMBOL>"}'
    ```
    Keep the id from each response. **Check:** run the list call, which must show one earnings webhook per ticker:
    ```sh
    printf 'header = "X-Finnhub-Token: %s"\n' "$(cat /etc/hookspool/secrets/finnhub_api_key)" |
-     curl -sS -K - https://finnhub.io/api/v1/webhook/list
+     curl -sS -K - -w '\n%{http_code}\n' https://finnhub.io/api/v1/webhook/list
    ```
-   **If it fails:** report the HTTP status and the body without the key; do not retry more than once.
+   **If it fails:** report the HTTP status (printed by the curl line) and the body without the key; do not retry more than once.
 5. **Goal:** a real announcement is accepted. Wait for one (Finnhub sends it when the announcement is published), then
    run `hookspool list --source earnings`. **Check:** a queued batch names a ticker. **If it fails:** run
    `hookspool status`. If the batch is quarantined with a missing key, the payload is not shaped as `data.0.symbol`;

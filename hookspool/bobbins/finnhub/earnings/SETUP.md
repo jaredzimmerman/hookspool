@@ -52,9 +52,25 @@ The reverse proxy must forward `POST /hooks/earnings` to the intake unchanged: t
 Check the intake and the proxy before you create a webhook at Finnhub. The bobbin does not assume the sender retries,
 so an announcement that arrives while the path is broken may not come again.
 
-1. Send one captured delivery with the wrong secret and confirm it is refused, and one with the right secret and
-   confirm it is queued. `hookspool source test earnings --request <capture>` tests a capture without registering
-   anything. Repeat the same two checks through the public URL, so the proxy is covered too.
+Replay a capture locally. This sends nothing and registers nothing:
+
+```sh
+hookspool source test earnings --request hookspool/bobbins/finnhub/earnings/captures/bad_signature.http
+```
+
+It must print `"result": "unverified"` and exit 1. `secret_unavailable` or exit 2 means the config or the secret file
+is wrong.
+
+Then send one wrong-secret delivery through the public URL. It must be refused with 401, which also covers the proxy:
+
+```sh
+curl -sS -w '\n%{http_code}\n' -X POST -H 'Content-Type: application/json' -H 'X-Finnhub-Secret: wrong-test-secret' \
+  --data '{"data":[{"symbol":"TEST","period":"2026-09-30","actual":9.99,"estimate":1.1}],"type":"earnings","note":"made-up test payload PAYLOAD-SENTINEL-7f3a"}' \
+  https://<HOOKS_HOST>/hooks/earnings
+```
+
+Do not send a delivery with the real secret to test the intake: a made-up `TEST` event would be queued to your real
+output. The right-secret path is confirmed by the first real delivery, below.
 
 ## Create and list the webhooks
 
@@ -65,12 +81,12 @@ the URL.
 ```sh
 # create an earnings webhook for one ticker (repeat for each ticker)
 printf 'header = "X-Finnhub-Token: %s"\n' "$(cat /etc/hookspool/secrets/finnhub_api_key)" |
-  curl -sS -K - -H 'Content-Type: application/json' -X POST https://finnhub.io/api/v1/webhook/add \
-    --data '{"event":"earnings","symbol":"AAPL"}'
+  curl -sS -K - -H 'Content-Type: application/json' -X POST -w '\n%{http_code}\n' \
+    https://finnhub.io/api/v1/webhook/add --data '{"event":"earnings","symbol":"AAPL"}'
 
 # list the webhooks the account has (keep the ids for rollback)
 printf 'header = "X-Finnhub-Token: %s"\n' "$(cat /etc/hookspool/secrets/finnhub_api_key)" |
-  curl -sS -K - https://finnhub.io/api/v1/webhook/list
+  curl -sS -K - -w '\n%{http_code}\n' https://finnhub.io/api/v1/webhook/list
 ```
 
 The key goes in the `X-Finnhub-Token` header. Some examples pass it as a `token=` query parameter instead. That puts
