@@ -37,7 +37,7 @@ Secret used below: `secret`. There are no settings.
    Then run `hookspool check` and `hookspool reload`. **Check:** both exit 0 and `hookspool bobbin expand earnings`
    shows the secret as a reference only. **If it fails:** read the error; it names the missing secret or output. Fix
    the table, not the bobbin.
-3. **Goal:** the intake loads the bobbin with the configured secret, and the proxy forwards `POST /hooks/earnings`
+3. **Outward (our own public host only; nothing is sent to Finnhub), ask first. Goal:** the intake loads the bobbin with the configured secret, and the proxy forwards `POST /hooks/earnings`
    unchanged, including the body and the `X-Finnhub-Secret` header. **Check:** two commands. First the local replay,
    which sends nothing and never reads the secret value into the output:
    ```sh
