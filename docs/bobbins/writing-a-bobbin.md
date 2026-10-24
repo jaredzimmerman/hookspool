@@ -570,6 +570,10 @@ How it runs:
       return items
   ```
 
+- A provider that limits the request rate (EDGAR allows 10 a second) is served by `ctx.pace(per_s)`: call `wait()` on the
+  pacer before each request. Do not call `time.sleep`; the kit refuses it, and the pacer's sleep is core's. A provider
+  that publishes an Atom or RSS feed is served by `hookspool.feeds.parse_feed(text)`, which returns the entries as dicts
+  and refuses a document with a DOCTYPE or entity declaration. The `sec.edgar` bobbin uses both.
 - `hookspool status` shows each poll instance under `polls`. With no delivered tick for three times
   `every_s`, the issue `poll:<instance>:stale` opens; the next delivered tick resolves it.
 

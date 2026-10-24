@@ -302,7 +302,7 @@ def _form(req) -> dict:
 
 def test_make_context_extras_shape(tmp_path, stub):
     ex = net.make_context_extras({}, lambda name: "v")
-    assert set(ex) == {"http", "oauth", "secret"}
+    assert set(ex) == {"http", "oauth", "secret", "pace"}
     assert isinstance(ex["http"], Http) and ex["secret"]("x") == "v"
     assert isinstance(ex["oauth"]("cred"), net.OAuthClient)
 
