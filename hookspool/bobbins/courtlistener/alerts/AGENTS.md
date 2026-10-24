@@ -32,7 +32,7 @@ The same procedure as SETUP.md, as steps. Read README.md, "Read this first", bef
    table). If `hookspool check` fails: fix what it names, then run both again.
 2. **Forward the path at the reverse proxy** (host change: ask the human first). Goal: `/hooks/alerts` reaches the intake with
    its query string, and only CourtListener's two addresses reach it. Add the `location = /hooks/alerts` block from SETUP.md
-   to the nginx site, with its `allow` lines for CourtListener's two documented addresses, 34.210.230.218 and 54.189.59.91
+   to the nginx site, with its `allow` lines for CourtListener's two documented addresses, 34.210.230.218 and 54.189.59.91 <!-- hookspool-scan: allow: documented provider addresses -->
    (the Webhook Security section of the provider's guide; check them there first). Use the access log format and the
    `error_log` line from that block, so the token stays out of the logs. Then run `nginx -t` and `systemctl reload nginx`.
    If the host sits behind another proxy, drop the `allow` lines.
