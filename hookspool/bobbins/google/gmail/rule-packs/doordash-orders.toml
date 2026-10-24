@@ -1,0 +1,38 @@
+# DoorDash order mail (patterns written from the provider's published email conventions; not yet checked against real mail).
+[pack]
+name = "doordash-orders"
+status = "unverified"
+description = "DoorDash order mail: receipts, order status updates and cancellations or refunds"
+
+[[rules]]
+name = "cancelled"
+kind = "cancellation"
+from = ["doordash.com"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["cancel", "refund"]
+skip = ["rate your", "how was your", "leave a review"]
+[rules.extract]
+order_id = '(?:order\s*(?:number|id|#)|confirmation)\s*[:#]?\s*([a-z0-9][a-z0-9-]{4,24})\b'
+store = '\bfrom\s+([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on)\b|\s*[!.,:]|\s*$)'
+total = '(?:total|refund(?:ed)? amount)[:\s]*(\$\s?\d[\d,]*\.\d{2})'
+
+[[rules]]
+name = "status"
+kind = "delivery"
+from = ["doordash.com"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["on its way", "is being prepared", "is ready", "has arrived", "was delivered", "has been delivered", "order update", "dasher"]
+skip = ["rate your", "how was your", "leave a review"]
+[rules.extract]
+order_id = '(?:order\s*(?:number|id|#)|confirmation)\s*[:#]?\s*([a-z0-9][a-z0-9-]{4,24})\b'
+store = '\bfrom\s+([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on)\b|\s*[!.,:]|\s*$)'
+total = '(?:total|order total)[:\s]*(\$\s?\d[\d,]*\.\d{2})'
+
+[[rules]]
+name = "receipt"
+kind = "receipt"
+from = ["doordash.com"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["receipt", "order confirmation", "your order from", "thanks for your order", "thank you for your order"]
+skip = ["rate your", "how was your", "leave a review"]
+[rules.extract]
+order_id = '(?:order\s*(?:number|id|#)|confirmation)\s*[:#]?\s*([a-z0-9][a-z0-9-]{4,24})\b'
+store = '\bfrom\s+([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on)\b|\s*[!.,:]|\s*$)'
+total = '(?:total|order total)[:\s]*(\$\s?\d[\d,]*\.\d{2})'

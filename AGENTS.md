@@ -26,7 +26,7 @@ Each built-in bobbin also has its own `AGENTS.md` with the setup steps for that 
 | `hookspool/verify.py`, `hookspool/plugin.py`, `hookspool/net.py` | signature checks; the source plugin API; outbound HTTP, OAuth and secret access |
 | `hookspool/processor.py`, `hookspool/breaker.py`, `hookspool/logs.py` | the bobbin processor runtime; the circuit breaker; structured logs |
 | `hookspool/bobbins/<vendor>/<product>/` | one built-in bobbin per directory (manifest, captures, README, SETUP.md, AGENTS.md) |
-| `hookspool/providers/` | code shared by several bobbins of one provider, written once on core APIs |
+| `hookspool/providers/`, `hookspool/mailrules.py` | code shared by several bobbins, written once on core APIs: one provider's helpers; mail rules and rule packs |
 | `hookspool/sources/`, `hookspool/destinations/` | source and destination plugin registries and the built-ins |
 | `hookspool/testing/bobbinkit.py` | the bobbin conformance kit behind `hookspool bobbin check` |
 | `tests/` | the hermetic suite; `tests/bobbins/test_<vendor>_<product>.py` holds a bobbin's own tests |

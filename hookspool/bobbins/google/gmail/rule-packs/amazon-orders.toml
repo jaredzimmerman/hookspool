@@ -1,0 +1,73 @@
+# Amazon retail order mail (patterns written from the provider's published email conventions; not yet checked against real mail).
+# Order ids are three groups of digits, 3-7-7. Regional storefronts are listed by domain.
+[pack]
+name = "amazon-orders"
+status = "unverified"
+description = "Amazon order mail: placed, shipped, out for delivery, delivered, delayed and refunded"
+
+# Order of the rules matters: the first that matches claims the message, so the specific states come first.
+
+[[rules]]
+name = "refunded"
+kind = "receipt"
+from = ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.com.au", "amazon.co.jp"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["refund"]
+skip = ["recommended for you", "write a review", "rate your"]
+[rules.extract]
+order_id = '\b(\d{3}-\d{7}-\d{7})\b'
+amount = '(?:refund(?:ed)?(?: total| amount)?|total)[:\s]*((?:[$£€¥]|usd|cad|gbp|eur)\s?\d[\d,]*(?:\.\d{2})?)'
+
+[[rules]]
+name = "delayed"
+kind = "delivery"
+from = ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.com.au", "amazon.co.jp"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["delayed", "running late", "delivery date has changed", "new delivery date"]
+skip = ["recommended for you", "write a review"]
+[rules.extract]
+order_id = '\b(\d{3}-\d{7}-\d{7})\b'
+item = '^(?:delayed|delivery update):\s*["“]?(.+?)["”]?\s*$'
+delivery_window = '(?:arriving|now arriving|new delivery date|expected)[:\s]+((?:[a-z]+day,?\s+)?[a-z]{3,9}\.?\s+\d{1,2}(?:\s*-\s*(?:[a-z]{3,9}\.?\s+)?\d{1,2})?)'
+
+[[rules]]
+name = "out-for-delivery"
+kind = "delivery"
+from = ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.com.au", "amazon.co.jp"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["out for delivery"]
+skip = ["recommended for you", "write a review"]
+[rules.extract]
+order_id = '\b(\d{3}-\d{7}-\d{7})\b'
+item = '^out for delivery:\s*["“]?(.+?)["”]?\s*$'
+delivery_window = '(?:arriving|arrives|delivery estimate)[:\s]+((?:[a-z]+day,?\s+)?(?:today|tomorrow|[a-z]{3,9}\.?\s+\d{1,2})(?:\s*(?:by|between)\s+\d{1,2}(?::\d{2})?\s?[ap]m(?:\s*-\s*\d{1,2}(?::\d{2})?\s?[ap]m)?)?)'
+
+[[rules]]
+name = "delivered"
+kind = "delivery"
+from = ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.com.au", "amazon.co.jp"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["delivered:", "was delivered", "has been delivered", "has arrived"]
+skip = ["recommended for you", "write a review", "rate your", "how was your"]
+[rules.extract]
+order_id = '\b(\d{3}-\d{7}-\d{7})\b'
+item = '^delivered:\s*["“]?(.+?)["”]?\s*$'
+delivered_on = '(?:delivered)[:\s]+((?:[a-z]+day,?\s+)?(?:today|yesterday|[a-z]{3,9}\.?\s+\d{1,2}))'
+
+[[rules]]
+name = "shipped"
+kind = "delivery"
+from = ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.com.au", "amazon.co.jp"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["shipped:", "has shipped", "shipment notification", "shipping confirmation"]
+skip = ["recommended for you", "write a review"]
+[rules.extract]
+order_id = '\b(\d{3}-\d{7}-\d{7})\b'
+item = '^shipped:\s*["“]?(.+?)["”]?\s*$'
+delivery_window = '(?:arriving|arrives|delivery estimate|estimated delivery)[:\s]+((?:[a-z]+day,?\s+)?[a-z]{3,9}\.?\s+\d{1,2}(?:\s*-\s*(?:[a-z]{3,9}\.?\s+)?\d{1,2})?|(?:today|tomorrow)|[a-z]+day)'
+
+[[rules]]
+name = "placed"
+kind = "order"
+from = ["amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.es", "amazon.it", "amazon.com.au", "amazon.co.jp"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["ordered:", "order confirmation", "your order has been placed", "thanks for your order"]
+skip = ["recommended for you", "write a review"]
+[rules.extract]
+order_id = '\b(\d{3}-\d{7}-\d{7})\b'
+item = '^ordered:\s*["“]?(.+?)["”]?\s*$'
+delivery_window = '(?:arriving|arrives|delivery estimate|estimated delivery)[:\s]+((?:[a-z]+day,?\s+)?[a-z]{3,9}\.?\s+\d{1,2}(?:\s*-\s*(?:[a-z]{3,9}\.?\s+)?\d{1,2})?|(?:today|tomorrow)|[a-z]+day)'

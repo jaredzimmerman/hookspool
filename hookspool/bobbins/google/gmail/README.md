@@ -23,6 +23,7 @@ Gmail users.watch -> Pub/Sub topic -> push subscription -> POST /hooks/<instance
 | `scheduling` | new inbox mail in the **owner's** mailbox that asks for the owner's availability (matched on the subject and the first 4000 characters of the text) | `account`, `message_id`, `thread_id`, `rfc_message_id`, `from`, `from_address`, `from_domain`, `subject`, `received`, `excerpt` (first 1500 characters), `free_windows_text` (the owner's free working-hours windows over the next 7 days, weekdays only, from free/busy) |
 | `agent-mail` | new inbox mail in the **assistant's** mailbox (the `agent` setting) | the same fields, without free windows |
 | `agent-schedule` | a message a deployment's `hooks.classify` hands off (see below) | whatever the hook returns, plus the standard fields and `free_windows_text` (next 14 days, weekdays only) |
+| `mail-matched` | new inbox mail that a mail rule (the `rules` setting) or a rule pack (`rule_packs`) claims; one item per message, and only one rule per message | `rule`, `kind`, `account`, `message_id`, `thread_id`, `from`, `from_address`, `subject`, `received`, `snippet` (first 200 characters), `extracted` (the values the rule pulled out, `{name: text}`) |
 | `mailbox-changed` | a pass read new mail in a mailbox; one per mailbox per batch | `account`, `new_messages`, `history_id` |
 
 Every item has a `key` (`<account>:<thread>`, or the mailbox for `mailbox-changed`) that becomes the
@@ -37,6 +38,21 @@ is from a `skip_domains` sender, looks like a no-reply sender, or has a `skip_ke
 `offer` or `next steps` are never skipped on a keyword). Mail whose `To`/`Cc` includes the assistant is left
 to the assistant. `important_senders` (addresses, or domains with or without a leading `@`) are never
 skipped by `skip_domains`, `skip_keywords` or the no-reply rule.
+
+## Mail rules and rule packs
+
+Services that only send email (orders, deliveries, reservations, court alerts) are recognised by sender and
+subject, without a bobbin per sender. A **rule** names the sender domains, subject words or a subject pattern, a
+`kind`, and regular expressions that pull values out of the message. A message a rule claims becomes one
+`mail-matched` item and is not also reported as `scheduling` or `agent-mail`. Rules run after `hooks.classify` and
+before the skip rules and the scheduling check. Route `mail-matched` in a destination script by its `rule` field.
+
+Seven packs ship in `rule-packs/` and are switched on by name in `rule_packs`: `amazon-orders`, `doordash-orders`,
+`resy-reservations`, `opentable-reservations`, `tock-reservations`, `sevenrooms-reservations` and
+`courtlistener-alerts`. All seven are `unverified`: written from the services' published email conventions, not
+checked against real mail, so look at what arrives and put your own rule in front where it differs.
+`hookspool bobbin show google.gmail` lists them with their status. The rule format, how to write your own and each
+pack's rules are in [Mail rules and rule packs](../../../../docs/bobbins/mail-rules.md).
 
 ## Secrets
 
@@ -64,6 +80,8 @@ the clear, so a `state_dir` you set yourself must be private (mode 0700, owned b
 | `skip_domains` | list | `[]` | sender domains (and subdomains) never reported; an entry with `@` in it is one exact address |
 | `skip_keywords` | list | `[]` | whole words that keep a subject from being reported |
 | `important_senders` | list | `[]` | never skipped by the three skip rules |
+| `rules` | list of tables | `[]` | your own mail rules: `name`, `from`, `subject_any`, `subject_regex`, `kind`, `extract`, `skip` |
+| `rule_packs` | list | `[]` | names of built-in rule packs to apply after your own rules, in the order listed |
 | `api_url`, `freebusy_url` | string | the Google URLs | change only to point at a test server |
 | `hooks` | path | `""` | absolute path of a hooks module, see below |
 
@@ -104,6 +122,8 @@ dropped, HTTP 404) only records Gmail's current history id; nothing is reported 
 * One pass reads at most 20 pages of 500 history records (10,000). If a mailbox changed by more than that
   between two passes, the rest of that gap is not read: the pass stores Gmail's current history id and logs
   how many pages and records it read.
+* Rules read the sender, the subject and the first 20,000 characters of the text; not attachments. Mail outside the
+  inbox or in spam or trash is never matched. A bad rule, or an unknown pack name, is a permanent failure (exit 65).
 * `agent` may not be the owner's mailbox: the batch is refused as permanent (exit 65).
 * The `handled` list keeps the last 300 message ids.
 * A Gmail watch lasts seven days: renew it (a `users.watch` call) daily; see SETUP.md for the sweep.

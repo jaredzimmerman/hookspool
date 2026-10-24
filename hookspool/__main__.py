@@ -317,6 +317,8 @@ def _bobbin(a, cfg: dict) -> int:
                              "default": v.get("default"), "description": v.get("description", "")}
                          for k, v in p.settings.items() if isinstance(v, dict)},
             "outputs": {k: (v.get("description", "") if isinstance(v, dict) else "") for k, v in p.outputs.items()}}
+    from . import mailrules
+    info["rule_packs"] = mailrules.summaries(mailrules.pack_dir(p.dir))
     lines = [f"{p.name} {p.version} ({p.origin}: {p.dir})", f"  {p.summary}",
              f"  source: {info['source']}  span: {info['span'] or '-'}  sender_retries: {info['sender_retries']}"
              f"  expect_every_s: {info['expect_every_s'] or '-'}"]
@@ -336,6 +338,9 @@ def _bobbin(a, cfg: dict) -> int:
               + (f"  {v['description']}" if v["description"] else "") for k, v in info["settings"].items()]
     lines.append("  outputs:")
     lines += [f"    {k}: {v}" for k, v in info["outputs"].items()]
+    if info["rule_packs"]:
+        lines.append("  rule packs (the rule_packs setting; ordered after your own rules):")
+        lines += [f"    {r['name']} [{r['status']}]: {r['description']}" for r in info["rule_packs"]]
     lines += [f"  error: {e}" for e in p.errors]
     _out(a, info, "\n".join(lines))
     return EXIT_OK

@@ -1,0 +1,66 @@
+# SevenRooms: reservation mail (patterns written from the provider's published email conventions; not yet checked against real mail).
+# Sender entries match the platform's own domains; restaurant-branded senders need your own rule.
+[pack]
+name = "sevenrooms-reservations"
+status = "unverified"
+description = "SevenRooms reservation mail: confirmation, reminder, modification, cancellation and waitlist messages"
+
+[[rules]]
+name = "cancellation"
+kind = "cancellation"
+from = ["sevenrooms.com"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["cancel"]
+skip = ["how was your", "leave a review", "write a review", "rate your"]
+[rules.extract]
+restaurant = '(?:\bat\s+|\brestaurant:\s*)([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on|for|-)\b|\s*[!.,:]|\s*$)'
+date_time = '\b((?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+[a-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s?[ap]m)?)'
+party_size = '(?:party of|table for|party size:?|guests?:?|seats?:?)\s*(\d{1,2})\b'
+confirmation_code = '(?:confirmation|reservation)\s*(?:code|number|no\.?|#|id)\s*[:#]?\s*(?:is\s+)?([a-z0-9][a-z0-9-]{3,19})\b'
+
+[[rules]]
+name = "modification"
+kind = "reservation"
+from = ["sevenrooms.com"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["modif", "changed", "updated"]
+skip = ["how was your", "leave a review", "write a review", "rate your"]
+[rules.extract]
+restaurant = '(?:\bat\s+|\brestaurant:\s*)([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on|for|-)\b|\s*[!.,:]|\s*$)'
+date_time = '\b((?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+[a-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s?[ap]m)?)'
+party_size = '(?:party of|table for|party size:?|guests?:?|seats?:?)\s*(\d{1,2})\b'
+confirmation_code = '(?:confirmation|reservation)\s*(?:code|number|no\.?|#|id)\s*[:#]?\s*(?:is\s+)?([a-z0-9][a-z0-9-]{3,19})\b'
+
+[[rules]]
+name = "waitlist"
+kind = "reservation"
+from = ["sevenrooms.com"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["waitlist", "wait list", "table opened", "a table is available"]
+skip = ["how was your", "leave a review", "write a review", "rate your"]
+[rules.extract]
+restaurant = '(?:\bat\s+|\brestaurant:\s*)([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on|for|-)\b|\s*[!.,:]|\s*$)'
+date_time = '\b((?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+[a-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s?[ap]m)?)'
+party_size = '(?:party of|table for|party size:?|guests?:?|seats?:?)\s*(\d{1,2})\b'
+confirmation_code = '(?:confirmation|reservation)\s*(?:code|number|no\.?|#|id)\s*[:#]?\s*(?:is\s+)?([a-z0-9][a-z0-9-]{3,19})\b'
+
+[[rules]]
+name = "reminder"
+kind = "reservation"
+from = ["sevenrooms.com"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["reminder", "upcoming reservation", "is tomorrow", "is today", "coming up"]
+skip = ["how was your", "leave a review", "write a review", "rate your"]
+[rules.extract]
+restaurant = '(?:\bat\s+|\brestaurant:\s*)([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on|for|-)\b|\s*[!.,:]|\s*$)'
+date_time = '\b((?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+[a-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s?[ap]m)?)'
+party_size = '(?:party of|table for|party size:?|guests?:?|seats?:?)\s*(\d{1,2})\b'
+confirmation_code = '(?:confirmation|reservation)\s*(?:code|number|no\.?|#|id)\s*[:#]?\s*(?:is\s+)?([a-z0-9][a-z0-9-]{3,19})\b'
+
+[[rules]]
+name = "confirmation"
+kind = "reservation"
+from = ["sevenrooms.com"]  # hookspool-scan: allow: the service's own sender domains
+subject_any = ["confirmed", "confirmation", "you're booked", "you\u2019re booked", "reservation at", "booking"]
+skip = ["how was your", "leave a review", "write a review", "rate your"]
+[rules.extract]
+restaurant = '(?:\bat\s+|\brestaurant:\s*)([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on|for|-)\b|\s*[!.,:]|\s*$)'
+date_time = '\b((?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+[a-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s?[ap]m)?)'
+party_size = '(?:party of|table for|party size:?|guests?:?|seats?:?)\s*(\d{1,2})\b'
+confirmation_code = '(?:confirmation|reservation)\s*(?:code|number|no\.?|#|id)\s*[:#]?\s*(?:is\s+)?([a-z0-9][a-z0-9-]{3,19})\b'

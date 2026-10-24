@@ -6,6 +6,16 @@ an interface, and the entry will say so.
 
 ## [Unreleased]
 
+### Added
+
+- Mail rules in the `google.gmail` bobbin: the `rules` and `rule_packs` settings recognise mail from services that have no API or
+  push (orders, deliveries, reservations, court alerts) by sender and subject, and report one `mail-matched` item per message
+  with the rule name, its `kind` and the values the rule extracted. Seven built-in packs ship as data files under
+  `rule-packs/` (`amazon-orders`, `doordash-orders`, `resy-reservations`, `opentable-reservations`, `tock-reservations`,
+  `sevenrooms-reservations`, `courtlistener-alerts`); all are marked `unverified`. `hookspool bobbin show` lists a bobbin's
+  rule packs. The engine is `hookspool/mailrules.py`; the guide is `docs/bobbins/mail-rules.md`.
+- A pass over an owner's mailbox no longer reads free/busy unless a scheduling request was found.
+
 ## [0.2.0] - 2026-10-23
 
 ### Added

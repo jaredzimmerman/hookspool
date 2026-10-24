@@ -18,7 +18,7 @@ ask the person before running them.
   screen and the refresh token can only be produced by the mailbox's owner), saved on this host. Never print
   or paste their contents.
 * The public HTTPS host name that reaches hookspool, and the time zone of the owner.
-* Which outputs (`scheduling`, `agent-mail`, `agent-schedule`, `mailbox-changed`) go to which Hermes routes.
+* Which outputs (`scheduling`, `agent-mail`, `agent-schedule`, `mail-matched`, `mailbox-changed`) go to which Hermes routes.
 
 Secrets used below: `push_token` (made in step 2), `cred_owner`, `cred_agent` (optional). Required setting:
 `owner`.
@@ -50,6 +50,12 @@ Secrets used below: `push_token` (made in step 2), `cred_owner`, `cred_agent` (o
    Leave out `secrets.cred_agent` and `agent` when there is no assistant mailbox. Run `hookspool check`
    (expect exit 0) and `hookspool bobbin expand gmail` (it shows references, never values). If check names a
    missing secret, setting or output, fix the table and run it again.
+   Optional mail rules: to report mail from services that only send email, add `rule_packs = ["<PACK>", ...]` and/or
+   `rules = [...]` to `settings` and map `mail-matched` in `outputs`. `hookspool bobbin show google.gmail` lists the
+   packs and their status (all `unverified`: ask the person before relying on one). The format is in
+   [Mail rules and rule packs](../../../../docs/bobbins/mail-rules.md). Check: `hookspool check` exits 0 and
+   `hookspool bobbin expand gmail` shows `rule_packs` in the settings; a misspelt pack name is only found when a batch
+   runs (exit 65), so test with step 9.
 5. **Make the state directory writable.** Goal: the dispatcher unit can write `<STATE_DIR>` (default
    `<HOME>/bobbins/gmail`), mode 0700. Check `deploy/hookspool-dispatch.service` lists it under
    `ReadWritePaths`; if not, tell the person: editing the unit is a system change.

@@ -995,6 +995,7 @@ Everything that is the same for two services is core, and a bobbin calls it:
 | settings | `ctx.settings`; a bobbin never reads the environment |
 | logging | `ctx.log` (processor) / the intake's logger (source); a bobbin never opens log files |
 | time | `ctx.now()` / `req.now` |
+| recognising mail by sender and subject, pulling named values out of it, loading rule packs (`rules`, `rule_packs`) | `hookspool/mailrules.py`: pure functions on rule tables and `rule-packs/<name>.toml` data files in the bobbin's directory (`os.path.dirname(__file__)`); a bobbin never reads the files itself |
 | helpers shared by several bobbins of one provider (Google free/busy, Gmail history paging) | `hookspool/providers/<provider>.py`, written once on `ctx.http` / `ctx.oauth` |
 
 Enforcement: the conformance kit walks the AST of every bobbin module and fails on imports of `hmac`,

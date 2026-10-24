@@ -30,7 +30,7 @@ from hookspool.destinations import build
 OWNER = "owner@example.test"
 AGENT = "agent@example.test"
 TZ = "America/Los_Angeles"
-OUTPUTS = ("scheduling", "agent-mail", "agent-schedule", "mailbox-changed")
+OUTPUTS = ("scheduling", "agent-mail", "agent-schedule", "mail-matched", "mailbox-changed")
 AGENT_STATE = "gmail_push_state_agent"
 
 
