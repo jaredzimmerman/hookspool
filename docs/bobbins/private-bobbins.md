@@ -6,7 +6,7 @@ change that, from the lightest to the heaviest.
 ## 1. Settings
 
 Almost everything a bobbin lets you tune is a setting: a time zone, working hours, domains to skip, a state directory.
-Set them in the instance's `settings` table. `hookspool bobbin show <bobbin>` lists them with their types and defaults.
+Set them in the instance's `settings` table. `hookspool bobbin show <vendor>.<product>` lists them with their types and defaults.
 
 ## 2. A hooks module
 
@@ -15,8 +15,8 @@ the functions it calls and their signatures. For example:
 
 | bobbin | function | purpose |
 |---|---|---|
-| `gmail` | `hooks.classify(message, account, ctx) -> dict or None` | hand a message off privately before the bobbin's own rules run |
-| `gcal` | `hooks.travel(event, day_events, ctx) -> dict or None` | decide about travel blocks around an event |
+| `google.gmail` | `hooks.classify(message, account, ctx) -> dict or None` | hand a message off privately before the bobbin's own rules run |
+| `google.calendar` | `hooks.travel(event, day_events, ctx) -> dict or None` | decide about travel blocks around an event |
 
 The function receives the processor context (`ctx.settings`, `ctx.http`, `ctx.load_state` and so on). A hook that raises
 retries the batch and changes nothing. The rules that keep a built-in bobbin small do not apply to hooks, because a hooks
@@ -24,6 +24,7 @@ module is your code, not the bobbin's.
 
 ```toml
 [bobbins.gmail]
+bobbin = "google.gmail"
 settings = { owner = "owner@example.com", hooks = "/etc/hookspool/hooks/gmail_hooks.py" }
 ```
 

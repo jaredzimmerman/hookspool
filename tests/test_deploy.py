@@ -272,7 +272,7 @@ def test_dispatch_read_write_paths_cover_home_and_every_script_state_dir():
     home = CONFIG["spool"]["home"]
     state_dirs = [d["state_dir"] for n, d in CONFIG["destinations"].items() if n.startswith("script:") and "state_dir" in d]
     paths = rw(unit("hookspool-dispatch.service"))
-    # a bobbin's processor keeps its state in <home>/services/<instance>, below the home that is listed
+    # a bobbin's processor keeps its state in <home>/bobbins/<instance>, below the home that is listed
     assert CONFIG["bobbins"] and not any(b.get("state_dir") for b in CONFIG["bobbins"].values())
     assert home in paths
     for d in state_dirs:
@@ -356,14 +356,15 @@ def test_config_example_every_source_is_covered_by_the_readme_sweep_table():
     table = readme.split("# Sweeps\n")[1].split("### Known limits")[0]
     rows = {ln.split("|")[1].strip().lower(): ln for ln in table.splitlines() if ln.startswith("| ") and "---" not in ln}
     for src in [*CONFIG.get("sources", {}), *CONFIG["bobbins"]]:
-        key = {"gmail": "gmail (pub/sub)", "gcal": "calendar"}.get(src, src)
+        key = {"gmail": "gmail (pub/sub)", "meetings": "zoom"}.get(src, src)
         assert key in rows, f"no sweep row for {src}"
         cells = [c.strip() for c in rows[key].split("|")[1:-1]]
         assert len(cells) == 7 and all(cells), rows[key]
         # the example ships 0 everywhere (the rollout order in running.md: a source that was never moved would alert
         # "silent" on day one); the value to set at cutover is the bobbin's recommendation, named in the sweeps cell
         if src in CONFIG["bobbins"]:
-            with open(os.path.join(ROOT, "hookspool", "bobbins", src, "bobbin.toml"), "rb") as f:
+            bobbin = CONFIG["bobbins"][src]["bobbin"]                 # <vendor>.<product>: hookspool/bobbins/<v>/<p>/
+            with open(os.path.join(ROOT, "hookspool", "bobbins", *bobbin.split("."), "bobbin.toml"), "rb") as f:
                 later = tomllib.load(f)["source"].get("expect_every_s")
             if later is None:                    # the bobbin recommends no silence limit: the cell says 0
                 assert CONFIG["bobbins"][src].get("expect") is not True, src

@@ -3,7 +3,7 @@
 # Replace User/Group and the paths as in hookspool-intake.service.
 #
 # ReadWritePaths MUST list the state dir and the state_dir of EVERY script destination in config.toml that
-# is outside it (a bobbin's processor keeps its state in <home>/services/<instance>, already covered), and
+# is outside it (a bobbin's processor keeps its state in <home>/bobbins/<instance>, already covered), and
 # any other directory a script writes. ProtectSystem=strict makes everything else read-only, and a script
 # that cannot write its journal fails every batch with a "config"-class error. Every listed path must exist
 # before the unit starts (systemd fails with status 226/NAMESPACE otherwise): create them as in

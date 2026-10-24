@@ -449,8 +449,10 @@ def load_processor(service_dir: str, instance: str, manifest: Mapping[str, Any] 
         raise BatchError("the manifest's processor module must be a module name in the bobbin")
     real = os.path.realpath(service_dir)
     builtin = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bobbins"))
-    if os.path.dirname(real) == builtin and _MODULE_NAME.match(os.path.basename(real)):
-        mod = importlib.import_module(f"hookspool.bobbins.{os.path.basename(real)}.{module}")
+    vendor_dir = os.path.dirname(real)               # built-ins are hookspool/bobbins/<vendor>/<product>/
+    vendor, product = os.path.basename(vendor_dir), os.path.basename(real)
+    if os.path.dirname(vendor_dir) == builtin and _MODULE_NAME.match(vendor) and _MODULE_NAME.match(product):
+        mod = importlib.import_module(f"hookspool.bobbins.{vendor}.{product}.{module}")
     else:
         path = os.path.join(real, module + ".py")
         if not os.path.isfile(path):

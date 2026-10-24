@@ -351,7 +351,7 @@ def test_toml_blocks_parse_and_pass_key_validation(path):
     for i, block in enumerate(toml_blocks(path)):
         doc = tomllib.loads(block)
         if "name" in doc and "source" in doc:          # a bobbin manifest, not a config: it validates as one
-            assert bobbin_loader.validate_manifest(doc, doc["name"], hs_config.DEFAULTS["spans"]) == [], \
+            assert bobbin_loader.validate_manifest(doc, doc["name"].replace(".", "/"), hs_config.DEFAULTS["spans"]) == [], \
                 f"{os.path.basename(path)} toml block {i}"
             continue
         cfg = hs_config.merge(hs_config.DEFAULTS, doc)
@@ -385,7 +385,7 @@ def run_pytest(tmp_path, *files, extra_path=(), conf: str = "") -> subprocess.Co
 
 def test_the_template_example_is_the_github_bobbins_manifest():
     text = page("docs/bobbins/writing-a-bobbin.md")
-    with open(os.path.join(ROOT, "hookspool", "bobbins", "github", "bobbin.toml"), encoding="utf-8") as f:
+    with open(os.path.join(ROOT, "hookspool", "bobbins", "github", "repo", "bobbin.toml"), encoding="utf-8") as f:
         manifest = f.read()
     assert "```toml\n" + manifest + "```" in section(text, "A. A config template", 2)
 
@@ -399,15 +399,16 @@ def test_the_contributor_path_is_the_bobbin_path():
         for retired in ("examples/sources", "tests/captures/", "test_sources_template.py", "plugin_ci.py kit"):
             assert retired not in text, f"{rel} still teaches {retired}"
     guide = page("docs/bobbins/writing-a-bobbin.md")
-    for cmd in ("hookspool bobbin new", "hookspool bobbin check", "hookspool/bobbins/<name>/captures/"):
+    for cmd in ("hookspool bobbin new", "hookspool bobbin check", "hookspool/bobbins/<vendor>/<product>/captures/"):
         assert cmd in guide, cmd
 
 
 def test_worked_source_example_passes_the_conformance_kit(tmp_path):
     plugin, test = python_blocks(os.path.join(DOCS, "bobbins", "writing-a-bobbin.md"))[:2]
-    (tmp_path / "extra_bobbins" / "acme").mkdir(parents=True)
+    (tmp_path / "extra_bobbins" / "acme" / "billing").mkdir(parents=True)
     (tmp_path / "extra_bobbins" / "acme" / "__init__.py").write_text("")
-    (tmp_path / "extra_bobbins" / "acme" / "source.py").write_text(plugin)
+    (tmp_path / "extra_bobbins" / "acme" / "billing" / "__init__.py").write_text("")
+    (tmp_path / "extra_bobbins" / "acme" / "billing" / "source.py").write_text(plugin)
     (tmp_path / "test_source.py").write_text(test)
     r = run_pytest(tmp_path, tmp_path / "test_source.py", conf=(
         "import hookspool.bobbins as b\n"
@@ -496,6 +497,20 @@ ALLOWED_HOSTS = re.compile(
     r"^(github\.com|docs\.github\.com|www\.standardwebhooks\.com|hairline\.lucasmarkes\.com)$")
 
 
+def _provider_hosts() -> set[str]:
+    """The hosts of the built-in bobbins' [provider] pages: public developer documentation, which a page may link."""
+    from urllib.parse import urlsplit
+    out = set()
+    for p in glob.glob(os.path.join(ROOT, "hookspool", "bobbins", "*", "*", "bobbin.toml")):
+        with open(p, "rb") as f:
+            prov = tomllib.load(f).get("provider") or {}
+        out |= {urlsplit(v).hostname for k, v in prov.items() if k.endswith(("_docs", "homepage")) and isinstance(v, str)}
+    return out
+
+
+PROVIDER_HOSTS = _provider_hosts()
+
+
 @pytest.mark.parametrize("path", PAGES, ids=[os.path.relpath(p, ROOT) for p in PAGES])
 def test_pages_carry_no_hostnames_addresses_or_deployment_terms(path):
     text = read(path)
@@ -504,7 +519,7 @@ def test_pages_carry_no_hostnames_addresses_or_deployment_terms(path):
         if ip not in ("127.0.0.1", "0.0.0.0"):
             bad.append(ip)
     for host in re.findall(r"https?://([\w.-]+)", text):
-        if not ALLOWED_HOSTS.search(host):
+        if not ALLOWED_HOSTS.search(host) and host not in PROVIDER_HOSTS:
             bad.append(host)
     bad += [m.group(0) for m in deny_regex(local_deny_terms()).finditer(text)]
     if os.path.basename(path) != "ARCHITECTURE.md":
@@ -562,7 +577,7 @@ def test_the_bobbin_catalogue_is_the_generated_table():
     want = {p.name: bobbin_loader.catalogue_row(p) for p in pkgs.values() if p.origin == bobbin_loader.BUILTIN}
     names = []
     for row in rows:
-        m = re.match(r"^\| \[`([a-z][a-z0-9-]*)`\]", row)
+        m = re.match(r"^\| \[`([a-z][a-z0-9-]*\.[a-z][a-z0-9-]*)`\]", row)
         assert m and m.group(1) in want, f"not a built-in bobbin's row: {row[:80]}"
         assert row == want[m.group(1)], f"{m.group(1)}: regenerate with `hookspool bobbin list --markdown`"
         names.append(m.group(1))

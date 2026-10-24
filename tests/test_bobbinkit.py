@@ -26,19 +26,22 @@ from hookspool.testing import bobbinkit as K  # noqa: E402
 from hookspool.testing import scan as S  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIX = os.path.join(ROOT, "tests", "fixtures", "bobbinkit")
+VENDOR = "acme"                                    # the fixtures are acme.kitcode, acme.kitproc and acme.kittpl
+FIX = os.path.join(ROOT, "tests", "fixtures", "bobbinkit", VENDOR)
 FIXTURES = sorted(d for d in os.listdir(FIX) if os.path.isfile(os.path.join(FIX, d, "bobbin.toml")))
 
 
 # ---- helpers -------------------------------------------------------------------------------------------
 def copy(tmp_path, name: str, as_name: str | None = None) -> str:
-    d = os.path.join(str(tmp_path), "bobbins", as_name or name)
+    """A fixture copied to ``<tmp>/bobbins/acme/<as_name or name>`` (a bobbin_path root, then <vendor>/<product>)."""
+    d = os.path.join(str(tmp_path), "bobbins", VENDOR, as_name or name)
     shutil.copytree(os.path.join(FIX, name), d)
     if as_name:
-        for rel in ("bobbin.toml", "source.py", "SETUP.md", "AGENTS.md"):
+        for rel in ("bobbin.toml", "source.py", "README.md", "SETUP.md", "AGENTS.md"):
             p = os.path.join(d, rel)
             if os.path.exists(p):
-                text = open(p).read().replace(f'"{name}"', f'"{as_name}"').replace(f"bobbins.{name}]", f"bobbins.{as_name}]")
+                text = (open(p).read().replace(f"{VENDOR}.{name}", f"{VENDOR}.{as_name}").replace(f'"{name}"', f'"{as_name}"')
+                        .replace(f"bobbins.{name}]", f"bobbins.{as_name}]"))
                 open(p, "w").write(text)
         cdir = os.path.join(d, "captures")
         for f in os.listdir(cdir):
@@ -81,11 +84,12 @@ def test_the_fixture_bobbins_pass_every_check(name):
     assert [c.name for c in card.checks] == K.CHECK_NAMES
     assert card.ok, K.render_text(card.as_dict())
     by = {c.name: c for c in card.checks}
-    for n in ("manifest", "files", "todos", "core-only", "docs", "captures", "source-kit"):
+    for n in ("name", "manifest", "provider", "files", "todos", "core-only", "docs", "captures", "source-kit"):
         assert by[n].result == "pass", (n, by[n].detail)
     assert by["processor"].result == ("pass" if name == "kitproc" else "skip")
     assert by["scope"].result == "skip" and not by["scope"].required
-    assert card.summary().startswith(f"bobbin check {name}: PASS")
+    assert by["provider-links"].result == "skip" and not by["provider-links"].required     # offline by default
+    assert card.summary().startswith(f"bobbin check {VENDOR}.{name}: PASS")
 
 
 def test_there_are_fixtures_of_each_kind():
@@ -100,14 +104,18 @@ def test_manifest_red_unknown_key_with_its_line(tmp_path):
     c = run(d, "manifest")["manifest"]
     assert c.result == "fail" and c.required
     f, = c.findings
-    assert f.file == "bobbin.toml" and f.line == 12 and "secrets.secret.bogus: unknown key" in f.message
+    assert f.file == "bobbin.toml" and f.line == 19 and "secrets.secret.bogus: unknown key" in f.message
 
 
-def test_manifest_red_name_is_not_the_directory(tmp_path):
+def test_name_red_name_is_not_the_directory(tmp_path):
     d = copy(tmp_path, "kitcode")
-    edit(d, "bobbin.toml", 'name = "kitcode"', 'name = "othername"')
-    c = run(d, "manifest")["manifest"]
-    assert c.result == "fail" and any("does not match its directory" in m for m in messages(c))
+    edit(d, "bobbin.toml", 'name = "acme.kitcode"', 'name = "acme.othername"')
+    cs = run(d, "name", "manifest")
+    c = cs["name"]
+    assert c.result == "fail" and c.required
+    f, = c.findings
+    assert f.file == "bobbin.toml" and f.line == 1 and "must live in acme/othername/" in f.message
+    assert cs["manifest"].result == "pass", "a name problem is the name row's, reported once"
 
 
 def test_manifest_red_reading_another_bobbins_signature_header(tmp_path):
@@ -120,7 +128,7 @@ def test_manifest_red_reading_another_bobbins_signature_header(tmp_path):
     assert c.result == "fail"
     f, = c.findings
     assert f.file == "source.py" and f.line > 0
-    assert "x-kitcode-signature, the signature header of bobbin 'kitcode'" in f.message
+    assert "x-kitcode-signature, the signature header of bobbin 'acme.kitcode'" in f.message
     assert "declare it in this bobbin's auth_headers" in f.message, "the fix for a shared generic header name"
 
 
@@ -132,7 +140,7 @@ def test_manifest_red_source_module_that_is_another_bobbins_code(tmp_path, modul
     c = run(d, "manifest")["manifest"]
     assert c.result == "fail"
     f, = c.findings
-    assert f.file == "bobbin.toml" and f.line == 6, f.where()          # the ``module =`` line
+    assert f.file == "bobbin.toml" and f.line == 13, f.where()         # the ``module =`` line
     assert f"source.module: {module!r} is another bobbin's code" in f.message
     assert "never imports or runs another bobbin" in f.message
     assert any("another bobbin" in e for e in BL.load_package(d, "test", {}).errors), "the loader refuses it too"
@@ -147,7 +155,7 @@ def test_manifest_red_another_bobbins_api_host_unless_they_share_a_provider_modu
         with open(os.path.join(d, "source.py"), "a") as f:
             f.write('\nAPI = "https://api.github.com/repos"\n')
     c = run(b, "manifest")["manifest"]
-    assert c.result == "fail" and any("calls api.github.com, the API host of bobbin 'kitcode'" in m
+    assert c.result == "fail" and any("calls api.github.com, the API host of bobbin 'acme.kitcode'" in m
                                       for m in messages(c)), messages(c)
     for d in (a, b):
         with open(os.path.join(d, "source.py"), "a") as f:
@@ -196,7 +204,7 @@ def test_todos_red_with_file_and_line(tmp_path):
     edit(d, "README.md", "Kit fixture:", "Kit fixture (TODO: say more):")
     c = run(d, "todos")["todos"]
     assert c.result == "fail" and c.detail.startswith("fill in the TODOs") and c.fix == "fill in the TODOs"
-    assert [(f.file, f.line) for f in c.findings] == [("README.md", 3)]
+    assert [(f.file, f.line) for f in c.findings] == [("README.md", 9)]
 
 
 # ---- core-only (14.3.7, exact) ------------------------------------------------------------------------------------
@@ -328,7 +336,7 @@ def test_docs_red_a_provider_changing_command_not_marked_outward(tmp_path):
                 "   ```\n\n   Check: it answers 201.\n")
     c = run(d, "docs")["docs"]
     f, = [f for f in c.findings if "step 4" in f.message]
-    assert f.file == "AGENTS.md" and f.line == 22 and "not marked `outward`" in f.message
+    assert f.file == "AGENTS.md" and f.line == 29 and "not marked `outward`" in f.message
     edit(d, "AGENTS.md", "4. **Subscribe.**", "4. **Subscribe** (`outward`).")
     assert run(d, "docs")["docs"].result == "pass"
 
@@ -343,9 +351,10 @@ def test_docs_green_a_local_command_needs_no_outward(tmp_path):
 @pytest.mark.parametrize("doc,old,new,needle", [
     ("SETUP.md", 'outputs = { "*" = "hermes:kitcode" }', "outputs = <OUTPUTS>", "not valid TOML"),
     ("SETUP.md", 'outputs = { "*" = "hermes:kitcode" }', 'settings = { nope = "x" }\noutputs = { "*" = "hermes:k" }',
-     "does not expand: bobbins.kitcode.settings.nope: bobbin 'kitcode' has no such setting"),
+     "does not expand: bobbins.kitcode.settings.nope: bobbin 'acme.kitcode' has no such setting"),
     ("AGENTS.md", "   ```toml\n", "   ```\n", "no ```toml block"),
-    ("SETUP.md", "[bobbins.kitcode]\n", "[bobbins.kitcode]\nbobbin = \"other\"\n", "has no instance of bobbin"),
+    ("SETUP.md", 'bobbin = "acme.kitcode"\n', 'bobbin = "acme.other"\n', "has no instance of bobbin"),
+    ("SETUP.md", 'bobbin = "acme.kitcode"\n', "", 'the [bobbins.<instance>] table names it: bobbin = "acme.kitcode"'),
 ])
 def test_docs_red_the_config_table(tmp_path, doc, old, new, needle):
     d = copy(tmp_path, "kitcode")
@@ -428,7 +437,7 @@ def test_captures_red_for_an_unknown_kit_key(tmp_path):
 
 # ---- source kit ---------------------------------------------------------------------------------------------------------
 def _kit_bobbin(tmp_path, name: str, plugin: str, secret: str, *, constant_callback: bool = False) -> str:
-    d = os.path.join(str(tmp_path), "bobbins", name)
+    d = os.path.join(str(tmp_path), "bobbins", VENDOR, name)
     os.makedirs(os.path.join(d, "captures"))
     src = open(os.path.join(ROOT, "tests", "kitplugins", f"{plugin}.py")).read()
     if constant_callback:
@@ -436,7 +445,7 @@ def _kit_bobbin(tmp_path, name: str, plugin: str, secret: str, *, constant_callb
     write(d, "source.py", src)
     for f in os.listdir(os.path.join(ROOT, "tests", "captures", name)):
         shutil.copy(os.path.join(ROOT, "tests", "captures", name, f), os.path.join(d, "captures", f))
-    write(d, "bobbin.toml", f'name = "{name}"\nversion = "1"\nsummary = "kit"\n[source]\nmodule = "source"\n'
+    write(d, "bobbin.toml", f'name = "{VENDOR}.{name}"\nversion = "1"\nsummary = "kit"\n[source]\nmodule = "source"\n'
                             '[secrets.secret]\ndescription = "s"\n[outputs."*"]\ndescription = "all"\n')
     write(d, "captures/kit.toml", f'[secrets]\nsecret = "{secret}"\n')
     return d
@@ -635,7 +644,7 @@ def _git(root: str, *args: str) -> str:
 
 def test_scope_bobbin_only_or_touches_core(tmp_path):
     root = str(tmp_path / "repo")
-    d = os.path.join(root, "bobbins", "kitcode")
+    d = os.path.join(root, "bobbins", VENDOR, "kitcode")
     shutil.copytree(os.path.join(FIX, "kitcode"), d)
     write(root, "core.py", "x = 1\n")
     _git(root, "init", "-q", "-b", "main")
@@ -666,9 +675,10 @@ def test_scope_a_new_bobbin_made_by_the_guide_is_bobbin_only(tmp_path):
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "base")
     base = _git(root, "rev-parse", "HEAD").strip()
-    d = os.path.join(root, "hookspool", "bobbins", "kitcode")
+    d = os.path.join(root, "hookspool", "bobbins", VENDOR, "kitcode")
     shutil.copytree(os.path.join(FIX, "kitcode"), d)
-    write(root, "tests/bobbins/test_kitcode.py", "def test_ok():\n    pass\n")
+    write(root, f"hookspool/bobbins/{VENDOR}/__init__.py", "")          # a new vendor's empty package file
+    write(root, "tests/bobbins/test_acme_kitcode.py", "def test_ok():\n    pass\n")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "a new bobbin")
     c = run(d, "scope", base=base)["scope"]
@@ -688,8 +698,8 @@ def test_json_report_schema(capsys, tmp_path):
     assert rc == 1
     assert set(doc) == {"schema", "bobbin", "dir", "ok", "strict", "scope", "summary", "checks"}
     assert doc["schema"] == K.SCHEMA == "hookspool.bobbin-check/1"
-    assert doc["bobbin"] == "kitcode" and doc["ok"] is False and doc["strict"] is False and doc["scope"] is None
-    assert isinstance(doc["dir"], str) and doc["summary"].startswith("bobbin check kitcode: FAIL, 1 of 9")
+    assert doc["bobbin"] == "acme.kitcode" and doc["ok"] is False and doc["strict"] is False and doc["scope"] is None
+    assert isinstance(doc["dir"], str) and doc["summary"].startswith("bobbin check acme.kitcode: FAIL, 1 of 11")
     assert [c["name"] for c in doc["checks"]] == K.CHECK_NAMES
     for c in doc["checks"]:
         assert set(c) == {"name", "required", "result", "detail", "fix", "findings"}
@@ -699,19 +709,19 @@ def test_json_report_schema(capsys, tmp_path):
         for f in c["findings"]:
             assert set(f) == {"file", "line", "message"} and isinstance(f["line"], int)
     todos = next(c for c in doc["checks"] if c["name"] == "todos")
-    assert todos["findings"] == [{"file": "README.md", "line": 3, "message": "TODO placeholder"}]
-    assert [c["required"] for c in doc["checks"]] == [True] * 9 + [False]
+    assert todos["findings"] == [{"file": "README.md", "line": 9, "message": "TODO placeholder"}]
+    assert [c["required"] for c in doc["checks"]] == [True] * 11 + [False, False]
 
 
 def test_markdown_and_text_reports(capsys):
     d = os.path.join(FIX, "kitcode")
     assert cli(["bobbin", "check", d, "--report", "md"]) == 0
     md = capsys.readouterr().out
-    assert md.startswith("### Bobbin `kitcode`: PASS") and "| Check | Result | Detail |" in md
+    assert md.startswith("### Bobbin `acme.kitcode`: PASS") and "| Check | Result | Detail |" in md
     assert re.search(r"^\| source-kit \| pass \| 16 cases", md, re.M) and "| scope (advisory) | skip |" in md
     assert cli(["bobbin", "check", d]) == 0
     text = capsys.readouterr().out
-    assert text.splitlines()[0] == "bobbin check kitcode: PASS, 7 of 9 required checks pass, 2 not applicable"
+    assert text.splitlines()[0] == "bobbin check acme.kitcode: PASS, 9 of 11 required checks pass, 2 not applicable"
 
 
 def test_markdown_lists_findings_and_how_to_fix(tmp_path):
@@ -719,7 +729,7 @@ def test_markdown_lists_findings_and_how_to_fix(tmp_path):
     edit(d, "README.md", "Kit fixture:", "TODO Kit fixture:")
     md = K.render_md(K.check_bobbin(d, only=["todos"]).as_dict())
     assert "| todos | **FAIL** | fill in the TODOs (1 left). How to fix: fill in the TODOs |" in md
-    assert "- todos: `README.md:3` TODO placeholder" in md
+    assert "- todos: `README.md:9` TODO placeholder" in md
 
 
 def test_the_command_refuses_a_directory_that_is_not_a_bobbin(tmp_path, capsys):
@@ -736,46 +746,64 @@ def test_the_command_needs_no_config(tmp_path, monkeypatch, capsys):
 
 
 # ---- bobbin new passes, except for its TODOs ------------------------------------------------------------------------------
+def fill_in(d: str) -> None:
+    """What the author of a scaffold does: write the TODOs, and the provider's real pages and names."""
+    for base, _dirs, files in os.walk(d):
+        for f in files:
+            p = os.path.join(base, f)
+            text = re.sub(r"\bTODO\b:? ?", "", open(p).read())
+            if f == "bobbin.toml":
+                for k, v in PROVIDER.items():
+                    text = re.sub(rf'^{k} = ".*"$', f'{k} = "{v}"', text, flags=re.M)
+            elif f in K.FRONTMATTER_DOCS:
+                text = re.sub(r"^provider: .*$", f"provider: {PROVIDER['vendor']} {PROVIDER['product']}", text, count=1, flags=re.M)
+                text = re.sub(r"^webhook_docs: .*$", f"webhook_docs: {PROVIDER['webhook_docs']}", text, count=1, flags=re.M)
+            open(p, "w").write(text)
+
+
+PROVIDER = {"vendor": "Acme", "product": "Hooks", "homepage": "https://github.com",
+            "webhook_docs": "https://docs.github.com/en/webhooks",
+            "signature_docs": "https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries",
+            "api_docs": "https://docs.github.com/en/rest"}
+
+
 @pytest.mark.parametrize("flags", [[], ["--code"], ["--processor"], ["--set", "scheme=url-token", "--set", "header="],
                                    ["--set", "scheme=hmac-sha256-base64", "--set", "prefix="],
                                    ["--set", "scheme=shared-secret-header"], ["--set", "scheme=hmac-sha1-base64-url"]],
                          ids=["webhook", "code", "processor", "url-token", "base64", "shared-secret", "sha1-url"])
 def test_bobbin_new_passes_every_check_but_the_todos(tmp_path, capsys, flags):
-    assert cli(["bobbin", "new", "acme-hooks", "--dir", str(tmp_path), *flags]) == 0
+    assert cli(["bobbin", "new", "acme.hooks", "--dir", str(tmp_path), *flags]) == 0
     capsys.readouterr()
-    d = os.path.join(str(tmp_path), "acme-hooks")
+    d = os.path.join(str(tmp_path), "acme", "hooks")
     card = K.check_bobbin(d)
     failed = [c.name for c in card.checks if c.result == "fail"]
-    assert failed == ["todos"], K.render_text(card.as_dict())
-    assert card.summary() == "bobbin check acme-hooks: FAIL, 1 of 9 required checks fail (todos)"
+    assert failed == ["provider", "todos"], K.render_text(card.as_dict())
+    assert card.summary() == "bobbin check acme.hooks: FAIL, 2 of 11 required checks fail (provider, todos)"
     assert next(c for c in card.checks if c.name == "todos").detail.startswith("fill in the TODOs")
-    for base, _dirs, files in os.walk(d):                     # filling them in is all that is left
+    prov = next(c for c in card.checks if c.name == "provider")
+    f, = prov.findings                                        # the placeholders are one problem, with one message
+    assert f.file == "bobbin.toml" and "fill in [provider]" in f.message and "README.md, SETUP.md and AGENTS.md" in f.message
+    for base, _dirs, files in os.walk(d):
         for f in files:
-            p = os.path.join(base, f)
             assert f.endswith((".toml", ".md", ".py", ".http")), f"the kit wrote {f} into the bobbin"
-            text = open(p).read()
-            open(p, "w").write(re.sub(r"\bTODO\b:? ?", "", text))
-    assert K.check_bobbin(d).ok
+    fill_in(d)                                                # filling them in is all that is left
+    assert K.check_bobbin(d).ok, K.render_text(K.check_bobbin(d).as_dict())
 
 
 def test_the_webhook_bobbin_passes_the_conformance_kit():
-    card = K.check_bobbin(os.path.join(ROOT, "hookspool", "bobbins", "webhook"))
+    card = K.check_bobbin(os.path.join(ROOT, "hookspool", "bobbins", "hookspool", "webhook"))
     assert card.ok, K.render_text(card.as_dict())
     assert [c.result for c in card.checks if c.name in ("captures", "source-kit", "docs")] == ["pass"] * 3
 
 
 def test_bobbin_new_with_frozen_settings_passes_every_check_but_the_todos(tmp_path, capsys):
-    assert cli(["bobbin", "new", "acme-hooks", "--dir", str(tmp_path), "--set", 'key=["id", "type"]',
+    assert cli(["bobbin", "new", "acme.hooks", "--dir", str(tmp_path), "--set", 'key=["id", "type"]',
                 "--set", "dedup=header:X-Delivery-Id", "--set", 'ignore=["type=ping"]']) == 0
     capsys.readouterr()
-    d = os.path.join(str(tmp_path), "acme-hooks")
+    d = os.path.join(str(tmp_path), "acme", "hooks")
     card = K.check_bobbin(d)
-    assert [c.name for c in card.checks if c.result == "fail"] == ["todos"], K.render_text(card.as_dict())
-    for base, _dirs, files in os.walk(d):
-        for f in files:
-            p = os.path.join(base, f)
-            text = open(p).read()
-            open(p, "w").write(re.sub(r"\bTODO\b:? ?", "", text))
+    assert [c.name for c in card.checks if c.result == "fail"] == ["provider", "todos"], K.render_text(card.as_dict())
+    fill_in(d)
     assert K.check_bobbin(d).ok
     with open(os.path.join(d, "bobbin.toml"), "rb") as f:
         tpl = tomllib.load(f)["source"]["template"]
@@ -784,3 +812,261 @@ def test_bobbin_new_with_frozen_settings_passes_every_check_but_the_todos(tmp_pa
 
 def test_the_default_test_secret_is_the_scaffolds():
     assert K.DEFAULT_TEST_SECRET == BL.SCAFFOLD_SECRET and "test" in K.DEFAULT_TEST_SECRET
+
+
+# ---- name (14.3.1) ------------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("name,needle", [
+    ("kitcode", "has no vendor"), ("acme.kit.code", "has 2 dots"), ("Acme.kitcode", "must be <vendor>.<product>"),
+    ("acme.kit_code", "must be <vendor>.<product>"), ("acme." + "k" * 41, "must be <vendor>.<product>"),
+])
+def test_name_red_for_a_name_that_is_not_vendor_dot_product(tmp_path, name, needle):
+    d = copy(tmp_path, "kitcode")
+    edit(d, "bobbin.toml", 'name = "acme.kitcode"', f'name = "{name}"')
+    c = run(d, "name")["name"]
+    assert c.result == "fail" and c.required
+    f, = c.findings
+    assert f.file == "bobbin.toml" and f.line == 1 and needle in f.message, f.message
+
+
+def test_name_red_for_the_wrong_folder(tmp_path):
+    d = os.path.join(str(tmp_path), "bobbins", "other", "kitcode")
+    shutil.copytree(os.path.join(FIX, "kitcode"), d)
+    c = run(d, "name")["name"]
+    assert c.result == "fail" and any("must live in acme/kitcode/" in m and "not other/kitcode/" in m for m in messages(c))
+
+
+def test_name_red_for_the_hookspool_namespace_outside_the_repository(tmp_path):
+    d = os.path.join(str(tmp_path), "bobbins", "hookspool", "kitcode")
+    shutil.copytree(os.path.join(FIX, "kitcode"), d)
+    edit(d, "bobbin.toml", 'name = "acme.kitcode"', 'name = "hookspool.kitcode"')
+    c = run(d, "name")["name"]
+    assert c.result == "fail" and any("hookspool. namespace is reserved" in m for m in messages(c)), messages(c)
+
+
+def test_name_red_for_a_private_bobbin_that_takes_a_built_ins_name(tmp_path):
+    d = os.path.join(str(tmp_path), "bobbins", "github", "repo")
+    shutil.copytree(os.path.join(FIX, "kitcode"), d)
+    edit(d, "bobbin.toml", 'name = "acme.kitcode"', 'name = "github.repo"')
+    c = run(d, "name")["name"]
+    assert c.result == "fail" and any("'github.repo' is a built-in bobbin" in m for m in messages(c)), messages(c)
+
+
+def test_name_green_for_the_fixture_and_a_dash_written_as_underscore(tmp_path):
+    assert run(os.path.join(FIX, "kitcode"), "name")["name"].result == "pass"
+    d = os.path.join(str(tmp_path), "bobbins", "my_co", "kit_code")
+    shutil.copytree(os.path.join(FIX, "kitcode"), d)
+    edit(d, "bobbin.toml", 'name = "acme.kitcode"', 'name = "my-co.kit-code"')
+    assert run(d, "name")["name"].result == "pass"
+
+
+# ---- provider and frontmatter ----------------------------------------------------------------------------------------
+WEBHOOK_DOCS = 'webhook_docs = "https://docs.github.com/en/webhooks"\n'
+
+
+@pytest.mark.parametrize("old,new,needle", [
+    (WEBHOOK_DOCS, "", "provider.webhook_docs: required"),
+    ('homepage = "https://github.com"', 'homepage = "http://github.com"', "must be https"),
+    ('homepage = "https://github.com"', 'homepage = "https://example.com/acme"', "example or local host"),
+    ('homepage = "https://github.com"', 'homepage = "https://docs.acme.test/"', "example or local host"),
+    ('homepage = "https://github.com"', 'homepage = "https://localhost/x"', "has no public host name"),
+    ('homepage = "https://github.com"', 'homepage = "https://192.0.2.10/docs"', "is an IP address"),
+    ('homepage = "https://github.com"', 'homepage = "https://<PROVIDER_HOST>/docs"', "is a placeholder"),
+    ('homepage = "https://github.com"', 'homepage = "https://github.com/..."', "is a placeholder"),
+    ('signature_docs = "https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries"\n', "",
+     "provider.signature_docs: required (the bobbin declares a secret"),
+    ('vendor = "Acme"\n', "", "provider.vendor: required"),
+    ('product = "Kitcode"', 'product = "<PRODUCT>"', "provider.product: '<PRODUCT>' is a placeholder"),
+    ('homepage = "https://github.com"', 'homepage = "https://github.com"\nmore = "x"', "provider.more: unknown key"),
+])
+def test_provider_red_for_each_rule(tmp_path, old, new, needle):
+    d = copy(tmp_path, "kitcode")
+    edit(d, "bobbin.toml", old, new)
+    c = run(d, "provider")["provider"]
+    assert c.result == "fail" and c.required, c.detail
+    assert any(needle in m and f.file == "bobbin.toml" for f in c.findings for m in [f.message]), messages(c)
+
+
+def test_provider_red_without_the_table(tmp_path):
+    d = copy(tmp_path, "kitcode")
+    p = os.path.join(d, "bobbin.toml")
+    text = open(p).read()
+    open(p, "w").write(re.sub(r"\[provider\]\n(?:[a-z_]+ = .*\n)+", "", text))
+    c = run(d, "provider")["provider"]
+    assert c.result == "fail" and messages(c) == ["[provider]: required: vendor, product, homepage and webhook_docs (the"
+                                                  " provider's developer page for these webhooks)"]
+
+
+def test_provider_red_api_docs_for_a_processor_that_calls_the_api(tmp_path):
+    d = copy(tmp_path, "kitproc")
+    edit(d, "bobbin.toml", 'api_docs = "https://docs.github.com/en/rest"\n', "")
+    c = run(d, "provider")["provider"]
+    assert c.result == "fail" and any("provider.api_docs: required (the processor calls" in m for m in messages(c))
+    assert K.processor_calls_api(K.Bobbin(os.path.join(FIX, "kitproc")))
+    assert not K.processor_calls_api(K.Bobbin(os.path.join(FIX, "kitcode")))
+
+
+@pytest.mark.parametrize("doc", K.FRONTMATTER_DOCS)
+@pytest.mark.parametrize("old,new,needle", [
+    ("bobbin: acme.kitcode", "bobbin: acme.other", "frontmatter: bobbin: 'acme.other' does not match"),
+    ("provider: Acme Kitcode", "provider: Acme", "frontmatter: provider: 'Acme' does not match"),
+    ("webhook_docs: https://docs.github.com/en/webhooks", "webhook_docs: https://docs.github.com/en",
+     "frontmatter: webhook_docs: 'https://docs.github.com/en' does not match"),
+    ("webhook_docs: https://docs.github.com/en/webhooks\n", "", "frontmatter: webhook_docs: missing"),
+    ("---\nbobbin:", "bobbin:", "does not open with --- frontmatter"),
+])
+def test_provider_red_a_frontmatter_mismatch_in_each_document(tmp_path, doc, old, new, needle):
+    d = copy(tmp_path, "kitcode")
+    edit(d, doc, old, new)
+    c = run(d, "provider")["provider"]
+    assert c.result == "fail" and [f.file for f in c.findings] == [doc], messages(c)
+    assert needle in c.findings[0].message, messages(c)
+
+
+def test_provider_only_agents_md_may_add_frontmatter_keys(tmp_path):
+    d = copy(tmp_path, "kitcode")
+    edit(d, "AGENTS.md", "---\n\n", "description: set up acme.kitcode\n---\n\n")
+    assert run(d, "provider")["provider"].result == "pass"
+    edit(d, "SETUP.md", "---\n\n", "description: set up acme.kitcode\n---\n\n")
+    c = run(d, "provider")["provider"]
+    assert c.result == "fail" and any(f.file == "SETUP.md" and "unknown key(s) description" in f.message for f in c.findings)
+
+
+def test_provider_green_for_the_fixtures_and_quoted_frontmatter(tmp_path):
+    for name in FIXTURES:
+        c = run(os.path.join(FIX, name), "provider")["provider"]
+        assert c.result == "pass", (name, messages(c))
+    d = copy(tmp_path, "kitcode")
+    edit(d, "README.md", "provider: Acme Kitcode", 'provider: "Acme Kitcode"')
+    assert run(d, "provider")["provider"].result == "pass"
+
+
+def test_url_problem_unit():
+    ok = ("https://developers.google.com/workspace/gmail/api/guides/push", "https://kaneo.app/docs#signature-verification")
+    for u in ok:
+        assert K.url_problem(u) is None, u
+    for u in ("", None, "ftp://github.com", "https://", "https://user:pw@github.com/x", "https://exam ple.com",
+              "https://TODO", "https://sub.example.org/x", "https://[2001:db8::1]/x", "https://docs.example/x"):
+        assert K.url_problem(u) is not None, u
+
+
+def test_frontmatter_parser_unit():
+    assert K.parse_frontmatter("---\na: 1\nb: 'x y'\n---\n# t\n") == ({"a": "1", "b": "x y"}, 4, "")
+    assert K.parse_frontmatter("# t\n")[0] is None
+    assert K.parse_frontmatter("---\na: 1\n")[2] == "the frontmatter has no closing ---"
+    assert "is given twice" in K.parse_frontmatter("---\na: 1\na: 2\n---\n")[2]
+    assert "is not `key: value`" in K.parse_frontmatter("---\n- a\n---\n")[2]
+
+
+# ---- provider-links (advisory) -----------------------------------------------------------------------------------------
+@pytest.fixture
+def stub_site():
+    """A loopback HTTP server: /ok answers 200, /moved 301 to /ok, /nohead refuses HEAD (405) and answers GET, /gone 404."""
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def _answer(self, head: bool):
+            path = self.path.split("?")[0]
+            seen.append((self.command, path))
+            if path == "/moved":
+                self.send_response(301)
+                self.send_header("Location", "/ok")
+            elif path == "/nohead" and head:
+                self.send_response(405)
+            elif path in ("/ok", "/nohead"):
+                self.send_response(200)
+            else:
+                self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def do_HEAD(self):
+            self._answer(True)
+
+        def do_GET(self):
+            self._answer(False)
+
+        def log_message(self, *a):
+            pass
+
+    seen: list = []
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    yield srv, seen
+    srv.shutdown()
+    srv.server_close()
+
+
+def _point_links_at(monkeypatch, srv, mapping):
+    port = srv.server_address[1]
+    monkeypatch.setattr(K, "LINK_REWRITE", lambda url: f"http://127.0.0.1:{port}{mapping.get(url, '/gone')}")
+
+
+def test_provider_links_skip_offline_and_by_default():
+    card = K.check_bobbin(os.path.join(FIX, "kitcode"), only=["provider-links"])
+    c, = card.checks
+    assert c.result == "skip" and not c.required and "--online" in c.detail
+
+
+def test_provider_links_green_follows_redirects_and_falls_back_to_get(monkeypatch, stub_site):
+    srv, seen = stub_site
+    _point_links_at(monkeypatch, srv, {"https://github.com": "/ok", "https://docs.github.com/en/webhooks": "/moved",
+                                       "https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries":
+                                       "/nohead"})
+    c = run(os.path.join(FIX, "kitcode"), "provider-links", online=True)["provider-links"]
+    assert c.result == "pass" and c.detail == "3 provider page(s) answer 2xx/3xx", (c.detail, messages(c))
+    assert ("HEAD", "/moved") in seen and ("HEAD", "/ok") in seen and ("GET", "/nohead") in seen
+
+
+def test_provider_links_red_is_advisory(monkeypatch, stub_site, tmp_path):
+    srv, _seen = stub_site
+    _point_links_at(monkeypatch, srv, {"https://github.com": "/ok"})          # the two docs pages answer 404
+    d = copy(tmp_path, "kitcode")
+    card = K.check_bobbin(d, only=["provider", "provider-links"], online=True)
+    by = {c.name: c for c in card.checks}
+    c = by["provider-links"]
+    assert c.result == "fail" and not c.required and card.ok, "a provider's site being down never blocks a merge"
+    assert sorted(f.message.split(":")[0] for f in c.findings) == ["provider.signature_docs", "provider.webhook_docs"]
+    assert all("answered HTTP 404" in f.message and f.file == "bobbin.toml" and f.line > 1 for f in c.findings)
+    assert not K.check_bobbin(d, only=["provider-links"], online=True, strict=True).ok
+
+
+def test_the_command_takes_online(monkeypatch, stub_site, capsys):
+    srv, _seen = stub_site
+    _point_links_at(monkeypatch, srv, {})
+    assert cli(["bobbin", "check", os.path.join(FIX, "kittpl"), "--online", "--report", "json"]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    links = next(c for c in doc["checks"] if c["name"] == "provider-links")
+    assert links["result"] == "fail" and not links["required"]
+
+
+# ---- the vendor directory and sibling bobbins ------------------------------------------------------------------------
+def test_core_only_red_for_code_in_the_vendor_directory(tmp_path):
+    d = copy(tmp_path, "kitcode")
+    vendor = os.path.dirname(d)
+    write(vendor, "__init__.py", "")
+    assert run(d, "core-only")["core-only"].result == "pass", "an empty vendor __init__.py is fine"
+    write(vendor, "__init__.py", "SHARED = 1\n")
+    write(vendor, "helpers.py", "def shared():\n    return 1\n")
+    c = run(d, "core-only")["core-only"]
+    assert c.result == "fail"
+    assert any("vendor's __init__.py must be empty" in m for m in messages(c))
+    assert any("code in the vendor directory" in m for m in messages(c))
+
+
+def test_core_only_red_for_a_bare_import_of_a_sibling_bobbin(tmp_path):
+    d = copy(tmp_path, "kitcode")
+    copy(tmp_path, "kitproc")
+    with open(os.path.join(d, "source.py"), "a") as f:
+        f.write("\nimport kitproc\n")
+    c = run(d, "core-only")["core-only"]
+    assert c.result == "fail" and any("kitproc/ is another bobbin of the same vendor" in m for m in messages(c))
+
+
+def test_core_only_green_for_a_stdlib_module_named_like_a_sibling(tmp_path):
+    d = copy(tmp_path, "kitcode")
+    os.makedirs(os.path.join(os.path.dirname(d), "calendar"))       # a sibling bobbin named after a stdlib module
+    with open(os.path.join(d, "source.py"), "a") as f:
+        f.write("\nimport calendar  # noqa: F401\n")
+    assert run(d, "core-only")["core-only"].result == "pass"

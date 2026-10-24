@@ -141,7 +141,7 @@ references.
 
 ```toml
 [bobbins.alerts-hook]
-bobbin = "webhook"
+bobbin = "hookspool.webhook"
 secrets.secret = { file = "/etc/hookspool/secrets/alerts" }
 settings = { scheme = "hmac-sha256-hex", header = "X-Signature", prefix = "sha256=", key = ["project.id"], dedup = "id" }
 outputs = { "*" = "script:show_batch" }
@@ -149,15 +149,15 @@ outputs = { "*" = "script:show_batch" }
 
 | key | default | meaning |
 |---|---|---|
-| `bobbin` | the instance name | which bobbin this is an instance of |
+| `bobbin` | required | which bobbin this is an instance of: its `<vendor>.<product>` name (`google.gmail`). The instance name is a plain identifier, so it is never the bobbin's name; a table without `bobbin` is an error that suggests the bobbin when the instance is named after its product |
 | `secrets` | none | a table of secret references, one per secret the bobbin declares (see [Secrets](#secrets)). A secret the bobbin marks `processor = true` cannot be an `{ env = ... }` reference, because the processor does not inherit the dispatcher's environment |
-| `settings` | the manifest's defaults | a table of the bobbin's settings; each is typed, and a missing required one is an error. `hookspool bobbin show <bobbin>` lists them |
+| `settings` | the manifest's defaults | a table of the bobbin's settings; each is typed, and a missing required one is an error. `hookspool bobbin show <vendor>.<product>` lists them |
 | `outputs` | none | maps each output event type to a destination. `"*"` maps every type the table does not name. An output the instance leaves out is dropped with one log line per batch |
 | `expect` | `false` | apply the manifest's `expect_every_s` to this instance |
 | `span`, `quiet_s`, `max_s`, `max_events`, `max_bytes` | the bobbin's own | window fields for this instance (see [Windows](#windows)) |
 | `expect_every_s`, `dedup_window_s`, `max_body_bytes` | the bobbin's own | the same keys as on a source |
 | `timeout_s` | the manifest's | for a bobbin with a processor: how long one batch may run |
-| `state_dir` | `<home>/services/<instance>` | for a bobbin with a processor: where its state lives. Outside the home it must be listed in the dispatch unit's `ReadWritePaths` and be private (mode 0700), because it holds OAuth tokens in the clear |
+| `state_dir` | `<home>/bobbins/<instance>` | for a bobbin with a processor: where its state lives. Outside the home it must be listed in the dispatch unit's `ReadWritePaths` and be private (mode 0700), because it holds OAuth tokens in the clear |
 
 An instance may not collide with an explicit `[sources.<instance>]` or `[destinations."script:<instance>"]`. An unknown
 key, an unknown bobbin, a setting or output the manifest does not declare, and an output mapped to a destination that does

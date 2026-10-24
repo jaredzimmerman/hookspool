@@ -1,0 +1,9 @@
+# capture: validation request without a signature: refused
+# now: 1800000000
+# expect: unverified
+POST /hooks/meetings HTTP/1.1
+Content-Type: application/json
+User-Agent: Zoom Marketplace/1.0a
+Content-Length: 90
+
+{"event":"endpoint.url_validation","payload":{"plainToken":"plain-PAYLOAD-SENTINEL-7f3a"}}

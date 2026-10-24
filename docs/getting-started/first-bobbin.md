@@ -1,6 +1,6 @@
 # Your first bobbin
 
-A bobbin is the plugin for one outside service. This page turns on the built-in `github` bobbin and tries it offline, with
+A bobbin is the plugin for one outside service. This page turns on the built-in `github.repo` bobbin and tries it offline, with
 the sample requests that ship with it, so nothing needs to be exposed to the internet. It assumes you have done the
 [Quick start](quick-start.md), or at least installed hookspool and set `HOOKSPOOL_HOME` to an empty directory.
 
@@ -8,12 +8,13 @@ the sample requests that ship with it, so nothing needs to be exposed to the int
 
 ```sh
 hookspool bobbin list              # every bobbin found, with its one-line summary
-hookspool bobbin show github       # its secrets, settings and outputs
+hookspool bobbin show github.repo  # its provider pages, secrets, settings and outputs
 ```
 
 ## 2. Write an instance
 
-An instance is one table in `config.toml`. It names the bobbin, points at a secret file, and says where the events go. Here
+An instance is one table in `config.toml`. Its name is yours (it is the URL, `/hooks/github-ci`); it names the bobbin by
+its `<vendor>.<product>` name, points at a secret file, and says where the events go. Here
 the destination is the demo script from the quick start; for a real setup it would be `hermes:<route>` or an HTTP
 destination.
 
@@ -28,7 +29,7 @@ you generate and also type into GitHub.
 
 ```toml
 [bobbins.github-ci]
-bobbin = "github"
+bobbin = "github.repo"
 secrets.secret = { file = "/path/to/demo/secrets/github-ci" }
 outputs = { "*" = "script:show_batch" }
 
@@ -55,9 +56,9 @@ The bobbin ships requests captured from a sample delivery. Replay them against y
 without touching the spool:
 
 ```sh
-hookspool source test github-ci --request hookspool/bobbins/github/captures/event.http      # result: queued
-hookspool source test github-ci --request hookspool/bobbins/github/captures/ping.http       # result: ignored
-hookspool source test github-ci --request hookspool/bobbins/github/captures/tampered.http   # result: unverified
+hookspool source test github-ci --request hookspool/bobbins/github/repo/captures/event.http      # result: queued
+hookspool source test github-ci --request hookspool/bobbins/github/repo/captures/ping.http       # result: ignored
+hookspool source test github-ci --request hookspool/bobbins/github/repo/captures/tampered.http   # result: unverified
 ```
 
 The push is queued, GitHub's ping is acknowledged and not queued, and the one with a changed body is refused with a 401.
@@ -66,4 +67,4 @@ The push is queued, GitHub's ping is acknowledged and not queued, and the one wi
 
 The bobbin's own `SETUP.md` has the rest, in order: create the webhook in the repository, the reverse proxy line, how to verify
 a real delivery, the sweep, and how to roll back. Every bobbin has the same files, listed in the
-[catalogue](../bobbins/README.md). To cover a service that has no bobbin, see [The webhook bobbin](../bobbins/webhook.md).
+[catalogue](../bobbins/README.md). To cover a service that has no bobbin, see [The `hookspool.webhook` bobbin](../bobbins/webhook.md).

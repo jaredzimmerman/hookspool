@@ -7,43 +7,106 @@ service's webhooks and turn them into work. A deployment turns it on with one `[
 ## What goes in a bobbin
 
 ```
-hookspool/bobbins/<name>/
-    bobbin.toml        the manifest: name, secrets, typed settings, outputs, and which source and processor it uses
+hookspool/bobbins/<vendor>/<product>/
+    bobbin.toml        the manifest: name, provider, secrets, typed settings, outputs, and which source and processor it uses
     source.py          a code source, only when the template cannot express the sender (optional)
     processor.py       work done after the event is committed, such as asking the service what changed (optional)
     captures/*.http    sample requests the checks replay: one accepted, one rejected
     README.md          what it does, its settings, outputs and limits
     SETUP.md           the steps for a person: provider side, secrets, config table, verify, roll back
     AGENTS.md          the same procedure as numbered steps an agent can follow
+hookspool/bobbins/<vendor>/__init__.py   empty; a new vendor's first bobbin adds it
 ```
 
 The rules that keep a bobbin small:
 
-- One bobbin per service. `gmail`, `gcal` and `drive` are three bobbins, not one "google" bobbin. Two deployments of
-  the same service are two instances in the config, not two bobbins.
-- A bobbin never imports another bobbin. Code two bobbins both need moves into hookspool core and both call it.
+- One bobbin per service. `google.gmail`, `google.calendar` and `google.drive` are three bobbins, not one "google"
+  bobbin. Two deployments of the same service are two instances in the config, not two bobbins.
+- A bobbin never imports another bobbin, a sibling under the same vendor included. Code two bobbins both need moves
+  into hookspool core (for one vendor's bobbins, `hookspool/providers/<vendor>.py`) and both call it.
 - A bobbin calls core and never re-implements it. Signatures go through `hookspool.verify`, HTTP and OAuth through
   the context a processor receives, state through `ctx.load_state` and `ctx.save_state`, retries through the dispatcher.
   The full table of what to call is in [Architecture](../architecture/ARCHITECTURE.md#1437-bobbins-call-core-they-never-re-implement-it-and-never-each-other).
 
+## The name
+
+A bobbin's name is `<vendor>.<product>`, with exactly one dot, and each part is lower case letters, digits and `-`
+(starting with a letter, at most 40 characters):
+
+- the **vendor** is the company that runs the service: `google`, `atlassian`, `github`, `stripe`;
+- the **product** is the product or API surface whose webhooks the bobbin receives: `google.gmail`, `google.drive`,
+  `atlassian.trello`. A vendor with one product still names the surface: `github.repo` (repository webhooks),
+  `zoom.meetings`, `plaid.items`, `stripe.events`.
+
+The directory is the name: `hookspool/bobbins/<vendor>/<product>/` (write `_` for `-` in a directory, since built-in
+directories are Python packages). `hookspool.` is reserved for the generic bobbins that ship with hookspool, such as
+`hookspool.webhook`. A config instance stays a plain identifier and names its bobbin:
+
+```toml
+[bobbins.invoices]                     # the URL is /hooks/invoices
+bobbin = "acme.invoices"
+```
+
+## Provider and frontmatter
+
+`bobbin.toml` carries a `[provider]` table, the bobbin's structured frontmatter. It says who runs the service and links
+the provider's own developer pages, so a reviewer can check the bobbin against them without asking:
+
+```
+[provider]
+vendor = "GitHub"                       # display names, as the provider writes them
+product = "Repository webhooks"
+homepage = "https://github.com"
+webhook_docs = "https://docs.github.com/en/webhooks/webhook-events-and-payloads"
+signature_docs = "https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries"
+# api_docs = "https://docs.github.com/en/rest"   # required when the processor calls the provider's API
+```
+
+`vendor`, `product`, `homepage` and `webhook_docs` (the developer page for the webhooks or push this bobbin receives)
+are required; `signature_docs` (the page that describes the signature or token) is required whenever the manifest
+declares a secret; `api_docs` is required when a processor calls the provider's API (`ctx.http`, `ctx.oauth` or a
+`hookspool.providers` helper). Every URL is `https` on the provider's own host: a page of the provider's official
+developer documentation, never a blog post, an `example.com` address, an IP address or a placeholder.
+
+`README.md`, `SETUP.md` and `AGENTS.md` each start with the same three facts as YAML frontmatter, so the documents can
+be read on their own:
+
+```
+---
+bobbin: github.repo
+provider: GitHub Repository webhooks
+webhook_docs: https://docs.github.com/en/webhooks/webhook-events-and-payloads
+---
+```
+
+`provider` is `vendor` and `product` joined by a space. `AGENTS.md` may add keys of the agents.md convention; the
+other two documents have exactly these three. The kit's `provider` row checks the table and that all three documents
+match it exactly; the advisory `provider-links` row fetches each URL (in CI, or locally with `--online`).
+
 ## Start from the scaffold
 
 ```sh
-hookspool bobbin new acme --dir hookspool/bobbins --set scheme=hmac-sha256-hex --set header=X-Acme-Signature --set key=id
+hookspool bobbin new acme.invoices --dir hookspool/bobbins --set scheme=hmac-sha256-hex --set header=X-Acme-Signature --set key=id
 ```
 
-That copies the [`webhook` bobbin](webhook.md) with your settings frozen into a fixed template, writes an accepted and a
-rejected capture signed for the scheme, and writes `README.md`, `SETUP.md` and `AGENTS.md` with `TODO` placeholders.
-Add `--code` for a `source.py` instead of the template, and `--processor` for a `processor.py`. Then:
+That writes `hookspool/bobbins/acme/invoices/` (and `hookspool/bobbins/acme/__init__.py`, empty, for a new vendor),
+copies the [`hookspool.webhook` bobbin](webhook.md) with your settings frozen into a fixed template, writes an accepted
+and a rejected capture signed for the scheme, and writes `README.md`, `SETUP.md` and `AGENTS.md` with `TODO`
+placeholders, the `[provider]` table and the frontmatter included. Add `--code` for a `source.py` instead of the
+template, and `--processor` for a `processor.py`. Then:
 
 1. Replace the captures with a redacted real delivery from the sender (the capture format is [below](#capture-files)).
-2. Fill in the three documents. Every declared secret and required setting must appear in both setup documents, and the
+2. Fill in `[provider]` with the provider's real developer pages, and the same values in the three documents'
+   frontmatter. Until then the scorecard's `provider` row fails with one message that says so.
+3. Fill in the three documents. Every declared secret and required setting must appear in both setup documents, and the
    config table they show must expand without errors.
-3. Run `hookspool bobbin check hookspool/bobbins/acme`. It prints a scorecard; fix each `file:line` it lists until every
-   required check passes. [Reviewing a bobbin](review.md) says what each check proves and what a maintainer still looks at.
-4. Open a pull request that touches only the bobbin directory and its tests. With a green scorecard and the template's
-   three boxes ticked, that is the expected merge. Leave the catalogue and `CHANGELOG.md` alone: the maintainer
-   regenerates the one and writes the other when merging, and an edit to either makes the pull request `touches-core`.
+4. Run `hookspool bobbin check hookspool/bobbins/acme/invoices`. It prints a scorecard; fix each `file:line` it lists
+   until every required check passes. [Reviewing a bobbin](review.md) says what each check proves and what a maintainer
+   still looks at.
+5. Open a pull request that touches only the bobbin directory, its test file `tests/bobbins/test_acme_invoices.py` and,
+   for a new vendor, the empty `hookspool/bobbins/acme/__init__.py`. With a green scorecard and the template's two boxes
+   ticked, that is the expected merge. Leave the catalogue and `CHANGELOG.md` alone: the maintainer regenerates the one
+   and writes the other when merging, and an edit to either makes the pull request `touches-core`.
 
 The rest of this page is about the part that is different for every sender: the source.
 
@@ -72,10 +135,10 @@ There are two ways to say this. Try the first one first.
 
 ## Before you write anything
 
-Find these out from the sender's own documentation. They decide the table you fill in, and a pull request should state
-them (the PR template asks for the link):
+Find these out from the sender's own documentation. They decide the table you fill in, and the pages you read are the
+ones `[provider]` links:
 
-- **How requests are signed**, with a link to the sender's page on it. Which header, which algorithm, what is signed
+- **How requests are signed**, with a link to the sender's page on it (`signature_docs`). Which header, which algorithm, what is signed
   (the body alone, a timestamp and the body, the body plus the callback URL), how the signature is encoded.
 - **Whether the sender retries** a delivery that did not get a 2xx, and for how long. Many senders do not. This decides
   whether hookspool needs a sweep for the source (see below).
@@ -88,12 +151,19 @@ them (the PR template asks for the link):
 ## A. A config template
 
 A template bobbin has no Python. The sender's rules sit in a fixed `[source.template]` table in `bobbin.toml`, and the
-`template` source reads them. This is the GitHub bobbin's whole manifest, `hookspool/bobbins/github/bobbin.toml`:
+`template` source reads them. This is the GitHub bobbin's whole manifest, `hookspool/bobbins/github/repo/bobbin.toml`:
 
 ```toml
-name = "github"
+name = "github.repo"
 version = "1"
 summary = "GitHub repository webhook: HMAC-SHA256 over the raw body; pings are acknowledged and not enqueued"
+
+[provider]
+vendor = "GitHub"
+product = "Repository webhooks"
+homepage = "https://github.com"
+webhook_docs = "https://docs.github.com/en/webhooks/webhook-events-and-payloads"
+signature_docs = "https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries"
 
 [source]
 span = "burst"
@@ -118,9 +188,9 @@ description = "the webhook secret typed into the repository's webhook settings"
 description = "every accepted delivery (pushes, pull requests, and the rest; the event type is in attrs)"
 ```
 
-A deployment turns it on with an instance that names the secret file and where events go (`[bobbins.github]`, see
-[Your first bobbin](../getting-started/first-bobbin.md)); `hookspool bobbin expand github` prints the `[sources.github]`
-table that instance becomes.
+A deployment turns it on with an instance that names the bobbin, the secret file and where events go
+(`[bobbins.github-ci]` with `bobbin = "github.repo"`, see [Your first bobbin](../getting-started/first-bobbin.md));
+`hookspool bobbin expand github-ci` prints the `[sources.github-ci]` table that instance becomes.
 
 ### Template reference
 
@@ -172,10 +242,10 @@ in the template table as they do for GitHub. An instance can override `span`, th
 ### Steps
 
 1. **Scaffold the bobbin**:
-   `hookspool bobbin new <name> --dir hookspool/bobbins --set scheme=<scheme> --set header=<header> --set key=<selector>`.
+   `hookspool bobbin new <vendor>.<product> --dir hookspool/bobbins --set scheme=<scheme> --set header=<header> --set key=<selector>`.
    Give `--set` again for `prefix`, `dedup`, `ignore`, `event_type` or `attrs`, or edit `[source.template]` afterwards. The
-   template source checks every value before anything is written. Put the sender's documentation link and its retry
-   behaviour in the README.
+   template source checks every value before anything is written. Put the sender's documentation links in `[provider]`
+   and the frontmatter ([above](#provider-and-frontmatter)), and its retry behaviour in the README.
 2. **Put a real delivery in the captures.** The scaffold writes `captures/event.http` (`# expect: queued`) and
    `captures/tampered.http` (`# expect: unverified`), both signed for the scheme with the test secret in
    `captures/kit.toml`. Swap the body of `event.http` for a redacted delivery from the sender: example.com addresses,
@@ -188,16 +258,18 @@ in the template table as they do for GitHub. An instance can override `span`, th
    `openssl dgst -sha256 -hmac '<test secret>' body.json`. Put the result in the signature header and set
    `Content-Length` to the body's size.
 4. **Fill in README.md, SETUP.md and AGENTS.md.** Every declared secret and required setting must appear in both setup
-   documents, and the `[bobbins.<name>]` table they show must expand.
-5. **Run the check**: `hookspool bobbin check hookspool/bobbins/<name> --base origin/main`. It runs the shared
-   [conformance kit](#the-conformance-kit) against each capture, so there is no test to write. Fix each `file:line` it
-   lists until every required check passes.
-6. **Try it offline** the way an operator would: put a `[bobbins.<name>]` instance in a scratch config whose secret file
-   holds the test secret, then run `hookspool source test <name> --request hookspool/bobbins/<name>/captures/event.http`.
+   documents, and the `[bobbins.<instance>]` table they show (with `bobbin = "<vendor>.<product>"`) must expand.
+5. **Run the check**: `hookspool bobbin check hookspool/bobbins/<vendor>/<product> --base origin/main`. It runs the
+   shared [conformance kit](#the-conformance-kit) against each capture, so there is no test to write. Fix each
+   `file:line` it lists until every required check passes. Add `--online` to have the advisory `provider-links` row
+   fetch your `[provider]` pages, as CI does.
+6. **Try it offline** the way an operator would: put a `[bobbins.<instance>]` instance in a scratch config whose secret
+   file holds the test secret, then run
+   `hookspool source test <instance> --request hookspool/bobbins/<vendor>/<product>/captures/event.http`.
 
 ## B. A code plugin
 
-A code source is `source.py` in the bobbin directory: `hookspool bobbin new <name> --code` writes one, and the
+A code source is `source.py` in the bobbin directory: `hookspool bobbin new <vendor>.<product> --code` writes one, and the
 manifest names it with `[source] module = "source"`. It defines these names; only `verify`, `key` and `auth_headers` are
 required.
 
@@ -268,11 +340,11 @@ the HTTP status and the sender's short error code for a `net` error, never a bod
 
 ### A worked example
 
-A sender, `acme`, signs `"<timestamp>.<body>"` with HMAC-SHA256 and sends `t=<timestamp>,v1=<hex>` in `Acme-Signature`.
+A sender, Acme Billing (the `acme.billing` bobbin), signs `"<timestamp>.<body>"` with HMAC-SHA256 and sends `t=<timestamp>,v1=<hex>` in `Acme-Signature`.
 Events look like `{"id": "evt_1", "type": "invoice.paid", "data": {"customer": "cus_9"}}`. Its documentation says it
 retries for three days.
 
-`hookspool/bobbins/acme/source.py`:
+`hookspool/bobbins/acme/billing/source.py`:
 
 ```python
 """Acme Billing webhooks. Signature scheme: https://docs.example.com/webhooks/signatures
@@ -309,7 +381,7 @@ def event_type(payload: dict, req: Request) -> str:
 
 `hookspool bobbin check` runs the kit on this source with each capture, using the test secrets in
 `captures/kit.toml`. That is enough to merge. To run the whole matrix against a request built in code as well, describe
-the source to the kit in a test of the bobbin's own, `hookspool/bobbins/acme/tests/test_source.py`; the `tests` check
+the source to the kit in a test of the bobbin's own, `hookspool/bobbins/acme/billing/tests/test_source.py`; the `tests` check
 runs it with the network blocked. The signing function is written from the sender's documentation with `hmac`
 directly, not with `hookspool.verify`, so a bug in a helper cannot hide behind a matching bug in the test:
 
@@ -320,7 +392,7 @@ import json
 
 import pytest
 
-from hookspool.bobbins.acme import source as acme
+from hookspool.bobbins.acme.billing import source as acme
 from hookspool.testing import sourcekit
 from hookspool.testing.sourcekit import SENTINEL, FakeClock, Kit, request
 
@@ -336,8 +408,8 @@ def sign(raw, secrets, now):
 BODY = json.dumps({"id": "evt_1", "type": "invoice.paid", "data": {"customer": "cus_9", "note": SENTINEL}}).encode()
 
 KIT = Kit(
-    name="acme", module=acme, secrets={"signing_secret": SECRET}, sign=sign, timestamped=True,
-    sample=request("POST", "/hooks/acme", {"Content-Type": "application/json", "Acme-Event": "invoice.paid"}, BODY),
+    name="billing", module=acme, secrets={"signing_secret": SECRET}, sign=sign, timestamped=True,
+    sample=request("POST", "/hooks/billing", {"Content-Type": "application/json", "Acme-Event": "invoice.paid"}, BODY),
 )
 
 
@@ -353,8 +425,8 @@ def test_kit_matrix(case, tmp_path):
 answers after verification), `unauth_handshake` (for a `challenge_unauthenticated` source), `timestamped=True` with
 `tolerance_s` for a signed time window, `body_signed=False` for a static token that does not cover the body (the
 tampered-body case then does not apply), `break_stage` (the plugin function the quarantine case makes raise) and
-`source_cfg` (extra keys for the source's table). The `zoom` bobbin (a timestamp and a handshake), `gcal` (a token and a
-payload built from headers) and `plaid` (a JWT) are the fuller models; their kit tests are `tests/test_sources_zoom.py`,
+`source_cfg` (extra keys for the source's table). The `zoom.meetings` bobbin (a timestamp and a handshake),
+`google.calendar` (a token and a payload built from headers) and `plaid.items` (a JWT) are the fuller models; their kit tests are `tests/test_sources_zoom.py`,
 `tests/test_sources_gcal.py` and `tests/test_sources_plaid.py`.
 
 A code source's captures sit in the bobbin's `captures/`, like a template's. Sign each one at the time the capture says
@@ -393,7 +465,7 @@ then the request line, the headers, a blank line and the body:
 # capture: invoice paid, signed with the test secret
 # now: 1800000000
 # expect: queued
-POST /hooks/acme HTTP/1.1
+POST /hooks/billing HTTP/1.1
 Content-Type: application/json
 Acme-Event: invoice.paid
 Acme-Signature: t=1800000000,v1=...
@@ -434,12 +506,14 @@ senders never retry. So every source states, in its pull request and in the swee
 
 ## Checklist
 
-- [ ] the sender's signature documentation is linked
-- [ ] `hookspool/bobbins/<name>/` made with `hookspool bobbin new`: a `[source.template]` table or a `source.py`
-- [ ] captures in `hookspool/bobbins/<name>/captures/`: a signed event, a tampered one, and a ping or handshake if the
-      sender has one
-- [ ] `hookspool bobbin check hookspool/bobbins/<name> --base origin/main` passes every required check and says
-      `bobbin-only`
+- [ ] the name is `<vendor>.<product>` and the directory `hookspool/bobbins/<vendor>/<product>/`, made with
+      `hookspool bobbin new`: a `[source.template]` table or a `source.py`
+- [ ] `[provider]` links the provider's own developer pages (`webhook_docs`, `signature_docs`, and `api_docs` for a
+      processor that calls the API), and README.md, SETUP.md and AGENTS.md open with the same frontmatter
+- [ ] captures in `hookspool/bobbins/<vendor>/<product>/captures/`: a signed event, a tampered one, and a ping or
+      handshake if the sender has one
+- [ ] `hookspool bobbin check hookspool/bobbins/<vendor>/<product> --base origin/main` passes every required check and
+      says `bobbin-only`
 - [ ] the full suite passes (`python -m pytest -q`) and `ruff check .` is clean
 - [ ] no hostname, address, account name or real secret anywhere in the change
 - [ ] `sender_retries`, the sweep and `expect_every_s` are stated

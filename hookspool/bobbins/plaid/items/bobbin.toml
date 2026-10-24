@@ -1,0 +1,32 @@
+name = "plaid.items"
+version = "1"
+summary = "Plaid webhooks: items, transactions and link events, signed with an ES256 JWT checked against Plaid's published keys"
+
+[provider]
+vendor = "Plaid"
+product = "Items"
+homepage = "https://plaid.com"
+webhook_docs = "https://plaid.com/docs/api/webhooks/"
+signature_docs = "https://plaid.com/docs/api/webhooks/webhook-verification/"
+api_docs = "https://plaid.com/docs/api/webhooks/webhook-verification/#webhook_verification_keyget"
+
+[source]
+module = "source"
+span = "sync"
+sender_retries = true
+config = ["env"]
+proxy = "pass /hooks/plaid through unchanged, with the Plaid-Verification header and the raw body"
+
+[secrets.client_id]
+description = "the Plaid client id; used only to fetch Plaid's webhook verification keys"
+
+[secrets.secret]
+description = "the Plaid secret for the environment in `env`; used only to fetch Plaid's webhook verification keys"
+
+[settings.env]
+description = "the Plaid environment the webhooks come from: production, development or sandbox"
+type = "string"
+default = "production"
+
+[outputs."*"]
+description = "every accepted Plaid webhook; the event type is <webhook_type>.<webhook_code> (for example TRANSACTIONS.SYNC_UPDATES_AVAILABLE)"
