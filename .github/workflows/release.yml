@@ -1,0 +1,98 @@
+name: release
+
+# A pushed tag v<version> builds the release, attaches it to a GitHub Release whose notes are that
+# version's CHANGELOG.md section, then publishes it to PyPI through Trusted Publishing (no token is
+# stored anywhere). The one-time setup on pypi.org and in the repository settings is in
+# docs/operations/releasing.md.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: check the tag, build, twine check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.13"
+      - name: The tag matches hookspool.__version__ and CHANGELOG.md has its section
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python .github/scripts/release_notes.py --tag "$TAG" --out release-notes.md
+      - name: Install the build tools
+        run: python -m pip install -r requirements-release.txt
+      - name: Build the sdist and the wheel
+        run: python -m build
+      - name: Check the package metadata
+        run: python -m twine check --strict dist/*
+      - name: Install the wheel into a fresh environment and run it
+        run: |
+          python -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/bin/python" -m pip install --no-deps dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/smoke/bin/hookspool" --version
+          HOOKSPOOL_HOME="$RUNNER_TEMP/smoke-home" "$RUNNER_TEMP/smoke/bin/hookspool" bobbin list
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  github-release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write                 # create the release and upload its files
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: dist
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: release-notes
+          path: notes
+      - name: Create the release with the sdist and the wheel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/* --verify-tag --title "hookspool $TAG" --notes-file notes/release-notes.md
+
+  pypi:
+    name: publish to PyPI
+    needs: github-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/hookspool/
+    permissions:
+      id-token: write                 # Trusted Publishing: the OIDC token PyPI exchanges for a short-lived upload token
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2

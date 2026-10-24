@@ -6,7 +6,7 @@ an interface, and the entry will say so.
 
 ## [Unreleased]
 
-The changes below will ship as 0.2.0.
+## [0.2.0] - 2026-10-23
 
 ### Added
 
@@ -86,6 +86,18 @@ The changes below will ship as 0.2.0.
   source module's `config_keys`), for a code source that reads them.
 - The conformance kit answers a source's own HTTP calls (a sender's verification keys) from `captures/kit.toml` `[[http]]`,
   as it does for a processor's `ctx.http`.
+- Release tooling. `hookspool --version` prints the version. The package metadata now carries authors, keywords,
+  classifiers and project links. CI gains a `build` job that builds the sdist and the wheel, runs `twine check`, and
+  installs the wheel into a fresh environment to run `hookspool --version` and `hookspool bobbin list`. A `v*` tag runs
+  `.github/workflows/release.yml`: it checks that the tag matches `hookspool.__version__`, builds, attaches both files
+  to a GitHub Release with this file's section as the notes, and publishes to PyPI through Trusted Publishing
+  ([docs/operations/releasing.md](docs/operations/releasing.md)). Every action is pinned to a commit, and Dependabot
+  keeps the actions and the Python requirements current.
+- A documentation site built from `docs/` with MkDocs Material (`mkdocs.yml`, `requirements-docs.txt`). Pull requests
+  build it with `--strict`, and each push to `main` publishes it to GitHub Pages. A social preview image lives at
+  `docs/assets/social-preview.png`.
+- Community files: `SECURITY.md` (private reports through GitHub security advisories), `CODE_OF_CONDUCT.md`
+  (Contributor Covenant 2.1), issue forms for bugs and new bobbins, and `.github/CODEOWNERS`.
 
 ### Changed
 
@@ -189,3 +201,6 @@ Moving a 0.1 deployment across is in [Upgrading to 0.2](docs/operations/upgradin
 - Documentation: the README, an architecture document, a configuration reference, a command reference, an operations guide,
   and a test that fails when the docs and the code disagree on a command, an option or a config key.
 - Packaging: `pyproject.toml` (setuptools), an MIT license, and the `plaid` and `dev` extras.
+
+[Unreleased]: https://github.com/jaredzimmerman/hookspool/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jaredzimmerman/hookspool/releases/tag/v0.2.0

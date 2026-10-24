@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in hookspool does not do what the docs say it does.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Before you send it, remove every secret, hostname, address and personal value from
+        what you paste: use `example.com`, `127.0.0.1` and placeholders. Never paste a real request body.
+        A security problem goes to a private report instead (see SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: hookspool version
+      description: The output of `hookspool --version`.
+      placeholder: hookspool 0.2.0
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version and OS
+      placeholder: Python 3.13 on Debian 12
+    validations:
+      required: true
+  - type: input
+    id: bobbin
+    attributes:
+      label: Bobbin or destination involved
+      description: For example `github.repo`, `hookspool.webhook`, `script:<name>` or `http`. Leave it empty if none.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The smallest config (redacted) and the commands that show it, in order.
+      render: shell
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The relevant output of `hookspool check`, `hookspool status`, `hookspool issues` or the logs, redacted.
+      render: text

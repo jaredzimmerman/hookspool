@@ -378,7 +378,7 @@ def _block(lines, indent):
 
 def test_ci_matrix_and_commands():
     text = workflow("ci.yml")
-    assert 'python: ["3.11", "3.12", "3.13"]' in text
+    assert 'python: ["3.11", "3.12", "3.13", "3.14"]' in text
     assert "ruff check ." in text and "python -m pytest -q" in text
     assert "requirements-dev.txt" in text
 
@@ -579,13 +579,13 @@ def test_label_workflow_runs_only_trusted_code_with_the_least_write_access():
     assert runs[0]["env"]["HEAD_SHA"] == "${{ github.event.workflow_run.head_sha }}"
 
 
-@pytest.mark.parametrize("name", ["ci.yml", "plugins.yml", "bobbin.yml", "bobbin-label.yml"])
+@pytest.mark.parametrize("name", ["ci.yml", "plugins.yml", "bobbin.yml", "bobbin-label.yml", "docs.yml", "release.yml"])
 def test_workflows_parse_with_the_reader(name):
     doc = _wf(name)
     assert doc["name"] and doc["jobs"] and "permissions" in doc
 
 
-@pytest.mark.parametrize("name", ["ci.yml", "plugins.yml", "bobbin.yml", "bobbin-label.yml"])
+@pytest.mark.parametrize("name", ["ci.yml", "plugins.yml", "bobbin.yml", "bobbin-label.yml", "docs.yml", "release.yml"])
 def test_actionlint(name):
     exe = shutil.which("actionlint")
     if exe is None:

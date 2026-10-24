@@ -11,6 +11,7 @@ import sys
 import time
 import tomllib
 
+from . import __version__
 from . import config as _config
 from .store import STATES, InvalidEvent, LockHeld, SchemaError, SpoolError, Store, acquire_lock
 
@@ -31,6 +32,7 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--config", help="config.toml (default: $HOOKSPOOL_CONFIG or <home>/config.toml)")
     ap.add_argument("--db", help=argparse.SUPPRESS)
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--version", action="version", version=f"hookspool {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name, h in (("intake", "run the intake HTTP server"), ("dispatch", "run the dispatcher"),
                     ("run", "intake and dispatcher in one process")):
