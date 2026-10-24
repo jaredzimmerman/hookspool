@@ -24,6 +24,7 @@ same directory is the step-by-step setup for a person, and `AGENTS.md` is the sa
 | [`google.calendar`](../../hookspool/bobbins/google/calendar/README.md) | Google Calendar push (watch channel): conflicts, meeting-brief requests and a change notice for one calendar |
 | [`google.drive`](../../hookspool/bobbins/google/drive/README.md) | Google Drive push (watch channel): file changes, new files and files shared with the account, by id, never by content |
 | [`google.gmail`](../../hookspool/bobbins/google/gmail/README.md) | Gmail push (Cloud Pub/Sub): new mail in the owner's and an optional assistant's mailbox, read from Gmail's history |
+| [`google.meet`](../../hookspool/bobbins/google/meet/README.md) | Google Meet events (Workspace Events API over Cloud Pub/Sub): a call started, and who attended once it ended |
 | [`hookspool.webhook`](../../hookspool/bobbins/hookspool/webhook/README.md) | Any web service that sends a signed or tokened JSON POST: the template source, configured entirely by settings |
 | [`kaneo.projects`](../../hookspool/bobbins/kaneo/projects/README.md) | Kaneo generic webhook: project and task events, HMAC-SHA256 of the JSON body in X-Kaneo-Signature |
 | [`plaid.items`](../../hookspool/bobbins/plaid/items/README.md) | Plaid webhooks: items, transactions and link events, signed with an ES256 JWT checked against Plaid's published keys |

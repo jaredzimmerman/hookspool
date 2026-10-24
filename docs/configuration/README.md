@@ -122,7 +122,8 @@ Named coalescing presets. A span sets `quiet_s` and `max_s`, and a source picks 
 | `mail` | 30 | 120 | mail, boards and tickets |
 | `calendar` | 45 | 180 | calendar edits |
 | `sync` | 60 | 300 | bank and data syncs that send several notices per backfill |
-| `immediate` | 0 | 0 | meetings, security, anything where latency matters more than batching |
+| `meeting` | 60 | 900 | a call's start, joins, leaves and end, so a short call is one batch |
+| `immediate` | 0 | 0 | meeting alerts, security, anything where latency matters more than batching |
 
 ```toml
 [spans]

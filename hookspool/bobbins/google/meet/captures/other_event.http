@@ -1,0 +1,9 @@
+# capture: a Meet event type the bobbin does not handle (a recording file): verified, not queued
+# now: 1800000000
+# expect: ignored
+POST /hooks/meet?token=test-meet-push-token-PAYLOAD-SENTINEL-7f3a HTTP/1.1
+Content-Type: application/json
+User-Agent: APIs-Google; (+https://developers.google.com/webmasters/APIs-Google.html)
+Content-Length: 614
+
+{"message":{"attributes":{"ce-datacontenttype":"application/json","ce-id":"test-event-4","ce-source":"//workspaceevents.googleapis.com/subscriptions/test-subscription-1","ce-specversion":"1.0","ce-subject":"//meet.googleapis.com/spaces/test-space-1","ce-time":"2026-10-23T10:05:00.000Z","ce-type":"google.workspace.meet.recording.v2.fileGenerated"},"data":"eyJyZWNvcmRpbmciOiB7Im5hbWUiOiAiY29uZmVyZW5jZVJlY29yZHMvdGVzdC1jb25mZXJlbmNlLTEvcmVjb3JkaW5ncy90ZXN0LXJlY29yZGluZy0xIn19","messageId":"m-4","publishTime":"2026-10-23T10:05:00.000Z"},"subscription":"projects/test-project/subscriptions/PAYLOAD-SENTINEL-7f3a"}

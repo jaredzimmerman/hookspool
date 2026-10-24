@@ -169,7 +169,8 @@ def test_env_switches(monkeypatch):
 # ---- presets and windows --------------------------------------------------------------------------
 def test_span_presets():
     assert {k: (v["quiet_s"], v["max_s"]) for k, v in C.DEFAULTS["spans"].items()} == {
-        "burst": (120, 600), "mail": (30, 120), "calendar": (45, 180), "sync": (60, 300), "immediate": (0, 0)}
+        "burst": (120, 600), "mail": (30, 120), "calendar": (45, 180), "sync": (60, 300), "meeting": (60, 900),
+        "immediate": (0, 0)}
 
 
 def test_window_inherited_per_field(base):

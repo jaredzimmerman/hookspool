@@ -52,7 +52,8 @@ DEFAULTS: dict = {
         "mail": {"quiet_s": 30, "max_s": 120},         # mail, boards, tickets
         "calendar": {"quiet_s": 45, "max_s": 180},     # calendar edits
         "sync": {"quiet_s": 60, "max_s": 300},         # bank and data syncs
-        "immediate": {"quiet_s": 0, "max_s": 0},       # meetings, security
+        "meeting": {"quiet_s": 60, "max_s": 900},      # a call's start, joins, leaves and end
+        "immediate": {"quiet_s": 0, "max_s": 0},       # meeting alerts, security
     },
     "sources": {},
     "routes": [],
