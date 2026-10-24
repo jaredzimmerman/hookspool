@@ -135,8 +135,8 @@ google.gmail` lists the packs that ship with the installed copy.
 
 | pack | rules | what it extracts | status |
 |---|---|---|---|
-| `amazon-orders` | `refunded`, `delayed`, `out-for-delivery`, `delivered`, `shipped`, `placed` | `order_id`, `item`, `delivery_window` (or `delivered_on`, `amount`) | unverified |
-| `doordash-orders` | `cancelled`, `status`, `receipt` | `store`, `total`, `order_id` | unverified |
+| `amazon-orders` | `refunded`, `delayed`, `out-for-delivery`, `delivered`, `shipped`, `placed`, `order-update`, `seller-purchase`, `return` | `order_id`, `item`, `delivery_window` (or `delivered_on`, `amount`) | verified |
+| `doordash-orders` | `cancelled`, `status`, `receipt` | `store`, `total`, `order_id` | verified |
 | `resy-reservations` | `cancellation`, `modification`, `waitlist`, `reminder`, `confirmation` | `restaurant`, `date_time`, `party_size`, `confirmation_code` | unverified |
 | `opentable-reservations` | the same five | the same four | unverified |
 | `tock-reservations` | the same five | the same four | unverified |
@@ -224,3 +224,5 @@ Do not paste real mail into a test, a bug report or a log. The bobbin's own logs
 * Rules read the owner's mailbox only. Mail that reaches only the assistant's mailbox is not matched.
 * Mail from a forwarding address or a mailing-list wrapper carries the forwarder's address in `From`; name that address
   in `from`.
+
+**How `verified` was earned (2026-10-24).** Both packs were run read-only over one real mailbox of about 80,000 messages, and only counts and masked subject shapes were looked at. For Amazon, every order, shipping, delivery, digital-order, order-update, seller-purchase and return mail now matches. The Amazon mail that doesn't match isn't order mail: Associates and seller reports, payment statements, customer-service threads and reminders. Pharmacy mail is deliberately left unmatched. For DoorDash, the order receipts match, and the rest is account security (logins, verification codes), support and DashPass. The Resy, OpenTable, Tock, SevenRooms and CourtListener packs stay `unverified`. That mailbox has too little mail from them to check: nine OpenTable messages, three Resy password resets, and none from the others. Run your own measurement before relying on those.

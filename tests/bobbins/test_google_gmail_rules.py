@@ -195,6 +195,16 @@ CASES = [
      "delayed", {"order_id": ORD, "item": "Widget", "delivery_window": "Mar 9"}, "delivery"),
     ("amazon-orders", "returns@amazon.com", "Your refund for order", f"Order # {ORD}\nRefund total: $12.50",  # hookspool-scan: allow: the service's own sender domain
      "refunded", {"order_id": ORD, "amount": "$12.50"}, "receipt"),
+    ("amazon-orders", "auto-confirm@amazon.com", "Your order with Amazon.com", f"Thanks for ordering from Amazon.com! Order # {ORD}",  # hookspool-scan: allow: the service's own sender domain
+     "placed", {"order_id": ORD}, "order"),
+    ("amazon-orders", "digital-no-reply@amazon.com", "Your Amazon.com order (D01-1234567-1234567)", "Thanks for your order.",  # hookspool-scan: allow: the service's own sender domain
+     "placed", {"order_id": "D01-1234567-1234567"}, "order"),
+    ("amazon-orders", "order-update@amazon.com", f"Your Amazon.com order (#{ORD})", "Hello from Amazon.com. We're writing about the order you placed.",  # hookspool-scan: allow: the service's own sender domain
+     "order-update", {"order_id": ORD}, "order"),
+    ("amazon-orders", "order-update@amazon.com", "Your Amazon.com purchase from Example Seller", f"We're writing to confirm your order {ORD}.",  # hookspool-scan: allow: the service's own sender domain
+     "seller-purchase", {"order_id": ORD}, "order"),
+    ("amazon-orders", "order-update@amazon.com", f"Your return of Amazon.com order {ORD}", "The following items will be refunded.",  # hookspool-scan: allow: the service's own sender domain
+     "return", {"order_id": ORD}, "return"),
     ("doordash-orders", DD, "Order Confirmation for Pat from Corner Cafe", "Order number: AB12CD\nTotal: $23.40",
      "receipt", {"store": "Corner Cafe", "order_id": "AB12CD", "total": "$23.40"}, "receipt"),
     ("doordash-orders", DD, "Your order from Corner Cafe is on its way", "Order # AB12CD",
