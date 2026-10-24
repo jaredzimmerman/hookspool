@@ -1,0 +1,9 @@
+# capture: the same delivery with a token that is not the configured one; refused, no batch
+# now: 1800000000
+# expect: unverified
+POST /hooks/alerts?token=wrong-test-secret HTTP/1.1
+Content-Type: application/json
+Idempotency-Key: 6f1d2c4e-8a3b-4f7e-9c2d-0b5a1e7f3c21
+Content-Length: 291
+
+{"payload":{"results":[{"id":1001,"docket_entry_id":2002,"entry_number":12,"description":"MOTION FOR SUMMARY JUDGMENT PAYLOAD-SENTINEL-7f3a","filepath_local":"","date_filed":"2026-10-20"}]},"webhook":{"version":1,"event_type":1,"date_created":"2026-10-01T00:00:00Z","deprecation_date":null}}

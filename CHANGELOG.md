@@ -49,6 +49,11 @@ an interface, and the entry will say so.
 - The `finnhub.earnings` bobbin (`hookspool/bobbins/finnhub/earnings/`): Finnhub earnings webhook, a fixed
   shared-secret template (`X-Finnhub-Secret`) keyed by `data.0.symbol`, deduplicated by body SHA-256, span `immediate`.
   Finnhub's webhook documentation is thin; the README says which parts are assumed and must be checked on a real delivery.
+- The `courtlistener.alerts` bobbin (`hookspool/bobbins/courtlistener/alerts/`): CourtListener alert webhooks (docket,
+  search, RECAP fetch, old docket alerts report and pray-and-pay events). CourtListener does not sign its deliveries, so
+  a fixed `url-token` template checks a secret token in the endpoint URL; `Idempotency-Key` is the dedup header and the
+  event type (`webhook.event_type`) is the batch key. README.md states that webhooks are agreement-based for
+  organizations and that alerts count against the membership allowance.
 
 ## [0.2.0] - 2026-10-23
 

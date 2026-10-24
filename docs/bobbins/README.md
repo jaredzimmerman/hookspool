@@ -21,6 +21,7 @@ same directory is the step-by-step setup for a person, and `AGENTS.md` is the sa
 |---|---|
 | [`atlassian.trello`](../../hookspool/bobbins/atlassian/trello/README.md) | Trello board webhook: card and board actions, signed with HMAC-SHA1 over the body and the callback URL |
 | [`cloudflare.notifications`](../../hookspool/bobbins/cloudflare/notifications/README.md) | Cloudflare Notifications webhook destination: one JSON POST per alert, the shared secret sent in the cf-webhook-auth header |
+| [`courtlistener.alerts`](../../hookspool/bobbins/courtlistener/alerts/README.md) | CourtListener alert webhooks: docket, search, RECAP fetch and pray-and-pay events, authenticated by a secret token in the callback URL |
 | [`finnhub.earnings`](../../hookspool/bobbins/finnhub/earnings/README.md) | Finnhub earnings webhook: an announcement per watched symbol, verified by a shared secret header |
 | [`github.repo`](../../hookspool/bobbins/github/repo/README.md) | GitHub repository webhook: HMAC-SHA256 over the raw body; pings are acknowledged and not enqueued |
 | [`google.calendar`](../../hookspool/bobbins/google/calendar/README.md) | Google Calendar push (watch channel): conflicts, meeting-brief requests and a change notice for one calendar |

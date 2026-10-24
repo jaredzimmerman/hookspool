@@ -37,7 +37,7 @@ from hookspool.plugin import BadPayload, Request, Response, parse_capture  # noq
 from hookspool.sources import template as T  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXAMPLES = [sourcekit.bobbin_manifest(n) for n in ("github", "kaneo", "trello", "cloudflare", "earnings")]
+EXAMPLES = [sourcekit.bobbin_manifest(n) for n in ("github", "kaneo", "trello", "cloudflare", "earnings", "alerts")]
 TEMPLATE_SECRET = "test-template-secret-" + SENTINEL
 MODULE = "hookspool.sources.template"
 
@@ -120,7 +120,7 @@ def example_kit(path: str) -> Kit:
 
 def test_there_are_examples():
     assert {_name(p) for p in EXAMPLES} == {"github.repo", "kaneo.projects", "atlassian.trello",
-                                              "cloudflare.notifications", "finnhub.earnings"}
+                                              "cloudflare.notifications", "finnhub.earnings", "courtlistener.alerts"}
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=[_name(p) for p in EXAMPLES])

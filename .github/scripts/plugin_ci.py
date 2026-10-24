@@ -546,7 +546,8 @@ SECRET_PATTERNS = _scan.SECRET_PATTERNS          # one set of patterns for this 
 # documentation addresses, and the public API/docs hosts the shipped sources link to.
 HOST_OK_SUFFIX = (".example", ".test", ".invalid", ".localhost", ".example.com", ".example.org", ".example.net",
                   "googleapis.com", "google.com", "github.com", "githubusercontent.com", "zoom.us", "plaid.com",
-                  "atlassian.com", "trello.com", ".cloudflare.com", "finnhub.io", "kaneo.app", "standardwebhooks.com", "python.org", "pypi.org",
+                  "atlassian.com", "trello.com", ".cloudflare.com", "finnhub.io", "kaneo.app", "standardwebhooks.com",
+                  "free.law", "courtlistener.com", "python.org", "pypi.org",
                   "readthedocs.io", "shields.io", "mermaid.js.org",
                   "jaredzimmerman.github.io",                       # this project's documentation site
                   "contributor-covenant.org",                       # CODE_OF_CONDUCT.md's source and FAQ
