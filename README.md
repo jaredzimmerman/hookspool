@@ -73,6 +73,7 @@ installed copy. Setup steps and how to write a new one are in [docs/bobbins/](do
 - [Bobbins](docs/bobbins/README.md): the catalogue, writing one, private bobbins and hooks, review criteria.
 - [Operations](docs/operations/README.md): running it, health and repair, sweeps, drills, upgrading, the CLI reference.
 - [Architecture](docs/architecture/README.md): the design, how it compares with other tools, the FAQ.
+- [Agents](AGENTS.md): a guide for coding agents, both for working on this repository and for operating a deployment.
 - [Changelog](CHANGELOG.md): what changed.
 
 ## Contributing
