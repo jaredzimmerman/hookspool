@@ -9,6 +9,7 @@ state, emits) against a scripted Google (``tests/_googlestub.py``), and the bobb
 """
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import re
@@ -33,6 +34,11 @@ T2 = "2026-10-21T08:00:00.000Z"
 T3 = "2026-10-22T08:00:00.000Z"
 T4 = "2026-10-23T08:00:00.000Z"
 T5 = "2026-10-24T08:00:00.000Z"
+def back(ts):
+    """``ts`` minus the poller's margin, as the poller writes ``updatedMin``."""
+    return tp.stamp(tp.moment(ts) - tp.MARGIN)
+
+
 TICK = {"tick": 1_800_000_000, "instance": "tasks"}
 
 
@@ -101,7 +107,7 @@ def test_the_first_pass_records_where_each_list_stands_and_reports_nothing(make,
     rig = make()
     assert tick(rig) == []
     st = rig.get_state(tp.STATE)["lists"]
-    assert st == {"alpha": {"updated": T4, "ids": ["a3"]}, "beta": {"updated": "", "ids": []}}
+    assert st == {"alpha": {"updated": T4, "seen": {"a3": T4}}, "beta": {"updated": "", "seen": {}}}
     first = list_calls(google, "alpha")[0]["query"]
     assert "updatedMin" not in first, "the bootstrap reads the whole list"
     assert (first["showCompleted"], first["showHidden"], first["showDeleted"]) == ("true", "true", "true")
@@ -132,20 +138,20 @@ def test_a_later_pass_reports_what_changed_oldest_first_then_one_summary(make, g
 def test_a_pass_with_no_changes_says_nothing_and_asks_from_the_stored_time(make, google):
     rig = seeded(make, google, alpha=[task("a1", T3)])
     assert tick(rig, bid="2") == []
-    assert list_calls(google, "alpha")[-1]["query"]["updatedMin"] == T3
-    assert rig.get_state(tp.STATE)["lists"]["alpha"] == {"updated": T3, "ids": ["a1"]}
+    assert list_calls(google, "alpha")[-1]["query"]["updatedMin"] == back(T3)
+    assert rig.get_state(tp.STATE)["lists"]["alpha"] == {"updated": T3, "seen": {"a1": T3}}
 
 
 def test_updated_min_follows_the_newest_update_and_a_task_is_never_reported_twice(make, google):
     rig = seeded(make, google, alpha=[task("a1", T2)])
     google.tasks["alpha"].append(task("a2", T3))
     assert ids(tick(rig, bid="2")) == ["a2"]
-    assert rig.get_state(tp.STATE)["lists"]["alpha"] == {"updated": T3, "ids": ["a2"]}
+    assert rig.get_state(tp.STATE)["lists"]["alpha"] == {"updated": T3, "seen": {"a2": T3}}
     # the filter is inclusive: a2 comes back at the stored instant and is skipped; a task that shares the instant is new
     google.tasks["alpha"].append(task("a3", T3))
     assert ids(tick(rig, bid="3")) == ["a3"]
-    assert list_calls(google, "alpha")[-1]["query"]["updatedMin"] == T3
-    assert rig.get_state(tp.STATE)["lists"]["alpha"] == {"updated": T3, "ids": ["a2", "a3"]}
+    assert list_calls(google, "alpha")[-1]["query"]["updatedMin"] == back(T3)
+    assert rig.get_state(tp.STATE)["lists"]["alpha"] == {"updated": T3, "seen": {"a2": T3, "a3": T3}}
     assert tick(rig, bid="4") == [], "both are remembered at that instant"
     google.tasks["alpha"][0] = task("a1", T4, status="completed")             # an old task edited again
     out = tick(rig, bid="5")
@@ -215,7 +221,98 @@ def test_a_list_is_read_across_pages_and_the_cursor_is_the_newest_of_all_of_them
     assert ids(out) == ["n1", "n0", "n4", "n3", "n2"] and out[-1]["changed_count"] == 5
     pages = [r["query"].get("pageToken") for r in list_calls(google, "alpha")[-3:]]
     assert pages == [None, "p2", "p4"]
-    assert rig.get_state(tp.STATE)["lists"]["alpha"] == {"updated": T5, "ids": ["n2"]}
+    assert rig.get_state(tp.STATE)["lists"]["alpha"] == {"updated": T5, "seen": {"n2": T5}}
+
+
+# ---- the overlap -----------------------------------------------------------------------------------------
+def test_a_write_that_becomes_visible_late_inside_the_margin_is_still_reported_once(make, google):
+    rig = seeded(make, google, alpha=[task("a1", T2)])
+    google.tasks["alpha"].append(task("a2", T3))
+    assert ids(tick(rig, bid="2")) == ["a2"]
+    late = "2026-10-22T07:59:30.000Z"                           # stamped 30 s before a2, visible only after it
+    google.tasks["alpha"].append(task("a3", late))
+    out = tick(rig, bid="3")
+    assert ids(out) == ["a3"] and out[-1]["changed_count"] == 1
+    assert list_calls(google, "alpha")[-1]["query"]["updatedMin"] == back(T3)
+    assert rig.get_state(tp.STATE)["lists"]["alpha"] == {"updated": T3, "seen": {"a2": T3, "a3": late}}
+    assert tick(rig, bid="4") == [], "reported once"
+    google.tasks["alpha"].append(task("a4", "2026-10-22T07:50:00.000Z"))   # later than the margin: out of reach
+    assert tick(rig, bid="5") == []
+
+
+def test_a_task_edited_again_inside_the_margin_is_reported_again(make, google):
+    rig = seeded(make, google, alpha=[task("a1", T3)])
+    google.tasks["alpha"][0] = task("a1", "2026-10-22T08:00:20.000Z", status="completed")
+    out = tick(rig, bid="2")
+    assert ids(out) == ["a1"] and out[0]["status"] == "completed"
+    assert tick(rig, bid="3") == []
+
+
+def test_tasks_older_than_the_margin_leave_the_kept_map(make, google):
+    rig = seeded(make, google, alpha=[task("a1", T3)])
+    google.tasks["alpha"].append(task("a2", "2026-10-22T08:00:30.000Z"))
+    google.tasks["alpha"].append(task("a3", "2026-10-22T08:02:00.000Z"))
+    assert ids(tick(rig, bid="2")) == ["a2", "a3"]
+    assert rig.get_state(tp.STATE)["lists"]["alpha"] == {"updated": "2026-10-22T08:02:00.000Z",
+                                                          "seen": {"a3": "2026-10-22T08:02:00.000Z"}}
+
+
+def test_a_state_written_by_the_first_draft_with_ids_is_still_read(make, google):
+    setup_stub(google, alpha=[task("a1", T2)])
+    rig = make()
+    rig.seed_state(tp.STATE, {"lists": {"alpha": {"updated": T2, "ids": ["a1"]}}})
+    assert tick(rig) == []
+    google.tasks["alpha"].append(task("a2", T3))
+    assert ids(tick(rig, bid="2")) == ["a2"]
+
+
+# ---- the page cap ----------------------------------------------------------------------------------------
+def cap_pages(monkeypatch, pages):
+    real = G.tasks_changes
+    monkeypatch.setattr(G, "tasks_changes", lambda *a, **k: real(*a, **dict(k, max_pages=pages)))
+    return real
+
+
+def test_a_read_cut_short_reports_what_it_read_and_leaves_the_cursor_where_it_was(make, google, monkeypatch):
+    google.tasks_page_size = 2
+    rig = seeded(make, google, alpha=[task("a0", T1)])
+    google.tasks["alpha"] += [task("x1", T3), task("x2", T4), task("x3", T5)]
+    real = cap_pages(monkeypatch, 1)                           # the pass sees a0 and x1 only
+    rc, emits, err = rig.run(TICK, bid="2")
+    assert rc == 0 and "capped=1" in err
+    assert ids([e["payload"] for e in emits]) == ["x1"]
+    st = rig.get_state(tp.STATE)["lists"]["alpha"]
+    assert st["updated"] == T1, "a partial, unordered read proves nothing about older tasks"
+    assert st["seen"] == {"a0": T1, "x1": T3}
+    monkeypatch.setattr(G, "tasks_changes", real)              # the cap is gone: the rest follows, x1 not again
+    out = tick(rig, bid="3")
+    assert ids(out) == ["x2", "x3"]
+    assert rig.get_state(tp.STATE)["lists"]["alpha"]["updated"] == T5
+
+
+def test_a_list_too_big_to_read_whole_starts_from_the_tick_time_and_reports_no_history(make, google, monkeypatch):
+    google.tasks_page_size = 2
+    setup_stub(google, alpha=[task("a1", T2), task("a2", T3), task("a3", T4)])
+    now = calendar.timegm((2026, 10, 25, 0, 0, 0))
+    rig = make()
+    real = cap_pages(monkeypatch, 1)
+    assert tick(rig, clock=lambda: now) == []
+    assert rig.get_state(tp.STATE)["lists"]["alpha"] == {"updated": "2026-10-25T00:00:00.000Z", "seen": {}}
+    monkeypatch.setattr(G, "tasks_changes", real)
+    google.tasks["alpha"].append(task("a4", "2026-10-25T00:00:30.000Z"))
+    out = tick(rig, bid="2", clock=lambda: now + 300)
+    assert ids(out) == ["a4"], "only what changed after the first pass"
+    assert list_calls(google, "alpha")[-1]["query"]["updatedMin"] == "2026-10-24T23:59:00.000Z"
+
+
+# ---- which lists ------------------------------------------------------------------------------------------
+def test_a_tasklists_name_that_matches_no_list_is_counted_in_the_log(make, google):
+    setup_stub(google, alpha=[task("a1", T2)])
+    rig = make(tasklists=["alpha", "Typo", "other"])
+    rc, emits, err = rig.run(TICK)
+    assert rc == 0 and "unmatched=2" in err and "lists=1" in err
+    rc, emits, err = make(tasklists=["alpha"]).run(TICK, bid="2")
+    assert "unmatched" not in err
 
 
 class ScriptedClient:
@@ -294,7 +391,7 @@ def test_a_list_added_later_is_recorded_not_reported_and_then_followed(make, goo
     google.tasklists.append(lst("beta", "Beta"))
     google.tasks["beta"] = [task("b1", T3)]
     assert tick(rig, bid="2") == []
-    assert rig.get_state(tp.STATE)["lists"]["beta"] == {"updated": T3, "ids": ["b1"]}
+    assert rig.get_state(tp.STATE)["lists"]["beta"] == {"updated": T3, "seen": {"b1": T3}}
     google.tasks["beta"].append(task("b2", T4))
     assert ids(tick(rig, bid="3")) == ["b2"]
 

@@ -16,7 +16,7 @@ read. No model runs here.
 ```
 dispatcher clock -> tick -> poller.py
    tasklists.list           the account's task lists, filtered by the tasklists setting
-   tasks.list per list      updatedMin = the newest update seen in that list; completed, hidden and deleted included
+   tasks.list per list      updatedMin = the newest update seen, minus a minute; completed, hidden, deleted included
    task-changed per task, then one tasks-synced for the pass
 ```
 
@@ -27,11 +27,17 @@ The Tasks API calls (listing the lists, paging a list's changes, the "list is go
 
 1. Lists the account's task lists and keeps those named by `tasklists` (an id, or a title ignoring case). With
    the setting empty, every list is followed.
-2. A list the state has not seen before is only recorded: its newest update time and the tasks at that instant
-   are stored and nothing is reported. So the first pass, and any list added later, emits no history.
-3. For a list already recorded, reads the tasks modified since its stored time (`updatedMin`, with `showCompleted`,
-   `showHidden` and `showDeleted` on, because a task finished in Google's own apps is hidden and a deleted one only
-   shows when asked for). A task already reported at the stored instant is skipped, so nothing is reported twice.
+2. A list the state has not seen before is only recorded: its newest update time and the tasks within a minute
+   of it are stored and nothing is reported. So the first pass, and any list added later, emits no history. A
+   list too big to read in one pass (over 10,000 retained tasks) is recorded as standing at the tick time
+   instead, because the API returns pages in no fixed order and a partial read says nothing about where the list
+   stands.
+3. For a list already recorded, reads the tasks modified since its stored time less a 60-second margin
+   (`updatedMin`, with `showCompleted`, `showHidden` and `showDeleted` on, because a task finished in Google's own
+   apps is hidden and a deleted one only shows when asked for). The margin picks up a write that was stamped a
+   moment before another one but became visible after it. A task already reported with the same update time is
+   skipped, so nothing is reported twice; a task edited again is reported again. If the read hits the page cap,
+   the tasks it did read are reported and the stored time stays where it was.
 4. Emits one `task-changed` per changed task, oldest first, then one `tasks-synced` if anything changed.
 
 A pass with no changes emits nothing. It costs one call for the list of lists and one per followed list.
@@ -76,7 +82,7 @@ every_s = 600
 ## State
 
 Under the instance's state directory (default `<home>/bobbins/<instance>/`): `tasks_poll_state.json`, one entry per
-followed list `{updated, ids}`. The runtime writes state only after its journal holds the result: a retried tick
+followed list `{updated, seen}`, where `seen` maps the tasks updated within the margin to their update time. The runtime writes state only after its journal holds the result: a retried tick
 reports the same items and advances the cursor once. To start again from "now", stop the dispatcher's use of the
 instance, delete that file and let the next tick record where each list stands.
 
@@ -84,8 +90,15 @@ instance, delete that file and let the next tick record where each list stands.
 
 * A change is reported up to `every_s` seconds late, plus the jitter. A webhook would be faster, but Google Tasks
   has no push to offer.
-* A pass reads at most 100 pages of 100 tasks from each list. Pages arrive in no useful order, so if a single list
-  changes by more than that in one window the surplus can be missed. Normal use is far below it.
+* A pass reads at most 100 pages of 100 tasks from each list. Pages arrive in no useful order, so when a read is
+  cut short the stored time does not move and the next pass reads the same window again: tasks beyond the cap are
+  not reported until the window shrinks (the log shows `capped=N`). Normal use is far below it.
+* A task whose update time is stamped more than 60 seconds before the newest one already seen, and only becomes
+  visible after that one was read, is never reported. Two clients writing at nearly the same moment fall well
+  inside the margin.
+* A list with more than 10,000 retained tasks (completed, hidden and deleted ones pile up) starts from the tick
+  time, so tasks changed in the minute before the first pass can be reported once.
+* A name in `tasklists` that matches no list is ignored; the log line shows `unmatched=N`, so a typo is visible.
 * A task list added after the bobbin started is recorded on its first sighting; tasks created in it before that
   moment are not reported.
 * Tasks assigned to the account from Docs or Chat Spaces are not returned by the API unless asked for, and are not
