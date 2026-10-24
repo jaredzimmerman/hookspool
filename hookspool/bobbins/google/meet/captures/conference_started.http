@@ -1,0 +1,9 @@
+# capture: a call started, push token in the URL
+# now: 1800000000
+# expect: queued
+POST /hooks/meet?token=test-meet-push-token-PAYLOAD-SENTINEL-7f3a HTTP/1.1
+Content-Type: application/json
+User-Agent: APIs-Google; (+https://developers.google.com/webmasters/APIs-Google.html)
+Content-Length: 581
+
+{"message":{"attributes":{"ce-datacontenttype":"application/json","ce-id":"test-event-1","ce-source":"//workspaceevents.googleapis.com/subscriptions/test-subscription-1","ce-specversion":"1.0","ce-subject":"//meet.googleapis.com/spaces/test-space-1","ce-time":"2026-10-23T10:00:00.000Z","ce-type":"google.workspace.meet.conference.v2.started"},"data":"eyJjb25mZXJlbmNlUmVjb3JkIjogeyJuYW1lIjogImNvbmZlcmVuY2VSZWNvcmRzL3Rlc3QtY29uZmVyZW5jZS0xIn19","messageId":"m-1","publishTime":"2026-10-23T10:00:00.000Z"},"subscription":"projects/test-project/subscriptions/PAYLOAD-SENTINEL-7f3a"}

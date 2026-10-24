@@ -1,0 +1,44 @@
+name = "google.meet"
+version = "1"
+summary = "Google Meet events (Workspace Events API over Cloud Pub/Sub): a call started, and who attended once it ended"
+
+[provider]
+vendor = "Google"
+product = "Meet"
+homepage = "https://workspace.google.com/products/meet/"
+webhook_docs = "https://developers.google.com/workspace/events/guides/events-meet"
+signature_docs = "https://cloud.google.com/pubsub/docs/authenticate-push-subscriptions"
+api_docs = "https://developers.google.com/workspace/meet/api/reference/rest/v2"
+
+[source]
+module = "source"
+span = "meeting"
+sender_retries = true
+expect_every_s = 604800
+proxy = "keep the query string (?token=...); Pub/Sub cannot sign a push, the token in the URL is the authentication"
+
+[secrets.push_token]
+description = "the long random token in the Pub/Sub push endpoint URL (?token=...)"
+
+[secrets.cred]
+description = "OAuth credential JSON (client_id, client_secret, refresh_token, token_uri) of the account that owns the meetings, with the meetings.space.readonly scope"
+processor = true
+
+[settings.api_url]
+description = "Meet REST API base URL (change only to point at a test server)"
+type = "string"
+default = "https://meet.googleapis.com/v2/"
+
+[processor]
+module = "processor"
+timeout_s = 300
+state = true
+
+[outputs.meeting-started]
+description = "the first batch of a call that has not ended: the conference id, the space, the start time and how many joined so far; read from the events, no API call"
+
+[outputs.meeting-ended]
+description = "a call ended: the conference id, the space, start, end, and each participant's display name, kind (signedin, anonymous, phone), user id, first join and last leave"
+
+[outputs.subscription-changed]
+description = "the Workspace Events subscription is about to expire, has expired or was suspended; carries the subscription name, its expiry and the suspension reason"

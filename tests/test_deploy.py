@@ -181,14 +181,15 @@ def test_nginx_never_logs_the_query_string(nginx):
     assert any(d[1:] == ["hookspool"] for d in directives(https_server(nginx), "access_log"))
 
 
-def test_nginx_the_gmail_push_token_reaches_no_nginx_log(nginx):
+@pytest.mark.parametrize("hook", ["/hooks/gmail", "/hooks/meet"])
+def test_nginx_the_pubsub_push_token_reaches_no_nginx_log(nginx, hook):
     # access: the port-80 server must not inherit the default `combined` log (it writes $request)
     (plain,) = [b for b in servers(nginx) if not directives(b, "ssl_certificate")]
     assert directives(plain, "access_log") == [["off"]]
     # error log: nginx writes the request line and upstream URI (query string included) on every limit_req
-    # rejection and every 502; the gmail location keeps those out with its own level
+    # rejection and every 502; each Pub/Sub push location keeps those out with its own level
     srv = https_server(nginx)
-    (gm,) = [b for h, b in find(srv, "location") if h.split()[-1] == "/hooks/gmail"]
+    (gm,) = [b for h, b in find(srv, "location") if h.split()[-1] == hook]
     (el,) = directives(gm, "error_log")
     assert el[1] == "crit" and el[0].startswith("/"), el
     (lv,) = directives(gm, "limit_req_log_level")

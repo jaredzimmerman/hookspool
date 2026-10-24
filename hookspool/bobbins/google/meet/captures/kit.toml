@@ -1,0 +1,30 @@
+# test values for `hookspool bobbin check`
+body_signed = false            # the push token in the URL authenticates the sender, not the body
+
+[secrets]
+push_token = "test-meet-push-token-PAYLOAD-SENTINEL-7f3a"
+cred = '{"client_id": "test-client-id", "client_secret": "test-client-secret", "refresh_token": "test-refresh-token", "token_uri": "https://oauth2.example.com/token"}'
+
+[[http]]                       # one participant's sessions (listed before the participants: the URL is a prefix match)
+method = "GET"
+url = "https://meet.googleapis.com/v2/conferenceRecords/test-conference-1/participants/test-participant-1/participantSessions"
+status = 200
+json = { participantSessions = [{ name = "conferenceRecords/test-conference-1/participants/test-participant-1/participantSessions/test-session-1", startTime = "2026-10-23T10:00:05Z", endTime = "2026-10-23T10:03:50Z" }] }
+
+[[http]]                       # the participants of the conference record
+method = "GET"
+url = "https://meet.googleapis.com/v2/conferenceRecords/test-conference-1/participants"
+status = 200
+json = { participants = [{ name = "conferenceRecords/test-conference-1/participants/test-participant-1", earliestStartTime = "2026-10-23T10:00:05Z", latestEndTime = "2026-10-23T10:03:50Z", signedinUser = { user = "users/100000000000000000001", displayName = "Test Participant" } }] }
+
+[[http]]                       # the conference record
+method = "GET"
+url = "https://meet.googleapis.com/v2/conferenceRecords/test-conference-1"
+status = 200
+json = { name = "conferenceRecords/test-conference-1", startTime = "2026-10-23T10:00:00Z", endTime = "2026-10-23T10:04:00Z", space = "spaces/test-space-1" }
+
+[[http]]                       # the OAuth refresh of the test credential
+method = "POST"
+url = "https://oauth2.example.com/token"
+status = 200
+json = { access_token = "test-access-token", expires_in = 3600 }

@@ -256,7 +256,8 @@ Consequences to know: `immediate` still coalesces whatever arrives within one po
 | `mail` | 30 | 120 | mail, boards, tickets |
 | `calendar` | 45 | 180 | calendar edits (one editing session = one pass) |
 | `sync` | 60 | 300 | bank and data syncs that send several notifications per backfill |
-| `immediate` | 0 | 0 | meetings, security, anything where latency matters more than batching |
+| `meeting` | 60 | 900 | a call's start, joins, leaves and end (a short call = one batch) |
+| `immediate` | 0 | 0 | meeting alerts, security, anything where latency matters more than batching |
 
 **Ordering inside a batch** is `events.id` order, which is commit order. **Ordering across batches** of a group is FIFO (section 6.1).
 
@@ -1096,6 +1097,7 @@ burst = { quiet_s = 120, max_s = 600 }
 mail = { quiet_s = 30, max_s = 120 }
 calendar = { quiet_s = 45, max_s = 180 }
 sync = { quiet_s = 60, max_s = 300 }
+meeting = { quiet_s = 60, max_s = 900 }
 immediate = { quiet_s = 0, max_s = 0 }
 
 [bobbins.github]                       # a bobbin instance (14.3.3); it expands to [sources.github]

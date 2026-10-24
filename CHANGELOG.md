@@ -6,6 +6,20 @@ an interface, and the entry will say so.
 
 ## [Unreleased]
 
+### Added
+
+- The `google.meet` bobbin (`hookspool/bobbins/google/meet/`): Google Meet events from a Google Workspace Events
+  subscription on a user, delivered through a Cloud Pub/Sub push with the token in the URL. The source keys each
+  CloudEvent by its conference record and dedups on `ce-id`. The processor returns `meeting-started` for the first
+  batch of a call (no API call) and `meeting-ended` once the call ends: the conference id, space, start, end, and each
+  participant's display name, kind (`signedin`, `anonymous`, `phone`), user id, first join and last leave, read from
+  Meet REST v2. Subscription lifecycle events become `subscription-changed`. SETUP.md and AGENTS.md cover the topic,
+  the publisher grant, the numeric user id the target needs, and the daily renewal call. No transcripts.
+- A `meeting` span preset (60 s quiet, 900 s max), so a short call's start, joins, leaves and end are one batch.
+- `hookspool.providers.google`: `verify_push` and `push_message` (the Pub/Sub push token and envelope, now shared by
+  `google.gmail` and `google.meet`), and the Meet REST v2 helpers `meet_conference`, `meet_participants`,
+  `meet_sessions`, `meet_participant` and `meet_attendance`.
+
 ## [0.2.0] - 2026-10-23
 
 ### Added
