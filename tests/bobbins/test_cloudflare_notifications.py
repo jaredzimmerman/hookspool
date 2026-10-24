@@ -4,6 +4,8 @@ expands through the real config path, and the setup documents show a configurati
 secret. No payload or secret value reaches the intake's output."""
 from __future__ import annotations
 
+import dataclasses
+import io
 import json
 import os
 import re
@@ -14,13 +16,14 @@ import pytest
 from hookspool import bobbin_loader as PK
 from hookspool import config as C
 from hookspool import intake as I
-from hookspool.plugin import parse_capture
+from hookspool.plugin import RawRequest, parse_capture
+from hookspool.store import Store
 from hookspool.testing.sourcekit import SENTINEL
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 DIR = os.path.join(ROOT, "hookspool", "bobbins", "cloudflare", "notifications")
-TEST_SECRET = "test-template-secret-PAYLOAD-SENTINEL-7f3a"          # the value in captures/kit.toml; no sentinel in a header
+TEST_SECRET = "test-template-secret-PAYLOAD-SENTINEL-7f3a"          # the value in captures/kit.toml; it contains SENTINEL, so the leak checks cover the secret too
 INSTANCE = "cloudflare-alerts"
 FENCE = re.compile(r"```toml\n(.*?)```", re.S)
 
@@ -65,7 +68,8 @@ def test_the_manifest_is_a_template_with_the_cloudflare_rules():
     m = manifest()
     assert m["provider"]["vendor"] == "Cloudflare"
     assert m["provider"]["webhook_docs"].startswith("https://developers.cloudflare.com/")
-    assert m["source"]["sender_retries"] is False and m["source"]["span"] == "burst"
+    assert m["source"]["span"] == "burst"
+    assert "sender_retries" not in m["source"] and "expect_every_s" not in m["source"]
     tmpl = m["source"]["template"]
     assert (tmpl["scheme"], tmpl["header"], tmpl["key"], tmpl["dedup"]) == (
         "shared-secret-header", "cf-webhook-auth", "name", "body_sha256")
@@ -137,3 +141,59 @@ def test_no_document_leaves_a_placeholder_or_a_drafting_fragment(name):
 
 def test_the_bobbin_has_no_python_and_calls_nothing_outside_core():
     assert not [f for f in os.listdir(DIR) if f.endswith(".py")]
+
+
+# ---- negative cases the README promises: each one is checked through the same path as a real delivery -------------
+EVENT = parse_capture(open(os.path.join(DIR, "captures", "event.http"), "rb").read())
+
+
+def variant(*, drop: str | None = None, body: bytes | None = None) -> RawRequest:
+    """The captured alert with one header removed and/or another body, Content-Length kept honest."""
+    payload = EVENT.body if body is None else body
+    headers = [(k, v) for k, v in EVENT.headers
+               if k.lower() not in ("content-length", (drop or "").lower())]
+    headers.append(("Content-Length", str(len(payload))))
+    return dataclasses.replace(EVENT, target=f"/hooks/{INSTANCE}", headers=headers, body=payload)
+
+
+def live(tmp_path):
+    """A real intake over a temporary spool, with the expanded instance: the only path that enqueues."""
+    cfg = expanded({INSTANCE: spec(write_secret(tmp_path / "secret"))})
+    cfg = C.merge(cfg, {"spool": {"home": str(tmp_path / "home")}, "alerts": {"dry": True},
+                        "limits": {"min_free_bytes": 1 << 20}})
+    store = Store(str(tmp_path / "spool.db"), cfg, now=lambda: 1_800_000_000.0)
+    store.ensure_schema()
+    return I.Intake(cfg, store, now=lambda: 1_800_000_000.0)
+
+
+def post(intake: I.Intake, raw: RawRequest):
+    headers = list(raw.headers)
+    return intake.handle(raw.method, raw.target, headers, io.BytesIO(raw.body), "127.0.0.1")
+
+
+def test_an_alert_without_the_secret_header_is_refused_with_401(tmp_path):
+    cfg = expanded({INSTANCE: spec(write_secret(tmp_path / "secret"))})
+    out = I.source_test(cfg, INSTANCE, variant(drop="cf-webhook-auth"))
+    assert out["result"] == "unverified" and out["status"] == 401, out
+    assert SENTINEL not in json.dumps(out, default=str)
+
+
+@pytest.mark.parametrize("body", [
+    b'{"text":"Made-up test alert PAYLOAD-SENTINEL-7f3a"}',     # Cloudflare's Save and Test body: text only, no name
+    b"not json PAYLOAD-SENTINEL-7f3a",                          # a body that is not JSON at all
+], ids=["save-and-test-without-name", "non-json"])
+def test_a_body_that_cannot_be_keyed_is_quarantined_with_202(body, tmp_path):
+    cfg = expanded({INSTANCE: spec(write_secret(tmp_path / "secret"))})
+    out = I.source_test(cfg, INSTANCE, variant(body=body))
+    assert out["result"] == "quarantined" and out["status"] == 202, out
+    assert SENTINEL not in json.dumps(out, default=str)
+
+
+def test_a_redelivered_identical_body_is_a_duplicate_and_a_new_alert_is_queued(tmp_path):
+    intake = live(tmp_path)
+    first = post(intake, variant())
+    assert (first.status, json.loads(first.body)["status"]) == (200, "queued")
+    again = post(intake, variant())
+    assert (again.status, json.loads(again.body)["status"]) == (200, "duplicate")
+    later = variant(body=EVENT.body.replace(b'"ts":1800000000', b'"ts":1800000060'))
+    assert json.loads(post(intake, later).body)["status"] == "queued"

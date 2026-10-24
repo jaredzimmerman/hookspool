@@ -31,7 +31,8 @@ outputs = { "*" = "hermes:cloudflare-alerts" }
 
 ## Reverse proxy
 
-Pass `/hooks/cloudflare-alerts` through with the path unchanged. The callback URL has no query string.
+Pass `/hooks/cloudflare-alerts` through with the path unchanged. The callback URL has no query string. To check it,
+send a request with no secret header to the callback. It must return 401, not 404 or 502.
 
 ## Apply, then create the destination
 
@@ -44,10 +45,19 @@ Pass `/hooks/cloudflare-alerts` through with the path unchanged. The callback UR
 
 ## Verify
 
-1. Save and Test sends a test message. It may have no `name` field, in which case hookspool quarantines it, and
-   the issue it opens is expected. A 401 means the header differs from the secret file.
+1. Save and Test sends a test message. Cloudflare's example body is text only, with no `name` field, so hookspool
+   quarantines it every time. The quarantine is expected, and it does not mean the secret is wrong. A 401 means the
+   header differs from the secret file.
 2. Wait for a real alert, or use one the policy sends, and run `hookspool list --source cloudflare-alerts`.
    It shows one queued event.
+
+## Retries
+
+Cloudflare does not document whether it retries a failed generic webhook delivery. Until that is confirmed, treat
+the sender as non-retrying: an alert that arrives while hookspool is down may be lost. No sweep is defined for this
+source, and `sender_retries` is left unset. Confirm the behaviour with Cloudflare, or test it with a deliberate
+failure, before you rely on the integration. If Cloudflare does not retry, ask the operator for a sweep before
+go-live. `expect_every_s` is not set, so hookspool does not open a silence issue for this source.
 
 ## Roll back
 

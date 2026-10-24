@@ -11,7 +11,8 @@ signature_docs = "https://developers.cloudflare.com/notifications/get-started/co
 
 [source]
 span = "burst"
-sender_retries = false                 # the pages checked do not document redelivery of a failed generic webhook
+# sender_retries is unset: the pages checked do not document redelivery of a failed generic webhook (SETUP.md, Retries).
+# expect_every_s is unset: no liveness expectation for this source.
 
 [source.template]
 scheme = "shared-secret-header"        # Cloudflare sends the secret verbatim, with no signature over the body

@@ -52,10 +52,11 @@ attributes.
 - Cloudflare delivers generic webhooks only to a publicly resolvable IP address, on port 80 or 443. A
   private address or another port needs a Worker or a Cloudflare Tunnel in front of the endpoint.
 - Cloudflare sends from its published IP ranges. If the endpoint sits behind a firewall, allow those ranges.
-- The pages checked do not document redelivery of a failed generic webhook. `sender_retries` is `false`, and
-  no sweep is defined.
-- A test message from **Save and Test** may have no `name` field. Hookspool cannot key it, so it is
-  quarantined. That is expected, and it does not mean the secret is wrong.
+- The pages checked do not document redelivery of a failed generic webhook. `sender_retries` is left unset, no
+  sweep is defined, and `expect_every_s` is not set (SETUP.md, Retries).
+- A test message from **Save and Test** has no `name` field, because Cloudflare's example body is text only.
+  Hookspool cannot key it, so it is quarantined every time. That is expected, and it does not mean the secret
+  is wrong.
 - Only the `cf-webhook-auth` header is checked. The body is not signed, so anyone who has the secret can send
   any alert.
 
