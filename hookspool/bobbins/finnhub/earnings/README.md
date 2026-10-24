@@ -7,21 +7,25 @@ webhook_docs: https://finnhub.io/docs/api/webhook
 # finnhub.earnings
 
 Receives Finnhub's earnings announcement webhook. You create one webhook per ticker through Finnhub's REST API
-(`{"event": "earnings", "symbol": "AAPL"}`), and Finnhub POSTs a JSON body to the instance URL when an announcement
-for that ticker is published. Each accepted delivery is queued with the ticker as its key and is delivered at once
-(span `immediate`: no quiet period, no batching window) to the instance's output.
+(`{"event": "earnings", "symbol": "AAPL"}`). When an announcement for that ticker is published, Finnhub POSTs a JSON
+body to the destination URL set on the Finnhub account (where that is set is unconfirmed; see SETUP.md). Each accepted
+delivery is queued with the ticker as its key and is delivered at once (span `immediate`: no quiet period, no batching
+window) to the instance's output.
 
 ## What the provider documents, and what it does not
 
-The Finnhub webhook page (`https://finnhub.io/docs/api/webhook`) is thin. When this bobbin was written it did not
-describe the signature header, the delivery body, the retry behaviour or the webhook limits per plan, and the
-REST API reference (`https://finnhub.io/docs/api`) does not list the webhook endpoints either. What this bobbin
-assumes, and the one thing to check first:
+The Finnhub webhook page (`https://finnhub.io/docs/api/webhook`) is thin. When this bobbin was written, the signature
+header, the delivery body, the retry behaviour and the webhook limits per plan could not be confirmed from that page.
+The REST API reference (`https://finnhub.io/docs/api`) could not be confirmed to list the webhook endpoints either.
+Finnhub's announcement of the feature points to the API reference for the details. What this bobbin assumes, and the
+one thing to check first:
 
 - **Verification.** The sender puts a static secret in the `X-Finnhub-Secret` header. The bobbin compares the header
-  with the `secret` value, in constant time, and nothing else. The header name comes from third-party integrations
-  and from Finnhub's announcement of the feature (<https://github.com/finnhubio/Finnhub-API/issues/94>), not from the
-  Finnhub page itself.
+  with the `secret` value, in constant time, and nothing else. The header name is not in Finnhub's announcement (issue
+  94 names no header; it points to <https://finnhub.io/docs/api#webhook>). It comes from third-party integrations and
+  is unconfirmed.
+- **Destination and secret.** The destination URL and the secret are not in the `webhook/add` body, which carries only
+  `event` and `symbol`. Where the account sets them is unconfirmed. SETUP.md has the step to confirm it first.
 - **Payload shape.** Not documented on the pages above. The key is read from `data.0.symbol`, following the envelope
   Finnhub's trade webhook uses (`{"data": [...], "type": "..."}`). Confirm this against the first real earnings
   delivery before relying on it. If the ticker sits somewhere else, the key path in `bobbin.toml` is the one line
@@ -58,8 +62,8 @@ None. A fixed template: the scheme, header, key and dedup are the bobbin's own.
 - `captures/event.http`: an earnings-shaped delivery signed with the test secret. Expected: queued.
 - `captures/bad_signature.http`: the same shape with the wrong secret header. Expected: refused (unverified).
 
-The captures use made-up values and the test secret `test-template-secret-PAYLOAD-SENTINEL-7f3a`. They are not real deliveries, so the
-first real delivery should replace one of them before this bobbin is treated as verified.
+The captures use made-up values and the test secret `test-template-secret-PAYLOAD-SENTINEL-7f3a`. They are not real
+deliveries, so the first real delivery should replace one of them before this bobbin is treated as verified.
 
 ## Limits
 
