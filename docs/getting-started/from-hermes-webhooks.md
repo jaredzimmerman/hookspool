@@ -13,8 +13,9 @@ fronts the gateway, and the secret each sender uses. Do one route at a time; the
 
 ## 1. Install next to the gateway
 
-Follow [Running hookspool](../operations/running.md) for the service units. In `config.toml`, tell hookspool where the
-gateway is:
+Follow [Running hookspool](../operations/running.md) for the service units, but skip its step 5 advice to remove the
+routes' `events` filters and `coalesce` blocks: the routes here are unwrapped, `check` does not ask for it, and without
+the filter every event type wakes the agent. In `config.toml`, tell hookspool where the gateway is:
 
 ```toml
 [hermes]
@@ -31,8 +32,11 @@ subscriptions_path = "/home/agent/.hermes/webhook_subscriptions.json"
   delivered to `/p/<profile>/webhooks/<route>`, the path the gateway expects.
 
 The service user must be able to read that file (`sudo -u hookspool -- test -r /home/agent/.hermes/webhook_subscriptions.json`),
-or the units must run as the gateway user: [Running hookspool](../operations/running.md), step 2. Nothing is moved yet: the
-gateway still takes every request, because no sender or proxy points at hookspool.
+or the units must run as the gateway user: [Running hookspool](../operations/running.md), step 2. To grant read access,
+put `hookspool` in the gateway user's group, give the file group read (`chmod g+r`) and each directory above it group
+search (`chmod g+x`). The gateway may write the file anew when a route changes (`hermes webhook` edits), and a new file
+can come back without group read; run the `test -r` again after any such edit, or run the units as the gateway user
+instead. Nothing is moved yet: the gateway still takes every request, because no sender or proxy points at hookspool.
 
 Run `hookspool` commands as the service user (`sudo -u hookspool -- env HOOKSPOOL_HOME=/var/lib/hookspool hookspool check`, as
 in Running), not as root. A `check` run as root passes on files the service user cannot read, and the first real delivery
@@ -240,7 +244,13 @@ argv = ["/usr/local/bin/run-job", "ci-check"]
 ```
 
 Local bridges and scripts. Anything on the host that posted to the gateway's `/webhooks/<route>` should now go through
-the spool, so its events get the same retries. A script on the same host can use `hookspool enqueue --source github-ci --key example/widgets --file payload.json`, which needs no signature. A sender off the host posts a signed request to
+the spool, so its events get the same retries. A script on the same host can use
+`hookspool enqueue --source github-ci --key example/widgets --event-type workflow_run --dedup-id <delivery id> --file payload.json`,
+which needs no signature. Pass `--event-type`: without it the
+event has no type, the unwrapped delivery carries no `X-GitHub-Event`, and the route's `events` filter makes the gateway
+answer `ignored`, which counts as delivered, so the wake-up is lost with no notice. Later, after coalescing, an untyped
+event is missing from `event_types` and `summary`, and outputs keyed on event type never match it. Pass `--dedup-id`
+when the bridge has an id for the event, so a repeat is dropped instead of delivered twice. A sender off the host posts a signed request to
 `/hooks/github-ci` like any other.
 
 Once every route has moved and run clean, the old proxy locations are gone and only hookspool posts to the gateway.

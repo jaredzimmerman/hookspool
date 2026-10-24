@@ -175,7 +175,7 @@ cannot). If a check fails, fix that step before the next.
 5. **Outward:** the person points the route's proxy location at `/hooks/<instance>`. **Check:** a real delivery appears
    in `hookspool list --source <instance>`; if not, roll back at once.
 6. For a sender that does not retry (GitHub), install its redelivery sweep ([Sweeps](docs/operations/sweeps.md)). **Check:**
-   one `--dry-run` lists deliveries and refuses none. Bodies over the source `max_body_bytes` now get 413 at the intake.
+   one `--dry-run` exits 0 and prints its summary line (exit 3: `gh` failed). Bodies over the source `max_body_bytes` now get 413 at the intake.
 
 **Rollback:** the person points the proxy location back at the gateway. Keep the instance and its destination table until
 `hookspool list --source <instance>` shows nothing open, sealed, leased or retry; only then remove them, then

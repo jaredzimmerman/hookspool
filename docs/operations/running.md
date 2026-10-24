@@ -37,7 +37,8 @@ Order matters only where noted. Nothing here touches the gateway.
    ```
    `check` reads `hermes.subscriptions_path` and **fails on any `events` filter or `coalesce` block on a Hermes
    route that hookspool feeds**: hookspool coalesces, and a filter on the Hermes side would silently drop part of a
-   batch. Remove them from the subscriptions first (keep the old file as the rollback for this step).
+   batch. Remove them from the subscriptions first (keep the old file as the rollback for this step). A route whose
+   `hermes:` destination has `unwrap = true` is exempt: it gets the original events one by one, so keep its filter.
 6. **Units.** Copy both `.service` files to `/etc/systemd/system/`. Every `state_dir` of a `script:` destination
    in the config that is outside the home must appear in the dispatch unit's `ReadWritePaths`; so must any other
    directory a script writes.
