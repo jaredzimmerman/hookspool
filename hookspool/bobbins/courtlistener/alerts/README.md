@@ -8,7 +8,7 @@ webhook_docs: https://wiki.free.law/c/courtlistener/help/api/webhooks/about
 
 CourtListener, the public court-records search run by Free Law Project, POSTs a JSON event to your server when
 something you subscribed to changes: a docket gets a new filing, a saved search finds a new match, a RECAP fetch
-finishes, a docket alert report is ready, or a pray-and-pay request is granted. This bobbin takes those POSTs,
+finishes, a docket alert report is ready, or a pray-and-pay request is granted and its document is available. This bobbin takes those POSTs,
 checks the token in the URL, and queues each event. Events of one type coalesce into one batch.
 
 ## Read this first
@@ -31,7 +31,7 @@ checks the token in the URL, and queues each event. Events of one type coalesce 
 | 2 | search alert | `payload.results`: the new matches for a saved search |
 | 3 | RECAP fetch | the outcome of a RECAP fetch task |
 | 4 | old docket alerts report | the docket alerts that have expired |
-| 5 | pray-and-pay | a document that was requested and is now available |
+| 5 | pray-and-pay | a pray-and-pay request is granted and its document is now available |
 
 The event type is the `webhook.event_type` field in the body. It is both the batch key and the value the outputs see.
 
@@ -50,7 +50,11 @@ which is optional but recommended.
 ## Retries
 
 CourtListener retries a delivery that does not get a 2xx answer, up to seven times over about 54 hours, so the
-bobbin declares `sender_retries = true` and needs no sweep.
+bobbin declares `sender_retries = true`.
+
+The retry window does not cover every outage. Events older than the window are not redelivered. CourtListener also
+disables an endpoint after eight failed deliveries and stops sending it new and undelivered events, so after an
+outage, check in the webhooks panel that the endpoint is still enabled.
 
 ## Secrets
 

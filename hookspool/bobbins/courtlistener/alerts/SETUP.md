@@ -37,13 +37,17 @@ part, so nginx passes the query string on unchanged.
 
 ```nginx
 location = /hooks/alerts {
-    # The token is in the query string: keep nginx's error log for this location at crit so it stays out of the log.
+    # The token is in the query string. Log this location with the path-only `hookspool` log_format from
+    # deploy/nginx.example.conf: the default combined format writes $request, query string included. Do not add this
+    # block to a server that logs in the combined format. Keep the error log for this location at crit so the token
+    # stays out of it too.
+    access_log /var/log/nginx/hookspool.access.log hookspool;
     error_log /var/log/nginx/hookspool.alerts.error.log crit;
 
-    # Recommended: CourtListener sends only from its two fixed addresses. Replace the placeholders with the
-    # addresses from the provider's webhook security section; keep the real values in deploy/local/ (git-ignored).
-    allow <COURTLISTENER_IP_1>;
-    allow <COURTLISTENER_IP_2>;
+    # Recommended: CourtListener sends only from its two documented addresses (the Webhook Security section of the
+    # provider's webhooks guide).
+    allow 34.210.230.218;  # hookspool-scan: allow: documented provider addresses
+    allow 54.189.59.91;    # hookspool-scan: allow: documented provider addresses
     deny all;
 
     proxy_pass http://hookspool_intake;

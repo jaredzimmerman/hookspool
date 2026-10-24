@@ -13,7 +13,7 @@ The same procedure as SETUP.md, as steps. Read README.md, "Read this first", bef
 - A CourtListener account that may create webhook endpoints. Webhooks are an agreement-based feature for organizations:
   ask the human to confirm the agreement is in place before step 3.
 - The token `secret`, which the human chooses and writes to `/etc/hookspool/secrets/alerts_secret` (mode 0600, owned by
-  the hookspool user). Never pass its value to the agent.
+  the hookspool user). The agent never reads, prints or types its value; step 3 is the human's.
 - The public HTTPS host that serves hookspool, for the endpoint URL (`<HOOKS_HOST>` below).
 
 ## Steps
@@ -32,15 +32,17 @@ The same procedure as SETUP.md, as steps. Read README.md, "Read this first", bef
    table). If `hookspool check` fails: fix what it names, then run both again.
 2. **Forward the path at the reverse proxy** (host change: ask the human first). Goal: `/hooks/alerts` reaches the intake with
    its query string, and only CourtListener's two addresses reach it. Add the `location = /hooks/alerts` block from SETUP.md
-   to the nginx site, with its `allow` lines (replace the two `<COURTLISTENER_IP_n>` placeholders with the addresses from the
-   provider's webhook security section first), then run `nginx -t` and `systemctl reload nginx`. If the host sits behind
-   another proxy, drop the `allow` lines.
+   to the nginx site, with its `allow` lines for CourtListener's two documented addresses, 34.210.230.218 and 54.189.59.91
+   (the Webhook Security section of the provider's guide; check them there first). Use the access log format and the
+   `error_log` line from that block, so the token stays out of the logs. Then run `nginx -t` and `systemctl reload nginx`.
+   If the host sits behind another proxy, drop the `allow` lines.
    Check: `nginx -t` exits 0 and the reload succeeds. If not: report the error and stop.
-3. **Register the webhook at CourtListener** (`outward`: ask the human first). Goal: the provider sends to
-   `https://<HOOKS_HOST>/hooks/alerts?token=<the secret>`, one endpoint per event type (1 to 5) that the human needs, all with
-   that URL. Do this in the provider's Webhooks panel, following SETUP.md, "Register the webhook at the provider". Leave
-   "enable" unchecked until steps 1 and 2 are live.
-   Check: the panel lists each endpoint with the right event type and URL. If not: report what the panel shows.
+3. **Register the webhook at CourtListener** (`outward`, and a human step: the human enters the URL and the token, not the
+   agent). Goal: the provider sends to `https://<HOOKS_HOST>/hooks/alerts?token=<the secret>`, one endpoint per event type
+   (1 to 5) that the human needs, all with that URL. The human does this in the provider's Webhooks panel, following
+   SETUP.md, "Register the webhook at the provider", and leaves "enable" unchecked until steps 1 and 2 are live.
+   Check: the human reports each endpoint's event type and that its host and path are `/hooks/alerts`. The agent does not
+   need the token value to check this. If not: report what the panel shows, without the token.
 4. **Verify.** Goal: one delivery arrives. Ask the human to send a test event from the endpoint's "Test" button, then run
    `hookspool list --source alerts`.
    Check: a batch is listed. If not: run `hookspool status` and report it.
