@@ -213,3 +213,14 @@ def test_agents_has_a_retries_step_matching_setup_and_consistent_numbering():
     assert f"Repeat steps 1 to {len(steps)}" in text
     assert "retry behaviour is known" in text and "ask the\n   operator for a sweep" in text
     assert "## Retries" in doc("SETUP.md")
+
+
+def test_agents_policy_step_precedes_the_queued_alert_check():
+    text = doc("AGENTS.md")
+    policy = text.index("adds the destination to a notification policy")
+    queued = text.index("an alert is queued")
+    retries = text.index("retry behaviour is known")
+    assert retries < policy < queued
+    assert "before a notification policy uses it (step 6)" in text
+    assert "(step 5)" in text and "6. **Outward, human-performed:** the person adds" in text
+    assert "7. **Goal:** an alert is queued" in text

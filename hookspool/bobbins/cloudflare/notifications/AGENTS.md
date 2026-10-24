@@ -15,8 +15,9 @@ destination in Cloudflare.
 - The instance name (`<INSTANCE>`) and the public HTTPS callback URL for it (`<CALLBACK_URL>`).
 - The webhook secret, written by the person into `/etc/hookspool/secrets/<INSTANCE>` with mode 0600 (step 1).
   The agent does not read it, print it or repeat it.
-- Whether Cloudflare retries a failed delivery. It is not documented; the person confirms it with Cloudflare (step 6).
-- Approval before the destination is created in Cloudflare (step 4) and before a notification policy uses it (step 7).
+- Whether Cloudflare retries a failed delivery. It is not documented; the person confirms it with Cloudflare (step 5).
+- Approval before the proxy check sends a request to the public callback (step 3), before the destination is created
+  in Cloudflare (step 4) and before a notification policy uses it (step 6).
 
 ## Steps
 
@@ -44,15 +45,15 @@ destination in Cloudflare.
 4. **Outward, human-performed:** the person creates the webhook destination in the Cloudflare dashboard, under
    Alerts, then Destinations, in the Webhooks card, with the URL `<CALLBACK_URL>` and the secret from step 1.
    The agent does not run this. Ask the person to confirm when it is done.
-5. **Goal:** an alert is queued. Ask the person to wait for an alert, or to trigger one the policy sends, then run
-   `hookspool list --source <INSTANCE>`. **Check:** one queued event. **If it fails:** a 401 from hookspool means the
-   header differs from the secret file; the person compares the file with the destination's secret. The quarantine
-   that Save and Test causes is expected (SETUP.md, Verify).
-6. **Goal:** Cloudflare's retry behaviour is known. Ask the person to confirm with Cloudflare whether it retries a
+5. **Goal:** Cloudflare's retry behaviour is known. Ask the person to confirm with Cloudflare whether it retries a
    failed generic webhook delivery, or to test it with a deliberate failure, and record the answer in the instance's
    notes. **Check:** the person has given a yes or no. **If it does not retry:** stop before go-live and ask the
    operator for a sweep for Cloudflare Notifications; SETUP.md ("Retries") explains why.
-7. **Outward, human-performed:** the person adds the destination to a notification policy in Alerts. The agent does
+6. **Outward, human-performed:** the person adds the destination to a notification policy in Alerts. The agent does
    not change policies.
+7. **Goal:** an alert is queued, now that a policy uses the destination. Ask the person to wait for an alert, or to
+   trigger one the policy sends, then run `hookspool list --source <INSTANCE>`. **Check:** one queued event. **If it fails:** a 401 from hookspool means the
+   header differs from the secret file; the person compares the file with the destination's secret. The quarantine
+   that Save and Test causes is expected (SETUP.md, Verify).
 8. **Outward, rollback:** remove `[bobbins.<INSTANCE>]`, run `hookspool check` and `hookspool reload`, then ask the
    person to delete the destination in Cloudflare.
