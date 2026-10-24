@@ -161,14 +161,33 @@ Changes made without a mailbox, from the review of the first version:
 
 * `courtlistener-alerts` lists only the alert service's own domain. Its parent organisation's domain also sends
   newsletters and appeals.
-* `amazon-orders.shipped` also matches the long classic subject ("Your ... order of ... has shipped") and a first set of
-  German, French, Spanish and Italian shipping subjects. The foreign-language phrases are guesses from common wording.
-  Check them on real mail before relying on them.
-* Veto words are matched as whole words and never inside quoted text, so a venue called "Perks Tavern" is not hidden,
-  and a quote mark right after a digit is read as an inch mark (24"), not as the start of a quoted item name.
+* `amazon-orders.shipped` also matches the long classic subject ("Your ... order of ... has shipped"). A subject that
+  says an order has not shipped, or a package could not be delivered, is not claimed.
+* Single words that are also common business names (`deals`, `perks`, `rewards`, `membership`, `earnings`,
+  `guarantee`) are no longer vetoes on their own in the built-in packs. A venue, store or item called "Perks Tavern",
+  "Deals Deli" or "Rewards Card Holder" is now claimed when its subject has the transactional shape. Marketing is
+  caught by phrases instead (`exclusive deals`, `member perks`, `rewards program`, `earn rewards`, `membership
+  program`, `refund guarantee` and similar), so the cost is that a promotion worded in some other way, but still
+  built like a confirmation, gets through.
+* Veto words are matched as whole words and never inside quoted text. A quote mark right after a digit is read as an
+  inch mark (24"), not as the start of a quoted item name.
 
-Still open: the other storefront-language subjects (receipts, delivered, out for delivery), the sender domains of each
-reservation platform's transactional mail, and the per-kind recall figures.
+Not done, and why the packs stay `unverified`:
+
+* Nobody has run the packs over a real mailbox, so there are no recall or false-positive figures for any of the seven.
+  The measurement needs read-only access to the mailbox and has to be run by its owner, or with access the owner
+  arranges. Until then the status cannot change.
+* Other-language Amazon storefront subjects are not claimed at all. A first attempt at German, French, Spanish and
+  Italian shipping phrases was removed: it matched "not shipped" and promotions that happen to contain the same words,
+  and the veto words are English. They come back once they are measured on real mail and have their own negation and
+  promotion guards. The same goes for other-language receipts, delivered and out-for-delivery subjects.
+* The reservation packs can still claim marketing mail that has a reservation shape. Their sender entries are each
+  platform's whole domain, so a promotional message from the same domain whose subject names a reservation next to a
+  status word is claimed. Only the real sender domains and subject shapes of each platform's transactional mail will
+  show how to narrow them (by sender address or a stricter shape).
+* The sender domains of each reservation platform's transactional mail are unconfirmed.
+* An item or venue name that contains a phrase from the veto lists (for example "Special Offer Shop") is still
+  vetoed unless it sits inside double quotes. Only quoted names are shielded.
 
 Reservation packs share one layout. Their rules run in this order so that the general words do not swallow the specific
 ones: `cancellation`, `modification`, `waitlist`, `reminder`, `confirmation`. A message whose subject asks you to rate or
@@ -176,7 +195,7 @@ review a visit is skipped.
 
 Every pack rule asks for order or reservation context in the subject (for example a reservation word near a status
 word, or `Delivered:` at the start). With `skip_subject` it vetoes subjects about policies, offers, promotions,
-surveys, sign-ups, points, perks, memberships, earnings and review requests. Marketing and account mail from the same
+surveys, sign-ups, points and rewards programs, member perks, membership offers and review requests. Marketing and account mail from the same
 senders is therefore left for the normal handling. No pack rule vetoes on the body, so a real order or booking whose
 mail ends with "How was your delivery?" or "Recommended for you" is still claimed.
 
