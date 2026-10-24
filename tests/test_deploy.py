@@ -212,6 +212,9 @@ def test_nginx_t(tmp_path):
     body = read("nginx.example.conf").replace("/etc/letsencrypt/live/hooks.example.com/fullchain.pem", str(cert)) \
         .replace("/etc/letsencrypt/live/hooks.example.com/privkey.pem", str(tmp_path / "k.pem")) \
         .replace("/var/log/nginx/hookspool.access.log", str(tmp_path / "a.log"))
+    # every other log path the example names (per-location error logs) goes under tmp_path too: the
+    # runner may not write /var/log/nginx, and nginx -t opens each log file it is given
+    body = re.sub(r"/var/log/nginx/([A-Za-z0-9._-]+)", lambda m: str(tmp_path / m.group(1)), body)
     conf.write_text(f"pid {tmp_path}/n.pid; error_log {tmp_path}/e.log; events {{}}\nhttp {{\n{body}\n}}\n")
     r = subprocess.run(["nginx", "-t", "-c", str(conf)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
