@@ -1,4 +1,7 @@
 # DoorDash order mail (patterns written from the provider's published email conventions; not yet checked against real mail).
+# Every rule needs order or reservation context in the subject (a bare word such as 'updated' or 'booking' is not enough),
+# and skip_subject vetoes policy and marketing subjects. A rule of a built-in pack never claims mail Gmail filed as
+# promotions, social or forums.
 [pack]
 name = "doordash-orders"
 status = "unverified"
@@ -8,8 +11,9 @@ description = "DoorDash order mail: receipts, order status updates and cancellat
 name = "cancelled"
 kind = "cancellation"
 from = ["doordash.com"]  # hookspool-scan: allow: the service's own sender domains
-subject_any = ["cancel", "refund"]
-skip = ["rate your", "how was your", "leave a review"]
+subject_regex = '\byour\b.{0,30}?\border\b.{0,60}\b(?:cancel(?:l?ed)?|refunded)\b|\border\b.{0,20}\b(?:cancel(?:l?ed|lation)|refund(?:ed)?)\b'
+skip = ["rate your", "how was your", "leave a review", "write a review", "recommended for you"]
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "offer", "promo", "coupon", "% off", "deal", "sale", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
 [rules.extract]
 order_id = '(?:order\s*(?:number|id|#)|confirmation)\s*[:#]?\s*([a-z0-9][a-z0-9-]{4,24})\b'
 store = '\bfrom\s+([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on)\b|\s*[!.,:]|\s*$)'
@@ -19,8 +23,9 @@ total = '(?:total|refund(?:ed)? amount)[:\s]*(\$\s?\d[\d,]*\.\d{2})'
 name = "status"
 kind = "delivery"
 from = ["doordash.com"]  # hookspool-scan: allow: the service's own sender domains
-subject_any = ["on its way", "is being prepared", "is ready", "has arrived", "was delivered", "has been delivered", "order update", "dasher"]
-skip = ["rate your", "how was your", "leave a review"]
+subject_regex = '\byour\b.{0,30}?\border\b.{0,60}\b(?:on its way|is being prepared|is ready|has arrived|was delivered|has been delivered|is almost there|is arriving)\b|\byour dasher\b|^order update\b'
+skip = ["rate your", "how was your", "leave a review", "write a review", "recommended for you"]
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "offer", "promo", "coupon", "% off", "deal", "sale", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
 [rules.extract]
 order_id = '(?:order\s*(?:number|id|#)|confirmation)\s*[:#]?\s*([a-z0-9][a-z0-9-]{4,24})\b'
 store = '\bfrom\s+([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on)\b|\s*[!.,:]|\s*$)'
@@ -30,8 +35,9 @@ total = '(?:total|order total)[:\s]*(\$\s?\d[\d,]*\.\d{2})'
 name = "receipt"
 kind = "receipt"
 from = ["doordash.com"]  # hookspool-scan: allow: the service's own sender domains
-subject_any = ["receipt", "order confirmation", "your order from", "thanks for your order", "thank you for your order"]
-skip = ["rate your", "how was your", "leave a review"]
+subject_regex = '\border confirmation\b|\byour\b.{0,30}?\breceipt\b|^your order from\b|\bthank(?:s| you) for your order\b'
+skip = ["rate your", "how was your", "leave a review", "write a review", "recommended for you"]
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "offer", "promo", "coupon", "% off", "deal", "sale", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
 [rules.extract]
 order_id = '(?:order\s*(?:number|id|#)|confirmation)\s*[:#]?\s*([a-z0-9][a-z0-9-]{4,24})\b'
 store = '\bfrom\s+([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on)\b|\s*[!.,:]|\s*$)'

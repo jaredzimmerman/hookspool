@@ -13,7 +13,9 @@ an interface, and the entry will say so.
   with the rule name, its `kind` and the values the rule extracted. Seven built-in packs ship as data files under
   `rule-packs/` (`amazon-orders`, `doordash-orders`, `resy-reservations`, `opentable-reservations`, `tock-reservations`,
   `sevenrooms-reservations`, `courtlistener-alerts`); all are marked `unverified`. `hookspool bobbin show` lists a bobbin's
-  rule packs. The engine is `hookspool/mailrules.py`; the guide is `docs/bobbins/mail-rules.md`.
+  rule packs. The engine is `hookspool/mailrules.py`; the guide is `docs/bobbins/mail-rules.md`. Pack rules ask for order or
+  reservation context in the subject, veto policy and marketing subjects (`skip_subject`) and leave promotions mail alone; rules read the
+  owner's mailbox only; a bad rule drops the rules for that batch with one log line instead of failing it.
 - A pass over an owner's mailbox no longer reads free/busy unless a scheduling request was found.
 
 ## [0.2.0] - 2026-10-23

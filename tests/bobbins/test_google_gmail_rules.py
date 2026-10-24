@@ -15,6 +15,7 @@ from hookspool import mailrules as MR
 from hookspool.bobbins.google.gmail import processor as gm
 
 OWNER = "owner@example.test"
+AGENT = "agent@example.test"
 OUTPUTS = ("scheduling", "agent-mail", "agent-schedule", "mail-matched", "mailbox-changed")
 PACKS = MR.pack_dir(os.path.dirname(gm.__file__))
 ALL_PACKS = ["amazon-orders", "doordash-orders", "resy-reservations", "opentable-reservations", "tock-reservations",
@@ -26,8 +27,8 @@ def rule(**kw):
     return MR.parse_rule(kw, "rules")
 
 
-def first(rules, frm, subject, body=""):
-    return MR.first_match(rules, frm, subject, body)
+def first(rules, frm, subject, body="", bulk=False):
+    return MR.first_match(rules, frm, subject, body, bulk=bulk)
 
 
 # ---- the engine ------------------------------------------------------------------------------------------------
@@ -55,6 +56,19 @@ def test_skip_vetoes_in_the_subject_or_the_body_and_the_next_rule_gets_a_turn():
     assert first(r, "x@example.test", "order survey")[0].name == "b"
     assert first(r, "x@example.test", "order", "please take our SURVEY")[0].name == "b"
     assert first(r[:1], "x@example.test", "order", "please take our survey") is None
+
+
+def test_skip_subject_looks_at_the_subject_only():
+    r = [rule(subject_any=["order"], skip_subject=["privacy"])]
+    assert first(r, "x@example.test", "order privacy notice") is None
+    assert first(r, "x@example.test", "order shipped", "see our Privacy Notice below")      # a footer word is fine
+
+
+def test_builtin_pack_rules_leave_bulk_mail_alone_but_custom_rules_do_not():
+    rules = MR.compile_rules([{"name": "mine", "subject_any": ["order"]}], ["amazon-orders"], PACKS)
+    assert first(rules, "a@amazon.com", 'Ordered: "Widget"', bulk=True)[0].name == "mine"  # hookspool-scan: allow: the service's own sender domain
+    assert first(rules[1:], "a@amazon.com", 'Ordered: "Widget"', bulk=True) is None  # hookspool-scan: allow: the service's own sender domain
+    assert first(rules[1:], "a@amazon.com", 'Ordered: "Widget"')[0].name == "amazon-orders.placed"  # hookspool-scan: allow: the service's own sender domain
 
 
 def test_extract_tries_the_subject_then_the_body_and_leaves_out_what_does_not_match():
@@ -178,6 +192,38 @@ def test_every_rule_of_every_pack_is_covered_by_a_case():
     assert every <= covered, sorted(every - covered)
 
 
+# Marketing, policy and sign-up subjects as the services send them (synthetic): no rule of the pack may claim any.
+JUNK = {
+    "amazon-orders": ["Prime Day has arrived", "Prime Day deals are here: shop now", "Your refund guarantee and more",
+                      "We updated our Privacy Policy", "Your order of savings: 20% off", "Delivered to your door: fast shipping",
+                      "Shipped fast: new arrivals", "Items in your cart are delayed no more", "Special offer on your next order"],
+    "doordash-orders": ["Become a Dasher today", "Earn more as a Dasher", "Refund guarantee with DashPass",
+                        "We updated our Terms of Service", "Your weekly offers", "Your order of the week: 30% off",
+                        "Order now and get a free receipt holder", "Cancel anytime with DashPass"],
+    "courtlistener-alerts": ["Your alert has been created", "Your docket alert was created", "Confirm your email address",
+                             "Welcome to the service", "Your alert has been disabled", "We updated our privacy policy",
+                             "New features: docket tools and more"],
+}
+for _p in ("resy-reservations", "opentable-reservations", "tock-reservations", "sevenrooms-reservations"):
+    JUNK[_p] = ["We updated our Privacy Policy", "We updated our terms of service", "Email confirmation needed",
+                "Confirm your email address", "Openings coming up near you", "Booking platform news",
+                "Join our waitlist for new locations", "Reservations open for next month", "Book your next table: 20% off",
+                "Your account has been updated", "Special offer: your next booking", "Rate your last visit",
+                "Our reservation policy has changed", "Tickets and gift cards on sale", "Take our survey about your booking"]
+SENDER = {"amazon-orders": "store-news@amazon.com", "doordash-orders": DD, "courtlistener-alerts": CL, **RES}  # hookspool-scan: allow: the service's own sender domain
+JUNK_CASES = [(p, s) for p, subs in JUNK.items() for s in subs]
+
+
+@pytest.mark.parametrize("pack,subject", JUNK_CASES)
+def test_marketing_and_policy_mail_of_the_service_is_not_claimed(pack, subject):
+    rules = MR.compile_rules([], [pack], PACKS)
+    assert first(rules, SENDER[pack], subject, "Hello. Order # 123-4567890-1234567. Privacy Notice. Reservation info.") is None
+
+
+def test_every_pack_has_marketing_cases():
+    assert set(JUNK) == set(ALL_PACKS) and all(len(v) >= 6 for v in JUNK.values())
+
+
 @pytest.mark.parametrize("pack,frm,subject", [
     ("amazon-orders", "deals@amazon.com", "Recommended for you: widgets"),  # hookspool-scan: allow: the service's own sender domain
     ("amazon-orders", "someone@example.test", 'Ordered: "Widget"'),                 # not Amazon
@@ -205,10 +251,13 @@ def google():
 
 @pytest.fixture
 def make(tmp_path, google):
-    def build(**over):
-        secrets = {"cred_owner": _bobbinrig.write_cred(tmp_path / "creds" / "owner.json", google.port)}
+    def build(agent=False, hooks=None, **over):
+        names = ("owner", "agent") if agent else ("owner",)
+        secrets = {f"cred_{n}": _bobbinrig.write_cred(tmp_path / "creds" / f"{n}.json", google.port) for n in names}
         settings = {"owner": OWNER, "tz": "UTC", **google.gmail_settings(), **over}
-        return _bobbinrig.Rig(tmp_path, "google.gmail", OUTPUTS, settings, secrets)
+        if agent:
+            settings["agent"] = AGENT
+        return _bobbinrig.Rig(tmp_path, "google.gmail", OUTPUTS, settings, secrets, hooks=hooks)
     return build
 
 
@@ -292,12 +341,93 @@ def test_mail_outside_the_inbox_or_in_spam_is_not_matched(make, google):
     assert [i["event_type"] for i in out] == ["mailbox-changed"]
 
 
-def test_a_mistyped_pack_or_rule_fails_the_batch_permanently(make, google):
-    for over in ({"rule_packs": ["no-such-pack"]}, {"rules": [{"name": "r"}]}):
+def test_a_mistyped_pack_or_rule_drops_the_rules_and_keeps_scheduling_working(make, google):
+    for n, over in enumerate(({"rule_packs": ["no-such-pack"]}, {"rules": [{"name": "r"}]},
+                              {"rules": [{"name": "r", "subject_regex": "(zz"}]})):
         rig = make(**over)
+        m = gmsg("m1", "Pat <pat@sender.example.test>", "Your availability?", "Are you available for a call next week?")
         rig.seed_state(gm.OWNER_STATE, {"historyId": "100", "handled": []})
-        rc, emits, err = rig.run({"emailAddress": OWNER, "historyId": "110"})
-        assert rc == 65 and emits == []
+        google.history = [hist("m1")]
+        google.messages["m1"] = m
+        rc, emits, err = rig.run({"emailAddress": OWNER, "historyId": "110"}, bid=str(n + 1))
+        assert rc == 0, err
+        assert [e["payload"]["event_type"] for e in emits] == ["scheduling", "mailbox-changed"]
+        assert err.count("mail rules ignored for this batch") == 1 and "zz" not in err
+
+
+def test_a_bad_rule_does_not_dead_letter_the_batch_even_for_a_matching_sender(make, google):
+    rig = make(rule_packs=["amazon-orders", "no-such-pack"])
+    out = push(rig, google, gmsg("m1", "a@amazon.com", 'Ordered: "Widget"', f"Order # {ORD}"))  # hookspool-scan: allow: the service's own sender domain
+    assert [i["event_type"] for i in out] == ["mailbox-changed"]
+
+
+# ---- two mailboxes, hooks, bulk mail ------------------------------------------------------------------------------
+def gpush(account, history="110"):
+    return {"emailAddress": account, "historyId": history}
+
+
+def seed_both(rig, google, *msgs):
+    for name, acct in ((gm.OWNER_STATE, OWNER), ("gmail_push_state_agent", AGENT)):
+        rig.seed_state(name, {"historyId": "100", "handled": []})
+    google.history = [hist(*[m["id"] for m in msgs]) for _ in range(2)]     # one history read per mailbox
+    for m in msgs:
+        google.messages[m["id"]] = m
+
+
+def test_mail_forwarded_into_the_assistant_mailbox_is_reported_once(make, google):
+    rig = make(agent=True, rule_packs=["amazon-orders"])
+    m = gmsg("m1", "a@amazon.com", 'Shipped: "Widget"', f"Order # {ORD}")  # hookspool-scan: allow: the service's own sender domain
+    seed_both(rig, google, m)
+    rc, emits, err = rig.run(gpush(OWNER), gpush(AGENT))
+    assert rc == 0, err
+    got = [(e["payload"]["event_type"], e["payload"]["account"]) for e in emits]
+    assert [g for g in got if g[0] == "mail-matched"] == [("mail-matched", OWNER)]
+    assert ("agent-mail", AGENT) in got, "the assistant's copy is ordinary assistant mail, not a second match"
+
+
+def test_mail_that_also_names_the_assistant_is_left_to_the_assistant(make, google):
+    rig = make(agent=True, rule_packs=["amazon-orders"])
+    m = gmsg("m1", "a@amazon.com", 'Shipped: "Widget"', f"Order # {ORD}")  # hookspool-scan: allow: the service's own sender domain
+    m["payload"]["headers"].append({"name": "Cc", "value": AGENT})
+    seed_both(rig, google, m)
+    rc, emits, err = rig.run(gpush(OWNER), gpush(AGENT))
+    assert rc == 0, err
+    got = [(e["payload"]["event_type"], e["payload"]["account"]) for e in emits]
+    assert "mail-matched" not in [g[0] for g in got] and got.count(("agent-mail", AGENT)) == 1
+
+
+def test_rules_do_not_read_the_assistant_mailbox_alone(make, google):
+    rig = make(agent=True, rule_packs=["amazon-orders"])
+    m = gmsg("m1", "a@amazon.com", 'Ordered: "Widget"', f"Order # {ORD}")  # hookspool-scan: allow: the service's own sender domain
+    seed_both(rig, google, m)
+    rc, emits, err = rig.run(gpush(AGENT))
+    assert rc == 0, err
+    assert [e["payload"]["event_type"] for e in emits] == ["agent-mail", "mailbox-changed"]
+
+
+HOOK = """
+def classify(message, account, ctx):
+    if "[hook]" in message["headers"].get("subject", ""):
+        return {"event_type": "agent-schedule", "kind": "reply", "new_text": "x"}
+    return None
+"""
+
+
+def test_a_hook_that_claims_a_message_wins_over_a_rule(make, google):
+    rig = make(hooks=HOOK, rules=[{"name": "any", "from": ["shop.example.test"], "kind": "order"}])
+    out = push(rig, google, gmsg("m1", "a@shop.example.test", "Shipped [hook]", "x"),
+               gmsg("m2", "a@shop.example.test", "Shipped", "x"))
+    assert [(i["event_type"], i.get("rule")) for i in out[:-1]] == [("agent-schedule", None), ("mail-matched", "any")]
+
+
+def test_pack_rules_skip_promotions_but_a_custom_rule_can_claim_them(make, google):
+    rig = make(rule_packs=["amazon-orders"], rules=[{"name": "mine", "from": ["amazon.com"], "subject_any": ["shipped"]}])  # hookspool-scan: allow: the service's own sender domain
+    out = push(rig, google,
+               gmsg("m1", "a@amazon.com", 'Ordered: "Widget"', "x", labels=("INBOX", "CATEGORY_PROMOTIONS")),  # hookspool-scan: allow: the service's own sender domain
+               gmsg("m2", "a@amazon.com", 'Shipped: "Widget"', "x", labels=("INBOX", "CATEGORY_PROMOTIONS")),  # hookspool-scan: allow: the service's own sender domain
+               gmsg("m3", "a@amazon.com", 'Ordered: "Widget"', "x", labels=("INBOX", "CATEGORY_UPDATES")))  # hookspool-scan: allow: the service's own sender domain
+    assert [(i["event_type"], i.get("rule"), i.get("message_id")) for i in out[:-1]] == \
+           [("mail-matched", "mine", "m2"), ("mail-matched", "amazon-orders.placed", "m3")]
 
 
 def test_bobbin_show_lists_the_rule_packs(capsys, tmp_path):

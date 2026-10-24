@@ -23,7 +23,7 @@ A matching message produces exactly one item with the output name `mail-matched`
 | `from`, `from_address` | the `From` header as sent, and the bare address |
 | `subject` | the subject line |
 | `received` | the arrival time in the instance's time zone |
-| `snippet` | the first 200 characters of Gmail's snippet |
+| `snippet` | the first 200 characters of Gmail's snippet, or of the body text when Gmail sent none |
 | `extracted` | the values the rule's `extract` table found, as `{name: text}`; a name that did not match is left out |
 
 The usual standard fields (`source`, `rfc_message_id`, `key`) come with it. A message matches **at most one rule**, and
@@ -31,9 +31,13 @@ a message that a rule claims is not also reported as `scheduling` or `agent-mail
 message id is remembered the way it is for every other item, so a repeated push never reports the same message twice.
 A pass that read new mail still reports `mailbox-changed` as before.
 
-Rules run on new inbox mail in every watched mailbox, after a deployment's `hooks.classify` hook and before the skip rules
-and the scheduling check. They are not held back by `skip_domains`, `skip_keywords` or the no-reply rule, because you
-named the sender on purpose. Mail in spam or trash, and mail that is not in the inbox, is never matched.
+Rules run on new inbox mail in the **owner's** mailbox, after a deployment's `hooks.classify` hook (a hook that claims a
+message wins) and before the skip rules and the scheduling check. They are not held back by `skip_domains`,
+`skip_keywords` or the no-reply rule, because you named the sender on purpose. Three kinds of mail are left alone: mail
+in spam or trash, mail that is not in the inbox, and mail that also names the assistant in `To` or `Cc` (the assistant
+handles it). The assistant's own mailbox is not read for rules, so a message that reaches both mailboxes (a forward, a
+copy) is reported once, not twice. The rules of the built-in packs also leave alone mail that Gmail filed under
+promotions, social or forums; your own rules may still claim it.
 
 ## Writing a rule
 
@@ -48,6 +52,7 @@ A rule is a table in the `rules` setting, which is a list of tables:
 | `kind` | free text handed to the consumer |
 | `extract` | a table of `name = "regex"`. Each regex has **exactly one** capture group. It is tried on the subject first and then on the first 20,000 characters of the body text; the first match wins, and the captured text is whitespace-trimmed and cut at 200 characters |
 | `skip` | optional list of substrings. If one of them appears in the subject or the body, the rule does not match (the message goes on to the next rule) |
+| `skip_subject` | like `skip`, but looks at the subject only. Use it for words that are fine in a footer but not in a subject (`privacy`, `offer`, `survey`) |
 
 A rule needs at least one of `from`, `subject_any` and `subject_regex`. When both `subject_any` and `subject_regex` are
 given, either one is enough. When `from` is given, the sender must match as well.
@@ -79,8 +84,12 @@ location = 'at ([A-Za-z0-9 ]{3,40}) (?:locker|kiosk)'
 Use single-quoted (literal) TOML strings for patterns so backslashes need no escaping. Add as many `[[...rules]]` tables as you
 need. Mistakes are caught when the batch runs: a rule without a
 name, an unknown key, a regular expression that does not compile, an `extract` pattern without exactly one capture
-group, two rules with the same name or an unknown pack name stops the batch as a permanent failure, so a typo shows up at once.
-The error names the rule and the key, never the pattern or any mail.
+group, two rules with the same name or an unknown pack name. The batch does not fail: all the rules are ignored for that batch,
+the log gets one line, `mail rules ignored for this batch: <what is wrong>`, and scheduling and assistant mail go on as
+usual. So after you edit rules, send a test message and look at the log. The line names the rule and the key, never the pattern or any mail.
+
+Keep a rule narrow. A word like `updated` or `booking` alone also turns up in newsletters and policy notices, so ask for
+the context as well (`subject_regex = 'reservation.{0,60}updated'`) and veto marketing words with `skip_subject`.
 
 The order matters. Your own rules are tried first, in the order you wrote them. Then each pack in `rule_packs` is tried in
 the order listed, and inside a pack its rules run top to bottom. Put the specific rule before the general one, and use
@@ -134,6 +143,10 @@ Reservation packs share one layout. Their rules run in this order so that the ge
 ones: `cancellation`, `modification`, `waitlist`, `reminder`, `confirmation`. A message asking you to review a visit is
 skipped.
 
+Every pack rule asks for order or reservation context in the subject (for example a reservation word near a status
+word, or `Delivered:` at the start), and vetoes subjects about policies, offers, promotions, surveys and sign-ups with
+`skip_subject`. Marketing and policy mail from the same senders is therefore left for the normal handling.
+
 ## Testing a rule
 
 Rules are plain data, so you can try them on made-up mail in a Python shell:
@@ -155,5 +168,6 @@ Do not paste real mail into a test, a bug report or a log. The bobbin's own logs
 * A regular expression runs over at most 20,000 characters of body text.
 * `extract` returns the first match; if a pattern is too loose it will return a wrong value, so keep the pattern tight
   and test it.
+* Rules read the owner's mailbox only. Mail that reaches only the assistant's mailbox is not matched.
 * Mail from a forwarding address or a mailing-list wrapper carries the forwarder's address in `From`; name that address
   in `from`.

@@ -13,6 +13,7 @@ A rule is a table::
     kind         free text for the consumer: order, delivery, receipt, reservation, cancellation, alert, ...
     extract      name -> regular expression with exactly ONE capture group; tried on the subject, then on the body
     skip         case-insensitive substrings; one of them in the subject or the body vetoes the rule
+    skip_subject case-insensitive substrings; one of them in the subject (only) vetoes the rule
 
 ``subject_any`` and ``subject_regex`` together match when either does. A rule needs at least a ``from``,
 a ``subject_any`` or a ``subject_regex``. Rules are tried in order and the first that matches wins, so a message
@@ -34,7 +35,7 @@ from dataclasses import dataclass, field
 PACK_DIR = "rule-packs"
 PACK_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 PACK_STATUS = ("verified", "unverified")
-RULE_KEYS = {"name", "from", "subject_any", "subject_regex", "kind", "extract", "skip"}
+RULE_KEYS = {"name", "from", "subject_any", "subject_regex", "kind", "extract", "skip", "skip_subject"}
 BODY_LIMIT = 20000          # characters of body a pattern ever sees (bounds the cost of a pattern)
 VALUE_LIMIT = 200           # characters kept of one extracted value
 MAX_RULES = 500
@@ -49,6 +50,8 @@ class Rule:
     kind: str = ""
     extract: dict = field(default_factory=dict)       # name -> compiled pattern
     skip: tuple[str, ...] = ()
+    skip_subject: tuple[str, ...] = ()
+    builtin: bool = False                             # a rule of a built-in pack: never claims bulk (promotions/social) mail
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,7 @@ def parse_rule(raw, where: str, prefix: str = "") -> Rule:
                     for s in _strings(raw.get("from"), where, "from"))
     subject_any = tuple(s.lower() for s in _strings(raw.get("subject_any"), where, "subject_any"))
     skip = tuple(s.lower() for s in _strings(raw.get("skip"), where, "skip"))
+    skip_subject = tuple(s.lower() for s in _strings(raw.get("skip_subject"), where, "skip_subject"))
     rx = raw.get("subject_regex")
     subject_regex = None
     if rx not in (None, ""):
@@ -110,7 +114,7 @@ def parse_rule(raw, where: str, prefix: str = "") -> Rule:
         if c.groups != 1:
             raise ValueError(f"{where}: extract.{key} must have exactly one capture group")
         patterns[str(key)] = c
-    return Rule(prefix + name.strip(), senders, subject_any, subject_regex, kind.strip(), patterns, skip)
+    return Rule(prefix + name.strip(), senders, subject_any, subject_regex, kind.strip(), patterns, skip, skip_subject, bool(prefix))
 
 
 def parse_rules(raw, where: str = "rules") -> list[Rule]:
@@ -228,6 +232,8 @@ def matches(rule: Rule, address: str, subject: str, body: str) -> bool:
         by_regex = rule.subject_regex is not None and rule.subject_regex.search(subject) is not None
         if not (by_text or by_regex):
             return False
+    if any(s in subj for s in rule.skip_subject):
+        return False
     if rule.skip:
         hay = subj + "\n" + body[:BODY_LIMIT].lower()
         if any(s in hay for s in rule.skip):
@@ -248,9 +254,14 @@ def extract(rule: Rule, subject: str, body: str) -> dict:
     return out
 
 
-def first_match(rules, address: str, subject: str, body: str) -> tuple[Rule, dict] | None:
-    """The first rule that claims the message, with its extracted values; None when none does."""
+def first_match(rules, address: str, subject: str, body: str, bulk: bool = False) -> tuple[Rule, dict] | None:
+    """The first rule that claims the message, with its extracted values; None when none does.
+
+    ``bulk`` marks mail Gmail filed as promotions, social or forums: the rules of the built-in packs leave it alone
+    (a custom rule may still claim it)."""
     for r in rules:
+        if bulk and r.builtin:
+            continue
         if matches(r, address, subject, body):
             return r, extract(r, subject, body)
     return None

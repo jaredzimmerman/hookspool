@@ -638,6 +638,7 @@ hookspool/bobbins/<vendor>/__init__.py   built in only: empty (no code the vendo
     source.py                           a code source plugin (14.1), optional
     processor.py                        post-commit work, optional (14.3.4)
     captures/*.http                     conformance captures (docs/bobbins/writing-a-bobbin.md, "Capture files"), required
+    rule-packs/*.toml                   data only, optional: ready-made mail rule packs a mail bobbin offers (14.3.7, docs/bobbins/mail-rules.md)
     README.md                           what it does, how it works, settings, outputs, limits; required
     SETUP.md                            human setup: provider-side steps, secrets to create, config table, verify, rollback; required
     AGENTS.md                           agent setup: the same procedure as numbered, executable steps (14.3.8); required
@@ -909,7 +910,8 @@ emit lines ever reaches stdout. Unmapped event types are dropped with one log li
 - `hookspool bobbin list` — bobbins found (built-in, then each `spool.bobbin_path` dir): the `<vendor>.<product>`
   name, version, origin, summary, and which instances use them.
 - `hookspool bobbin show <vendor>.<product>` — the provider and its pages, secrets, settings
-  (type/required/default), outputs, span, sender_retries, proxy note.
+  (type/required/default), outputs, span, sender_retries, proxy note, and the rule packs the bobbin ships
+  (`rule-packs/*.toml`: name, status, rules; `google.gmail` only for now).
 - `hookspool bobbin expand [<instance>]` — 14.3.3.
 - `hookspool bobbin new <vendor>.<product> [--dir D] [--set NAME=VALUE ...] [--code] [--processor]` — a copy of the
   `hookspool.webhook` bobbin in `<D>/<vendor>/<product>/` with its settings frozen into a fixed `[source] template`

@@ -1,5 +1,8 @@
 # Tock: reservation mail (patterns written from the provider's published email conventions; not yet checked against real mail).
 # Sender entries match the platform's own domains; restaurant-branded senders need your own rule.
+# Every rule needs order or reservation context in the subject (a bare word such as 'updated' or 'booking' is not enough),
+# and skip_subject vetoes policy and marketing subjects. A rule of a built-in pack never claims mail Gmail filed as
+# promotions, social or forums.
 [pack]
 name = "tock-reservations"
 status = "unverified"
@@ -9,8 +12,9 @@ description = "Tock reservation and ticket mail: confirmation, reminder, modific
 name = "cancellation"
 kind = "cancellation"
 from = ["exploretock.com", "tock.com"]  # hookspool-scan: allow: the service's own sender domains
-subject_any = ["cancel"]
-skip = ["how was your", "leave a review", "write a review", "rate your"]
+subject_regex = '\b(?:reservation|booking)s?\b.{0,60}\bcancel(?:l?ed|lation)\b|\bcancel(?:l?ed|lation)\b.{0,40}\b(?:reservation|booking)s?\b'
+skip = ["rate your", "how was your", "leave a review", "write a review", "recommended for you"]
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "offer", "promo", "coupon", "% off", "deal", "sale", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
 [rules.extract]
 restaurant = '(?:\bat\s+|\brestaurant:\s*)([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on|for|-)\b|\s*[!.,:]|\s*$)'
 date_time = '\b((?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+[a-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s?[ap]m)?)'
@@ -21,8 +25,9 @@ confirmation_code = '(?:confirmation|reservation)\s*(?:code|number|no\.?|#|id)\s
 name = "modification"
 kind = "reservation"
 from = ["exploretock.com", "tock.com"]  # hookspool-scan: allow: the service's own sender domains
-subject_any = ["modif", "changed", "updated"]
-skip = ["how was your", "leave a review", "write a review", "rate your"]
+subject_regex = '\b(?:reservation|booking)s?\b.{0,60}\b(?:modified|changed|updated)\b|\b(?:modified|changed|updated|modification)\b.{0,20}\b(?:reservation|booking)s?\b'
+skip = ["rate your", "how was your", "leave a review", "write a review", "recommended for you"]
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "offer", "promo", "coupon", "% off", "deal", "sale", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
 [rules.extract]
 restaurant = '(?:\bat\s+|\brestaurant:\s*)([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on|for|-)\b|\s*[!.,:]|\s*$)'
 date_time = '\b((?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+[a-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s?[ap]m)?)'
@@ -33,8 +38,9 @@ confirmation_code = '(?:confirmation|reservation)\s*(?:code|number|no\.?|#|id)\s
 name = "waitlist"
 kind = "reservation"
 from = ["exploretock.com", "tock.com"]  # hookspool-scan: allow: the service's own sender domains
-subject_any = ["waitlist", "wait list", "table opened", "a table is available"]
-skip = ["how was your", "leave a review", "write a review", "rate your"]
+subject_regex = '\b(?:you(?:\x27|’)re|you are) on the wait ?list\b|\bwait ?list (?:update|confirmation|spot|offer|request)\b|\btable (?:has )?(?:opened|is available|available)\b|\ba table (?:opened|is available)\b'
+skip = ["rate your", "how was your", "leave a review", "write a review", "recommended for you"]
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "offer", "promo", "coupon", "% off", "deal", "sale", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
 [rules.extract]
 restaurant = '(?:\bat\s+|\brestaurant:\s*)([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on|for|-)\b|\s*[!.,:]|\s*$)'
 date_time = '\b((?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+[a-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s?[ap]m)?)'
@@ -45,8 +51,9 @@ confirmation_code = '(?:confirmation|reservation)\s*(?:code|number|no\.?|#|id)\s
 name = "reminder"
 kind = "reservation"
 from = ["exploretock.com", "tock.com"]  # hookspool-scan: allow: the service's own sender domains
-subject_any = ["reminder", "upcoming reservation", "is tomorrow", "is today", "coming up"]
-skip = ["how was your", "leave a review", "write a review", "rate your"]
+subject_regex = '\breminder\b.{0,40}\b(?:reservation|booking)s?\b|\b(?:reservation|booking)s?\b.{0,60}\b(?:reminder|is tomorrow|is today|is coming up|is in \d+ (?:hours?|days?))\b|\bupcoming \b(?:reservation|booking)s?\b'
+skip = ["rate your", "how was your", "leave a review", "write a review", "recommended for you"]
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "offer", "promo", "coupon", "% off", "deal", "sale", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
 [rules.extract]
 restaurant = '(?:\bat\s+|\brestaurant:\s*)([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on|for|-)\b|\s*[!.,:]|\s*$)'
 date_time = '\b((?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+[a-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s?[ap]m)?)'
@@ -57,8 +64,9 @@ confirmation_code = '(?:confirmation|reservation)\s*(?:code|number|no\.?|#|id)\s
 name = "confirmation"
 kind = "reservation"
 from = ["exploretock.com", "tock.com"]  # hookspool-scan: allow: the service's own sender domains
-subject_any = ["confirmed", "confirmation", "you're booked", "you\u2019re booked", "reservation at", "your tickets", "booking"]
-skip = ["how was your", "leave a review", "write a review", "rate your"]
+subject_regex = '\b(?:reservation|booking)s?\b.{0,60}\b(?:confirmed|confirmation)\b|\b(?:confirmed|confirmation)\b.{0,30}\b(?:reservation|booking)s?\b|\byou(?:\x27|’)re booked\b|\byour \b(?:reservation|booking)s?\b (?:at|for|is)\b|\byour tickets? (?:for|to)\b'
+skip = ["rate your", "how was your", "leave a review", "write a review", "recommended for you"]
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "offer", "promo", "coupon", "% off", "deal", "sale", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation"]
 [rules.extract]
 restaurant = '(?:\bat\s+|\brestaurant:\s*)([^!.,:\n]{2,60}?)(?=\s+(?:is|has|was|on|for|-)\b|\s*[!.,:]|\s*$)'
 date_time = '\b((?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+[a-z]{3,9}\.?\s+\d{1,2}(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s?[ap]m)?)'

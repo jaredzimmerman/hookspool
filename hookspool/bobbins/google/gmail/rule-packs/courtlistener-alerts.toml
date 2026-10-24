@@ -1,5 +1,8 @@
 # CourtListener email alerts (patterns written from the provider's published email conventions; not yet checked against real mail).
 # Docket alerts report new entries in a followed case; search alerts report new results of a saved search.
+# Every rule needs order or reservation context in the subject (a bare word such as 'updated' or 'booking' is not enough),
+# and skip_subject vetoes policy and marketing subjects. A rule of a built-in pack never claims mail Gmail filed as
+# promotions, social or forums.
 [pack]
 name = "courtlistener-alerts"
 status = "unverified"
@@ -9,10 +12,11 @@ description = "CourtListener alert mail: docket alerts (new filings in a followe
 name = "docket-alert"
 kind = "alert"
 from = ["courtlistener.com", "free.law"]  # hookspool-scan: allow: the service's own sender domains
-subject_any = ["docket", "new filing", "new entry", "new entries"]
+subject_regex = '\bnew (?:docket )?(?:filings?|entr(?:y|ies))\b|\bdocket (?:alert|activity|update)\b'
 skip = ["unsubscribe confirmation", "alert has been disabled"]
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "offer", "promo", "coupon", "% off", "deal", "sale", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation", "disabled", "created", "confirm"]
 [rules.extract]
-case_name = '(?:\bfor|\bin)\s+([^()\n]{3,120}?)\s*\('
+case_name = '(?:\bin|\bfor)\s+([^()\n]{3,120}?)\s*\('
 docket_number = '\b(\d{1,2}:\d{2}-[a-z]{1,4}-\d{1,6}(?:-[a-z0-9]{1,6})?|\d{2}-\d{3,6})\b'
 court = '\bcourt[:\s]+([^\n]{3,80})'
 
@@ -20,8 +24,9 @@ court = '\bcourt[:\s]+([^\n]{3,80})'
 name = "search-alert"
 kind = "alert"
 from = ["courtlistener.com", "free.law"]  # hookspool-scan: allow: the service's own sender domains
-subject_any = ["alert", "new result", "new hit", "hits"]
+subject_regex = '\bnew (?:results?|hits?|matches)\b|\b\d+ (?:new )?(?:results?|hits?|matches)\b'
 skip = ["unsubscribe confirmation", "alert has been disabled"]
+skip_subject = ["privacy", "policy", "policies", "terms of", "terms and conditions", "offer", "promo", "coupon", "% off", "deal", "sale", "sweepstakes", "giveaway", "newsletter", "survey", "become a", "prime day", "guarantee", "has been created", "was created", "welcome to", "verify your", "confirm your email", "email confirmation", "disabled", "created", "confirm"]
 [rules.extract]
 case_name = '(?:\bin|\bfor)\s+([^()\n]{3,120}?)\s*\('
 docket_number = '\b(\d{1,2}:\d{2}-[a-z]{1,4}-\d{1,6}(?:-[a-z0-9]{1,6})?|\d{2}-\d{3,6})\b'

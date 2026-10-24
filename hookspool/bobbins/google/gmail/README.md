@@ -123,7 +123,8 @@ dropped, HTTP 404) only records Gmail's current history id; nothing is reported 
   between two passes, the rest of that gap is not read: the pass stores Gmail's current history id and logs
   how many pages and records it read.
 * Rules read the sender, the subject and the first 20,000 characters of the text; not attachments. Mail outside the
-  inbox or in spam or trash is never matched. A bad rule, or an unknown pack name, is a permanent failure (exit 65).
+  inbox or in spam or trash is never matched, and neither is mail read from the assistant's mailbox. A bad rule, or an
+  unknown pack name, drops all the rules for that batch with one log line; scheduling and assistant mail go on.
 * `agent` may not be the owner's mailbox: the batch is refused as permanent (exit 65).
 * The `handled` list keeps the last 300 message ids.
 * A Gmail watch lasts seven days: renew it (a `users.watch` call) daily; see SETUP.md for the sweep.
