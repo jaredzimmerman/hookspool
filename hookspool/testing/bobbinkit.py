@@ -672,7 +672,15 @@ def _one_service(b: Bobbin) -> list[Finding]:
 _PLACEHOLDER = re.compile(r"(?i)\bTODO\b|<[^>]*>|\.\.\.|\{[^}]*\}")
 _EXAMPLE_HOST = re.compile(r"(?i)(^|\.)(example\.(com|org|net)|[a-z0-9-]+\.(test|example|invalid|localhost)|"
                            r"example|test|invalid|localhost)$")
-_IP_HOST = re.compile(r"^\[?[0-9a-fA-F:.]+\]?$")
+
+
+def _is_ip(host: str) -> bool:
+    import ipaddress
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    return True
 
 
 def url_problem(url: Any) -> str | None:
@@ -694,7 +702,7 @@ def url_problem(url: Any) -> str | None:
         return f"{url!r} must be https"
     if not host or "." not in host:
         return f"{url!r} has no public host name"
-    if _IP_HOST.match(host) or _IP_HOST.match(u.netloc):
+    if _is_ip(host):
         return f"{url!r} is an IP address; link the provider's documentation by its host name"
     if _EXAMPLE_HOST.search(host):
         return f"{url!r} is an example or local host; link the provider's own page"

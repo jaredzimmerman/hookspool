@@ -941,11 +941,12 @@ def test_provider_green_for_the_fixtures_and_quoted_frontmatter(tmp_path):
 
 
 def test_url_problem_unit():
-    ok = ("https://developers.google.com/workspace/gmail/api/guides/push", "https://kaneo.app/docs#signature-verification")
+    ok = ("https://developers.google.com/workspace/gmail/api/guides/push", "https://kaneo.app/docs#signature-verification",
+          *(f"https://{h}/docs" for h in ("cafe" + ".ca", "abc" + ".de", "deca" + ".de")))
     for u in ok:
         assert K.url_problem(u) is None, u
     for u in ("", None, "ftp://github.com", "https://", "https://user:pw@github.com/x", "https://github.com/a b",
-              "https://TODO", "https://sub.example.org/x", "https://[2001:db8::1]/x", "https://docs.example/x"):
+              "https://TODO", "https://sub.example.org/x", "https://[2001:db8::1]/x", "https://10.0.0.1/x", "https://docs.example/x"):
         assert K.url_problem(u) is not None, u
 
 

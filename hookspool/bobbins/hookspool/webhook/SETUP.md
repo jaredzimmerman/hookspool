@@ -39,7 +39,7 @@ outputs = { "*" = "hermes:acme-events" }
 ```
 
 Replace the settings with what you found. `scheme` and `key` are required; the rest depends on the scheme
-(`hookspool bobbin show webhook`). To route by event type, add `outputs` entries named after the event types
+(`hookspool bobbin show hookspool.webhook`). To route by event type, add `outputs` entries named after the event types
 **and** keep `event_type` and `attrs = { event_type = "<the same selector>" }` in the settings (the routes read
 the event's attributes); `hookspool check` reports an error when `attrs.event_type` is missing.
 

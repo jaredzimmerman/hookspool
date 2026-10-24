@@ -1,2 +1,2 @@
 # Moved: the Trello webhook is the built-in bobbin hookspool/bobbins/atlassian/trello (manifest, captures, README,
-# SETUP.md, AGENTS.md). This file stays so old links work. Use `hookspool bobbin show trello`.
+# SETUP.md, AGENTS.md). This file stays so old links work. Use `hookspool bobbin show atlassian.trello`.

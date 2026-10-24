@@ -45,7 +45,7 @@ settings into a fixed `[source] template`. When several deployments set up the s
 
 ## Settings
 
-Each setting is a key of the template source, with its own meaning there (`hookspool bobbin show webhook`
+Each setting is a key of the template source, with its own meaning there (`hookspool bobbin show hookspool.webhook`
 lists them with their types).
 
 | setting | type | |

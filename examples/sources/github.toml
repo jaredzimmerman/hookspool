@@ -1,2 +1,2 @@
 # Moved: the GitHub webhook is the built-in bobbin hookspool/bobbins/github/repo (manifest, captures, README,
-# SETUP.md, AGENTS.md). This file stays so old links work. Use `hookspool bobbin show github`.
+# SETUP.md, AGENTS.md). This file stays so old links work. Use `hookspool bobbin show github.repo`.
