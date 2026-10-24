@@ -6,6 +6,12 @@ an interface, and the entry will say so.
 
 ## [Unreleased]
 
+### Added
+
+- The `cloudflare.notifications` bobbin (`hookspool/bobbins/cloudflare/notifications/`): a Cloudflare
+  Notifications webhook destination, a template bobbin with no Python. It checks the shared secret sent in the
+  `cf-webhook-auth` header, keys alerts on the notification policy's name and de-duplicates on the body's digest.
+
 ## [0.2.0] - 2026-10-23
 
 ### Added

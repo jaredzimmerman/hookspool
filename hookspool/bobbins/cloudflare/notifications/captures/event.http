@@ -1,0 +1,10 @@
+# capture: an alert delivered with the shared secret in cf-webhook-auth
+# now: 1800000000
+# expect: queued
+POST /hooks/cloudflare HTTP/1.1
+Content-Type: application/json
+User-Agent: Cloudflare-Notifications/test
+cf-webhook-auth: test-template-secret-PAYLOAD-SENTINEL-7f3a
+Content-Length: 389
+
+{"name":"example-policy","text":"Made-up test alert PAYLOAD-SENTINEL-7f3a","data":{"zone_name":"example.com"},"ts":1800000000,"account_id":"00000000000000000000000000000000","policy_id":"11111111111111111111111111111111","policy_name":"example-policy","alert_type":"http_alert_origin_error","alert_correlation_id":"22222222222222222222222222222222","alert_event":"ALERT_STATE_EVENT_START"}

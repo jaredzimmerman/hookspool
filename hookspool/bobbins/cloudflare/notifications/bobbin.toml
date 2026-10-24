@@ -1,0 +1,28 @@
+name = "cloudflare.notifications"
+version = "1"
+summary = "Cloudflare Notifications webhook destination: one JSON POST per alert, the shared secret sent in the cf-webhook-auth header"
+
+[provider]
+vendor = "Cloudflare"
+product = "Notifications"
+homepage = "https://www.cloudflare.com/"
+webhook_docs = "https://developers.cloudflare.com/notifications/get-started/configure-webhooks/"
+signature_docs = "https://developers.cloudflare.com/notifications/get-started/configure-webhooks/#generic-webhooks"
+
+[source]
+span = "burst"
+sender_retries = false                 # the pages checked do not document redelivery of a failed generic webhook
+
+[source.template]
+scheme = "shared-secret-header"        # Cloudflare sends the secret verbatim, with no signature over the body
+header = "cf-webhook-auth"
+key = "name"                           # the notification policy's name: one batch per policy and burst
+dedup = "body_sha256"                  # the payload carries no delivery id
+event_type = "name"                    # the policy name; the alert type is kept as an attribute
+attrs = { alert_type = "alert_type", alert_event = "alert_event" }
+
+[secrets.secret]
+description = "the secret typed into the Cloudflare webhook destination; Cloudflare sends it in cf-webhook-auth"
+
+[outputs."*"]
+description = "every accepted alert; the alert type and event state are in attrs (alert_type, alert_event)"
