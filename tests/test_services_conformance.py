@@ -16,14 +16,14 @@ from hookspool.testing import bobbinkit as K
 
 BUILTIN = sorted(os.path.dirname(p) for p in glob.glob(os.path.join(BL.BUILTIN_DIR, "*", "*", BL.MANIFEST)))
 NAMES = {"google.gmail", "google.calendar", "google.drive", "github.repo", "atlassian.trello", "kaneo.projects",
-         "zoom.meetings", "plaid.items", "hookspool.webhook"}
+         "zoom.meetings", "plaid.items", "courtlistener.alerts", "hookspool.webhook"}
 
 
 def _name(d: str) -> str:
     return f"{os.path.basename(os.path.dirname(d))}.{os.path.basename(d)}"
 
 
-def test_the_built_ins_are_the_nine_namespaced_bobbins():
+def test_the_built_ins_are_the_ten_namespaced_bobbins():
     assert {_name(d) for d in BUILTIN} == NAMES
     flat = [p for p in glob.glob(os.path.join(BL.BUILTIN_DIR, "*", BL.MANIFEST))]
     assert flat == [], "a built-in sits in hookspool/bobbins/<vendor>/<product>/"

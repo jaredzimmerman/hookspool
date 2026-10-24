@@ -16,6 +16,7 @@ same directory is the step-by-step setup for a person, and `AGENTS.md` is the sa
 | bobbin | what it does |
 |---|---|
 | [`atlassian.trello`](../../hookspool/bobbins/atlassian/trello/README.md) | Trello board webhook: card and board actions, signed with HMAC-SHA1 over the body and the callback URL |
+| [`courtlistener.alerts`](../../hookspool/bobbins/courtlistener/alerts/README.md) | CourtListener alert webhooks: docket, search, RECAP fetch and pray-and-pay events, authenticated by a secret token in the callback URL |
 | [`github.repo`](../../hookspool/bobbins/github/repo/README.md) | GitHub repository webhook: HMAC-SHA256 over the raw body; pings are acknowledged and not enqueued |
 | [`google.calendar`](../../hookspool/bobbins/google/calendar/README.md) | Google Calendar push (watch channel): conflicts, meeting-brief requests and a change notice for one calendar |
 | [`google.drive`](../../hookspool/bobbins/google/drive/README.md) | Google Drive push (watch channel): file changes, new files and files shared with the account, by id, never by content |

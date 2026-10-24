@@ -1,0 +1,23 @@
+name = "courtlistener.alerts"
+version = "1"
+summary = "CourtListener alert webhooks: docket, search, RECAP fetch and pray-and-pay events, authenticated by a secret token in the callback URL"
+
+[provider]
+vendor = "Free Law Project"
+product = "CourtListener alerts (webhooks)"
+homepage = "https://www.courtlistener.com/"
+webhook_docs = "https://wiki.free.law/c/courtlistener/help/api/webhooks/about"
+signature_docs = "https://wiki.free.law/c/courtlistener/help/api/webhooks/about"
+api_docs = "https://wiki.free.law/c/courtlistener/help/api/rest/v4/alerts"
+
+[source]
+template = { scheme = "url-token", param = "token", key = "webhook.event_type", dedup = "header:Idempotency-Key", event_type = "webhook.event_type" }
+span = "burst"
+sender_retries = true                  # CourtListener retries a non-2xx delivery up to seven times, over about 54 hours
+proxy = "keep the query string (?token=...)"
+
+[secrets.secret]
+description = "the secret token in the callback URL that you choose and put in the webhook's URL (?token=...); CourtListener does not sign deliveries"
+
+[outputs."*"]
+description = "every accepted CourtListener event: webhook.event_type 1 docket alert, 2 search alert, 3 RECAP fetch, 4 old docket alerts report, 5 pray-and-pay"

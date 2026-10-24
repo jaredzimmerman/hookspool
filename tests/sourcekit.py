@@ -48,7 +48,7 @@ SAMPLE_SETTINGS = {"atlassian.trello": {"callback_url": "https://hooks.example.t
 # namespaced (``[sources.gcal]`` still loads ``hookspool.sources.gcal``), and the docs' instance name otherwise.
 BOBBIN_OF = {"gmail": "google.gmail", "gcal": "google.calendar", "drive": "google.drive", "github": "github.repo",
              "trello": "atlassian.trello", "kaneo": "kaneo.projects", "zoom": "zoom.meetings", "plaid": "plaid.items",
-             "webhook": "hookspool.webhook"}
+             "webhook": "hookspool.webhook", "alerts": "courtlistener.alerts"}
 SOURCE_OF = {v: k for k, v in BOBBIN_OF.items()}
 
 

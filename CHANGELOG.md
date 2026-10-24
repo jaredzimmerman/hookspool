@@ -6,6 +6,14 @@ an interface, and the entry will say so.
 
 ## [Unreleased]
 
+### Added
+
+- The `courtlistener.alerts` bobbin (`hookspool/bobbins/courtlistener/alerts/`): CourtListener alert webhooks (docket,
+  search, RECAP fetch, old docket alerts report and pray-and-pay events). CourtListener does not sign its deliveries, so
+  a fixed `url-token` template checks a secret token in the endpoint URL; `Idempotency-Key` is the dedup header and the
+  event type (`webhook.event_type`) is the batch key. README.md states that webhooks are agreement-based for
+  organizations and that alerts count against the membership allowance.
+
 ## [0.2.0] - 2026-10-23
 
 ### Added
