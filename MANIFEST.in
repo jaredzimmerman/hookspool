@@ -1,4 +1,4 @@
-include LICENSE CHANGELOG.md CONTRIBUTING.md
+include LICENSE CHANGELOG.md CONTRIBUTING.md AGENTS.md CLAUDE.md
 recursive-include docs *.md
 recursive-include deploy *.md *.toml *.conf *.service *.py *.sh
 prune deploy/local

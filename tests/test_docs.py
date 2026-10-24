@@ -42,7 +42,8 @@ from hookspool.sources import template  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCS = os.path.join(ROOT, "docs")
-PAGES = [os.path.join(ROOT, "README.md"), os.path.join(ROOT, "CONTRIBUTING.md"), os.path.join(ROOT, "CHANGELOG.md")] \
+PAGES = [os.path.join(ROOT, "README.md"), os.path.join(ROOT, "CONTRIBUTING.md"), os.path.join(ROOT, "CHANGELOG.md"),
+         os.path.join(ROOT, "AGENTS.md")] \
     + sorted(glob.glob(os.path.join(DOCS, "**", "*.md"), recursive=True))
 # ARCHITECTURE.md is the design contract and uses pseudo-commands and elided examples; the checks that run a
 # page's examples cover the pages written to be followed.

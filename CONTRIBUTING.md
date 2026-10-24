@@ -5,6 +5,8 @@ hookspool is built so that this is small, safe to review and mechanical to test.
 
 ## Adding or changing a bobbin
 
+Coding agents: start with [AGENTS.md](AGENTS.md), which maps the repository and lists the commands and rules below in one place.
+
 A bobbin is named `<vendor>.<product>` (`google.gmail`, `atlassian.trello`), lives in `hookspool/bobbins/<vendor>/<product>/`
 and is checked by one command, which CI runs too:
 
