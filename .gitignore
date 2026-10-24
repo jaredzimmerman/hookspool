@@ -1,4 +1,3 @@
-vps-src/
 *.pyc
 __pycache__/
 .venv/

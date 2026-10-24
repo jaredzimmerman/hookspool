@@ -463,6 +463,25 @@ def discover(cfg: dict) -> tuple[dict[str, Package], list[str]]:
 
 
 # ---- path-loaded code ------------------------------------------------------------------------------------
+CATALOGUE_HEAD = "| bobbin | what it does |\n|---|---|\n"
+
+
+def catalogue_row(pkg: Package) -> str:
+    """One row of the bobbin catalogue (docs/bobbins/README.md): the name, linked to the bobbin's README for a
+    built-in one, and the manifest's summary."""
+    name = f"`{pkg.name}`"
+    if pkg.origin == BUILTIN:
+        name = f"[{name}](../../hookspool/bobbins/{pkg.name}/README.md)"
+    summary = " ".join(str(pkg.summary or "").split()).replace("|", "\\|")
+    return f"| {name} | {summary} |"
+
+
+def catalogue_markdown(pkgs) -> str:
+    """``hookspool bobbin list --markdown``: the catalogue table, one row per bobbin in name order. The rows come
+    from the manifests, so a new bobbin needs no hand edit outside its own directory."""
+    return CATALOGUE_HEAD + "".join(catalogue_row(p) + "\n" for p in sorted(pkgs, key=lambda p: p.name))
+
+
 def code_path_problem(path: str, *, want: str = "any") -> str | None:
     """Why code at ``path`` may not be loaded, or None (ARCHITECTURE §14.3.6): it must be an
     absolute path to a regular file or directory, not group- or other-writable, owned by root

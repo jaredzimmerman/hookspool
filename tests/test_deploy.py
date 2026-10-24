@@ -123,9 +123,10 @@ def test_nginx_body_limit_matches_the_intake_limit(nginx):
 
 
 def test_effective_source_cap_is_768_kib_and_the_docs_say_so():
+    from hookspool import bobbin_loader
     from hookspool import config as hc
-    caps = {hc.source_max_body_bytes(CONFIG, name) for name in CONFIG["sources"]
-            if "max_body_bytes" not in CONFIG["sources"][name]}
+    ex = bobbin_loader.expand(hc.merge(hc.DEFAULTS, CONFIG))     # the [bobbins.*] instances as the sources they become
+    caps = {hc.source_max_body_bytes(ex, name) for name in ex["sources"] if "max_body_bytes" not in ex["sources"][name]}
     assert caps == {786432}, caps
     row = [ln for ln in read_ops("sweeps.md").splitlines() if ln.startswith("| **GitHub payload over")][0]
     assert "768 KiB" in row and "1 MiB by default" not in row
@@ -155,7 +156,7 @@ def test_nginx_every_location_rate_limits_with_a_defined_zone_and_a_real_upstrea
         target = pp[0].partition("/hooks/")[2] or path.removeprefix("/hooks/")
         sources.append(target)
     # one location per source in the config example (github has two paths, one source)
-    assert set(sources) == set(CONFIG["sources"]) | set(CONFIG.get("bobbins", {}))
+    assert set(sources) == set(CONFIG.get("sources", {})) | set(CONFIG.get("bobbins", {}))
 
 
 def test_nginx_route_hints_come_from_the_path_and_match_the_config_routes(nginx):
@@ -311,7 +312,7 @@ def placed(tmp_path):
     cfg = tomllib.loads(text)
     (etc / "secrets").mkdir(parents=True)
     (etc / "google").mkdir(parents=True)
-    for s in [*cfg["sources"].values(), *cfg["bobbins"].values()]:
+    for s in [*cfg.get("sources", {}).values(), *cfg["bobbins"].values()]:
         for ref in s.get("secrets", {}).values():
             if "file" in ref:
                 open(ref["file"], "w").write("test-secret\n")
@@ -320,7 +321,7 @@ def placed(tmp_path):
                 open(ref["env_file"], "w").write("PLAID_CLIENT_ID=a\nPLAID_SECRET=b\n")
                 os.chmod(ref["env_file"], 0o600)
     # the Hermes side, as an operator has it after step 5 of the README: no events, no coalesce
-    names = {r["destination"] for r in cfg["routes"]} | {s["action"] for s in cfg["sources"].values()} \
+    names = {r["destination"] for r in cfg["routes"]} | {s["action"] for s in cfg.get("sources", {}).values()} \
         | {d for b in cfg["bobbins"].values() for d in b["outputs"].values()}
     subs.write_text(json.dumps({n.split(":", 1)[1]: {"secret": "s", "prompt": "x"}
                                 for n in names if n.startswith("hermes:")}))
@@ -354,7 +355,7 @@ def test_config_example_every_source_is_covered_by_the_readme_sweep_table():
     readme = read_ops("sweeps.md")
     table = readme.split("# Sweeps\n")[1].split("### Known limits")[0]
     rows = {ln.split("|")[1].strip().lower(): ln for ln in table.splitlines() if ln.startswith("| ") and "---" not in ln}
-    for src in [*CONFIG["sources"], *CONFIG["bobbins"]]:
+    for src in [*CONFIG.get("sources", {}), *CONFIG["bobbins"]]:
         key = {"gmail": "gmail (pub/sub)", "gcal": "calendar"}.get(src, src)
         assert key in rows, f"no sweep row for {src}"
         cells = [c.strip() for c in rows[key].split("|")[1:-1]]

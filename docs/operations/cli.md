@@ -269,6 +269,7 @@ directory for `check`.
 | `--set NAME=VALUE` | `new`: freeze a webhook setting (`scheme`, `header`, `prefix`, `key`, `dedup`, ...) into the template; the value is TOML (`--set 'key=["id"]'`) or a bare string, an empty value removes the key, and a key that takes only a string keeps the text as written (`--set prefix=1` is the string `1`); repeatable. `callback_url` (hmac-sha1-base64-url) is used for the captures and the kit instance but stays a required setting of the new bobbin, not part of its template. A value the template refuses stops `new` with the template's message |
 | `--code` | `new`: a `source.py` instead of the template |
 | `--processor` | `new`: include a `processor.py` and a `[processor]` table |
+| `--markdown` | `list`: print the catalogue table of `docs/bobbins/README.md` (name, linked to its README, and the manifest's summary), generated from the manifests |
 | `--report text\|md\|json` | `check`: the scorecard as aligned text (default), GitHub Markdown, or JSON (schema `hookspool.bobbin-check/1`) |
 | `--strict` | `check`: advisory checks (`scope`) fail the run too |
 | `--base REF` | `check`: the git ref the change is compared with; the advisory `scope` check lists files changed outside the bobbin |

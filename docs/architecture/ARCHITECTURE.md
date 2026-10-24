@@ -8,7 +8,7 @@ Three promises:
 2. **One behaviour for every source.** A source plugin supplies only its verifier, its coalesce key, its dedup id, its destination, an optional handshake and a coalesce span. Spooling, dedup, coalescing, leases, retries, breakers, issues, alerts, metrics and the CLI are shared and have no per-source variants.
 3. **Bursts become one wake-up.** Events are coalesced per `(route, key)` with a quiet window and a maximum wait that follow the service type, so a destination that costs money or CPU per call (an agent run) is called once per burst, with every event in order. A batch is bounded in events and bytes whatever the destination is doing.
 
-This document is the contract for the v2 build. Where it conflicts with code, the code is wrong. Section 20 records how the architecture review (`.ladder/ARCH_REVIEW.md`) was addressed.
+This document is the contract for the v2 build. Where it conflicts with code, the code is wrong. Section 20 records how the review of the first draft was addressed.
 
 ---
 
@@ -457,7 +457,7 @@ Both produce the same JSON:
  "batches": {"open": 3, "sealed": 1, "retry": 0, "leased": 1, "delivered": 1412, "dead": 0, "dropped": 0, "quarantined": 0},
  "oldest_pending_age_s": 41.0,
  "destinations": {"hermes:github-ci": {"state": "closed", "inflight": 1, "oldest_pending_age_s": 41.0},
-                  "script:gmail_delta": {"state": "open", "opened_at": 1.7e9, "cooldown_s": 600, "oldest_pending_age_s": 259000.0, "last_error": "connection refused"}},
+                  "script:gmail": {"state": "open", "opened_at": 1.7e9, "cooldown_s": 600, "oldest_pending_age_s": 259000.0, "last_error": "connection refused"}},
  "sources": {"github": {"last_event_age_s": 12.0}, "gcal": {"last_event_age_s": 90000.0, "expected_every_s": 86400, "silent": true}},
  "issues_open": 1, "spool_bytes": 10485760, "disk_free_bytes": 40000000000}
 ```
@@ -814,8 +814,9 @@ at start and on reload.
 
 #### 14.3.4 Processors
 
-`hookspool.processor` is the runtime. `deploy/scripts/hookspool_batch.py` becomes a re-export of it and
-the stand-alone "copy three files" mode is retired; the delta scripts move into their bobbins. 
+`hookspool.processor` is the runtime. `deploy/scripts/hookspool_batch.py` is a re-export of it; the stand-alone
+"copy three files" mode is retired, and the Gmail and Calendar delta scripts are the `gmail` and `gcal` bobbins
+([Upgrading](../operations/upgrading.md#upgrading-to-02-bobbins) moves a deployment across).
 `python -m hookspool.processor <instance>` loads the processor module from `HOOKSPOOL_BOBBIN_DIR` and calls
 
 ```python
@@ -871,6 +872,22 @@ emit lines ever reaches stdout. Unmapped event types are dropped with one log li
   author can maintain the bobbin or accepts its removal if it breaks) is the expected merge. What the maintainer still
   checks by hand is the provider's documentation against the declared scheme and the capture bodies; a `touches-core`
   diff is reviewed as a core change. [Reviewing a bobbin](../bobbins/review.md) is the reviewer's page.
+
+  **Bobbin-only is reachable.** Such a pull request needs nothing outside the bobbin: the catalogue in
+  `docs/bobbins/README.md` is the output of `hookspool bobbin list --markdown` (one row per manifest `summary`; the
+  docs test checks every row it has and does not demand a row for a new bobbin), the README has no bobbin table, and
+  the `CHANGELOG.md` line is the maintainer's, written on merge. So `README.md`, `CHANGELOG.md` and the catalogue are
+  outside the bobbin like any other file, and `scope` stays the one rule: every changed file is under the bobbin's
+  directory or is `tests/bobbins/test_<name>.py`. The labelling job (`.github/scripts/bobbin_label.py`) applies that rule
+  to GitHub's own list of the pull request's files (`GET /repos/{owner}/{repo}/pulls/{n}/files`, every page), never to
+  the scorecard, which the pull request's code produced; the scorecard's `scope` is a cross-check, and a disagreement
+  labels the pull request `touches-core` with a note in the comment.
+
+  **Running it on someone else's code.** `bobbin check` imports the bobbin's source and processor and runs its tests.
+  The processor and the tests run in children started with `-I`. Their environment is `PATH`, `LANG` and a throwaway
+  `HOME`, plus `TMPDIR` for the tests and the 14.3.3 variables for the processor; nothing else of the caller's reaches
+  them. The source kit runs in the calling process. A maintainer runs it on pull request code in a throwaway
+  environment, or leaves it to CI.
 
 #### 14.3.6 Private customisation
 
@@ -941,10 +958,12 @@ config table shown in both expands without errors.
 
 #### 14.3.9 Compatibility
 
-`[sources.*]` tables keep working exactly as now (they are what an expansion produces). The built-in code
-sources move into their bobbins; `hookspool.sources.<name>` stays importable as a re-export so existing
-configs with `[sources.gmail]` (implicit module) still load. `examples/sources/*.toml` become bobbins on
-the `template` source.
+`[sources.*]` tables keep working exactly as before (they are what an expansion produces). The built-in code
+sources live in their bobbins; `hookspool.sources.<name>` stays importable as a re-export, so existing
+configs with `[sources.gmail]` (implicit module) still load. The config templates that were
+`examples/sources/*.toml` are the `github`, `trello` and `kaneo` bobbins on the `template` source; the old files are
+one-line pointers kept for old links. A deployment that still runs the removed delta scripts moves to
+`[bobbins.*]` instances as [Upgrading](../operations/upgrading.md#upgrading-to-02-bobbins) describes.
 
 ## 15. Configuration
 
@@ -1007,30 +1026,30 @@ calendar = { quiet_s = 45, max_s = 180 }
 sync = { quiet_s = 60, max_s = 300 }
 immediate = { quiet_s = 0, max_s = 0 }
 
-[sources.github]
-span = "burst"
+[bobbins.github]                       # a bobbin instance (14.3.3); it expands to [sources.github]
 secrets.secret = { file = "/etc/hookspool/secrets/github" }   # or { env = "…" } / { env_file = "…", key = "…" }
+outputs = { "*" = "hermes:github-prs" }  # the source's `action`: what no route claims
 dedup_window_s = 86400
 expect_every_s = 0                     # 0 = no liveness expectation
 max_body_bytes = 786432                # per-source override; `check` requires <= the route's max_bytes
 
-[sources.plaid]
+[bobbins.plaid]
 span = "sync"
 secrets.client_id = { env_file = "/etc/hookspool/plaid.env", key = "PLAID_CLIENT_ID" }
 secrets.secret    = { env_file = "/etc/hookspool/plaid.env", key = "PLAID_SECRET" }
-env = "production"
+settings = { env = "production" }
+outputs = { "*" = "hermes:plaid" }
 dedup_window_s = 600
 
-[sources.zoom]
-span = "immediate"
+[bobbins.zoom]
 secrets.webhook_secret = { file = "…" }
+outputs = { "*" = "hermes:zoom" }
 
-[sources.gcal]
-module = "hookspool.sources.gcal"
-span = "calendar"
+[bobbins.gcal]                         # a processor bobbin: its outputs, not an `action`, say where results go
 secrets.channel_token = { file = "…" }
-action = "script:calendar-refresh"
-expect_every_s = 172800
+secrets.cred = { file = "…" }
+outputs = { changed = "script:calendar-refresh" }
+expect = true                          # the manifest's expect_every_s (172800)
 
 [[routes]]
 name = "github-ci"
@@ -1118,7 +1137,7 @@ All tests are hermetic: temp state dir, fake clock injected as `now()`, no netwo
 | concurrency | 4 writer processes × 1 000 enqueues; one dispatcher; every event delivered exactly once per batch; per-key order preserved; parallel across keys; no batch over `max_events`/`max_bytes` with the gate closed for the whole run; two dispatchers → second exits 3 | subprocess tests |
 | dispatcher | backoff schedule; `Retry-After`; counted vs uncounted per class; breaker trip on one key; rotating probe and poison-by-comparison; single-batch destination stays open; re-trip only for probes; `probe_until`; pause/resume; `config` retry re-dued by a reload; clock back (time stands still) and forward; lease recovery at startup, never for a live worker; worker deadline; fenced mark discards a late result; issues open/resolve/alert-once; alert `alerted_at` only on exit 0 | fake clock, stub destination |
 | destinations | hermes body/headers/signatures (verified with an independent Standard Webhooks check in the test); every Hermes response code and `status` → outcome/notice; fresh secret per attempt; per-attempt vs per-batch ids by type; script stdin/env/timeout/process-group kill/emit atomicity; http TLS/redirect/insecure rules | stub servers, `subprocess` scripts in the temp dir |
-| intake + sources | `tests/sourcekit.py` runs the same matrix on every plugin (section 14.1) plus per-source captures (`tests/captures/<source>/*.http`, signed with test secrets); Zoom validation with a bad signature → 401 and no token in the body; Plaid unknown-kid fetch guard | `ThreadingHTTPServer` on an ephemeral port |
+| intake + sources | `hookspool.testing.sourcekit` runs the same matrix on every plugin (section 14.1) plus each bobbin's captures (`hookspool/bobbins/<bobbin>/captures/*.http`, signed with test secrets); Zoom validation with a bad signature → 401 and no token in the body; Plaid unknown-kid fetch guard | `ThreadingHTTPServer` on an ephemeral port |
 | verify helpers | known-answer vectors for every scheme (GitHub, Trello SHA-1+callback, Zoom v0, Standard Webhooks with `whsec_` and raw keys, Plaid ES256 with a generated key and JWK, static token, `t=,v1=`), stale and future timestamps; constant-time wrapper used exclusively (grep test) | unit |
 | security | no sentinel in any log line (autouse fixture); no secret value in the DB (`SELECT` scan, quarantine rows included); `auth_headers` never stored; 401 bodies empty; file modes | unit |
 | CLI | every command against a seeded DB; `check` finds each class of misconfiguration (including Hermes `events`/`coalesce` and the `max_bytes` bounds); `split`/`exclude`/`replay` round trips; `source test` on captures | `main(argv)` in-process |
@@ -1149,7 +1168,7 @@ Acceptance for the whole suite: `python -m pytest -q` green on 3.11 and the newe
 
 ## 20. Addressed review
 
-`.ladder/ARCH_REVIEW.md` reviewed the first v2 draft. Every blocker and major is resolved as follows; minors are accepted unless listed under "rejected or narrowed".
+A review of the first v2 draft raised the items below. Every blocker and major is resolved as follows; minors are accepted unless listed under "rejected or narrowed".
 
 | item | resolution |
 |---|---|

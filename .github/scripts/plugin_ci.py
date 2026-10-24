@@ -17,16 +17,15 @@ Everything runs locally the same way as in CI::
     python .github/scripts/plugin_ci.py all --base origin/main
     python .github/scripts/plugin_ci.py kit template:github code:zoom
     python .github/scripts/plugin_ci.py bobbins --base origin/main
-    python .github/scripts/plugin_ci.py scan --all
-    python .github/scripts/plugin_ci.py scan --all --include-ladder   # the pre-publish gate: also the tracked .ladder/
+    python .github/scripts/plugin_ci.py scan --all                     # every tracked and untracked file
 
 The table is also appended to ``$GITHUB_STEP_SUMMARY`` when that is set.
 
 What a "plugin" is
-  ``template:<name>``  ``hookspool/bobbins/<name>/bobbin.toml`` (captures in its ``captures/``), or the
-                       legacy ``examples/sources/<name>.toml`` with ``tests/captures/<name>/``; run through
-                       ``tests/test_sources_template.py`` (kit cases, captures, the capture-coverage check),
-                       selected by test id.
+  ``template:<name>``  ``hookspool/bobbins/<name>/bobbin.toml`` with a fixed ``[source.template]`` (captures in
+                       its ``captures/``); run through ``tests/test_sources_template.py`` (kit cases, captures, the
+                       capture-coverage check), selected by test id. This is the repository's own regression run;
+                       a contributor's command is ``hookspool bobbin check`` (the ``bobbins`` subcommand).
   ``code:<name>``      ``hookspool/sources/<name>.py``, run through ``tests/test_sources_<name>.py``, which
                        must parametrize over ``sourcekit.CASES`` (no kit, no merge).
 
@@ -62,11 +61,8 @@ TEMPLATE_TESTS = "tests/test_sources_template.py"
 SHARED = {"tests/sourcekit.py", "hookspool/testing/sourcekit.py", "tests/conftest.py", "hookspool/plugin.py", "hookspool/verify.py",
           "hookspool/intake.py", "hookspool/sources/template.py", TEMPLATE_TESTS}
 NOT_A_SOURCE = {"__init__", "template"}
-# Never scanned. ``.ladder/`` (the build ledger and task notes) is skipped for pull requests; it is tracked in
-# this repository, so ``scan --all`` skips it too unless ``--include-ladder`` is given. Run
-# ``scan --all --include-ladder`` as the pre-publish gate, not plain ``scan --all``.
-SKIP_TREES = (".git/", ".ladder/", "vps-src/", "deploy/local/")
-LADDER = ".ladder/"
+# Never scanned: git's own directory. A file git ignores (``.gitignore``) is never listed in the first place.
+SKIP_TREES = (".git/",)
 # Captures are requests signed with test keys; a capture from a JWT-signing sender carries a JWT by design.
 JWT_OK_UNDER = _scan.JWT_OK_UNDER
 CORE_ALLOWLIST = os.path.join(".github", "core-allowlist.txt")
@@ -174,10 +170,16 @@ def changed_files(base: str | None) -> list[str]:
     base), plus anything uncommitted when running locally. Deleted files are not checked."""
     if not base:
         return []
-    names = set(_git("diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD").split())
-    names |= set(_git("diff", "--name-only", "--diff-filter=ACMR", "HEAD").split())
-    names |= set(_git("ls-files", "--others", "--exclude-standard").split())
+    names = set(_paths(_git("diff", "-z", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD")))
+    names |= set(_paths(_git("diff", "-z", "--name-only", "--diff-filter=ACMR", "HEAD")))
+    names |= set(_paths(_git("ls-files", "-z", "--others", "--exclude-standard")))
     return sorted(n for n in names if not n.startswith(SKIP_TREES))
+
+
+def _paths(out: str) -> list[str]:
+    """The paths of a ``git ... -z`` listing: NUL separated and never quoted, so a name with a space, a newline or a
+    non-ASCII character comes back exactly as it is on disk."""
+    return [n for n in out.split("\0") if n]
 
 
 def discover(files: list[str]) -> list[str]:
@@ -568,10 +570,9 @@ def scan_text(rel: str, text: str, deny: list[str] | None = None) -> list[tuple[
 _redact = _scan.redact
 
 
-def tracked_files(include_ladder: bool = False) -> list[str]:
-    names = _git("ls-files", "-co", "--exclude-standard").split("\n")
-    skip = tuple(t for t in SKIP_TREES if include_ladder is False or t != LADDER)
-    return sorted(n for n in names if n and not n.startswith(skip))
+def tracked_files() -> list[str]:
+    """Every tracked file and every untracked one git does not ignore."""
+    return sorted(n for n in _paths(_git("ls-files", "-z", "-co", "--exclude-standard")) if not n.startswith(SKIP_TREES))
 
 
 def read_text(path: str) -> str | None:
@@ -627,7 +628,6 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--skip-bobbins", action="store_true",
                            help="leave the bobbin scorecards to their own job (bobbin.yml)")
             p.add_argument("--all-files", action="store_true", help="scan every tracked file, not only changes")
-            p.add_argument("--include-ladder", action="store_true", help="with --all-files: also the tracked .ladder/")
     b = sub.add_parser("bobbins")
     b.add_argument("dirs", nargs="*", help="bobbin directories (default: the bobbins the change touches)")
     b.add_argument("--base", default=os.environ.get("BASE_SHA") or "origin/main")
@@ -639,8 +639,7 @@ def main(argv: list[str] | None = None) -> int:
     k.add_argument("--test-file", help="code: the kit test module (default tests/test_sources_<name>.py)")
     sub.add_parser("guard")
     s = sub.add_parser("scan")
-    s.add_argument("--all", action="store_true", help="every tracked file (except .ladder/ unless --include-ladder)")
-    s.add_argument("--include-ladder", action="store_true", help="with --all: also the tracked .ladder/ (pre-publish)")
+    s.add_argument("--all", action="store_true", help="every tracked file, and untracked ones git does not ignore")
     s.add_argument("--base", default=os.environ.get("BASE_SHA") or "origin/main")
     s.add_argument("paths", nargs="*", help="scan these files only")
     args = ap.parse_args(argv)
@@ -672,7 +671,7 @@ def main(argv: list[str] | None = None) -> int:
         run_guard(report)
         report.emit("Core guard")
     elif args.cmd == "scan":
-        files = args.paths or (tracked_files(args.include_ladder) if args.all else changed_files(args.base))
+        files = args.paths or (tracked_files() if args.all else changed_files(args.base))
         run_scan(report, files)
         report.emit("Secret and hostname scan")
     else:   # all
@@ -686,7 +685,7 @@ def main(argv: list[str] | None = None) -> int:
         for d in bobbins:
             run_bobbin(d, report, base=args.base)
         run_guard(report)
-        run_scan(report, tracked_files(args.include_ladder) if args.all_files else changed_files(args.base))
+        run_scan(report, tracked_files() if args.all_files else changed_files(args.base))
         report.emit("Plugin checks")
     return 0 if report.ok else 1
 
