@@ -944,7 +944,7 @@ def test_url_problem_unit():
     ok = ("https://developers.google.com/workspace/gmail/api/guides/push", "https://kaneo.app/docs#signature-verification")
     for u in ok:
         assert K.url_problem(u) is None, u
-    for u in ("", None, "ftp://github.com", "https://", "https://user:pw@github.com/x", "https://exam ple.com",
+    for u in ("", None, "ftp://github.com", "https://", "https://user:pw@github.com/x", "https://github.com/a b",
               "https://TODO", "https://sub.example.org/x", "https://[2001:db8::1]/x", "https://docs.example/x"):
         assert K.url_problem(u) is not None, u
 
