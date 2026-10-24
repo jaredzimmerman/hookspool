@@ -68,7 +68,13 @@ separate services so that either can be restarted without the other.
 Prints one JSON document: whether the spool is writable, the dispatcher heartbeat, batch counts by state, the oldest
 pending age, each destination's breaker state and each source's last event age. It is the same document `/healthz`
 serves. `degraded` lists soft problems in words ("dispatcher has not run", dead batches, an open breaker, a silent
-source).
+source, a stale poll).
+
+`polls` has one entry per poll instance ([poll bobbins](../bobbins/writing-a-bobbin.md#poll-bobbins)): `every_s`,
+`next_at` and `next_in_s` (when the next tick is due), `last_tick_at`, `delivered_at`, `delivered_tick_at` and
+`delivered_age_s` (the last tick the poller finished), `pending` (a tick is still waiting or dead, so the next window
+is skipped), `skipped` (how many windows were skipped that way) and `stale` (no tick delivered for three times
+`every_s`; the issue `poll:<instance>:stale` is open).
 
 ### hookspool list
 
@@ -271,6 +277,7 @@ name for `new` and the bobbin directory for `check`.
 | `--set NAME=VALUE` | `new`: freeze a webhook setting (`scheme`, `header`, `prefix`, `key`, `dedup`, ...) into the template; the value is TOML (`--set 'key=["id"]'`) or a bare string, an empty value removes the key, and a key that takes only a string keeps the text as written (`--set prefix=1` is the string `1`); repeatable. `callback_url` (hmac-sha1-base64-url) is used for the captures and the kit instance but stays a required setting of the new bobbin, not part of its template. A value the template refuses stops `new` with the template's message |
 | `--code` | `new`: a `source.py` instead of the template |
 | `--processor` | `new`: include a `processor.py` and a `[processor]` table |
+| `--poll` | `new`: a poll bobbin for a service with no push at all: a `[poll]` table instead of `[source]`, a `poller.py` that makes a conditional GET, a `captures/poll-example.json` of stub API answers, and the documents with the poll frontmatter. It takes no `--code`, `--processor` or `--set` |
 | `--markdown` | `list`: print the catalogue table of `docs/bobbins/README.md` (name, linked to its README, and the manifest's summary), generated from the manifests |
 | `--report text\|md\|json` | `check`: the scorecard as aligned text (default), GitHub Markdown, or JSON (schema `hookspool.bobbin-check/1`) |
 | `--strict` | `check`: advisory checks (`provider-links`, `scope`) fail the run too |

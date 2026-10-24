@@ -6,6 +6,23 @@ an interface, and the entry will say so.
 
 ## [Unreleased]
 
+### Added
+
+- Poll sources (ARCHITECTURE 14.4), for services with no push at all: a bobbin may declare `[poll]` (`every_s` >= 60,
+  `jitter_s`, `module = "poller"`) in place of `[source]`, and its `poller.py` answers `poll(batch, ctx)` with the same
+  batch, context, journal, staged state and emits as a processor. The dispatcher keeps a durable schedule in the new
+  `polls` table (schema 3, `0003_polls.sql`; run `hookspool migrate`) and enqueues one tick per window
+  (`{"tick", "instance"}`, key `poll`, dedup id `poll:<instance>:<scheduled next_at>`) in the same transaction as the
+  `next_at` update: a missed window makes one tick, never a burst, and no tick is enqueued while the previous one is
+  undelivered. A poll instance has no URL (`/hooks/<instance>` is 404) and may override `every_s` and `jitter_s`.
+  `hookspool status` shows each poll under `polls`, and `poll:<instance>:stale` opens after three windows without a
+  delivered tick.
+- `ctx.http.get_text(url, headers)` (and on `ctx.oauth(name)`): `(status, text, response_headers)`, with a 304 returned,
+  not raised, so a poller can make a conditional GET.
+- `hookspool bobbin new <vendor>.<product> --poll` scaffolds a poll bobbin. The conformance kit runs `poller.py` once per
+  `captures/poll-*.json` (stub API answers), and its `provider` row asks a poll bobbin for `api_docs`, `no_push_note` and
+  `no_push_docs` in place of `webhook_docs` and `signature_docs`; the documents' frontmatter carries `api_docs`.
+
 ## [0.2.0] - 2026-10-23
 
 ### Added

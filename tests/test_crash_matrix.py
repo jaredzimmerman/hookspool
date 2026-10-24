@@ -33,7 +33,7 @@ from hookspool.store import Store, content_hash
 T0 = 1_800_000_000.0
 POINTS = ("enqueue:after_batch", "enqueue:after_event", "enqueue:after_seal", "enqueue:after_tee", "seal:mid", "claim:after_update",
           "deliver:after_emits", "mark:after_update", "recover:mid", "replay:mid", "quarantine:mid",
-          "reclassify:mid", "split:mid", "prune:mid")
+          "reclassify:mid", "split:mid", "prune:mid", "poll:after_enqueue")
 
 
 def rows(path, q, args=()):
@@ -177,6 +177,9 @@ for i in range(10, 14):
 sb = [b for b in st.list("open", limit=100) if b["key"] == "s"][0]["id"]
 st.seal_ready(T[0])
 ack("split", sb, st.split(sb, max_events=1, now=T[0]))
+# 7b. the poll clock: a new instance is scheduled, then its due tick is enqueued with next_at in one transaction
+st.poll_tick("pl", D, 600, 0, now=T[0])
+ack("polled", st.poll_tick("pl", D, 600, 0, now=T[0]).action)
 # 8. retention, 30 days later, one row per transaction
 T[0] += 30 * 86400
 ack("pre_prune", sorted(b["id"] for b in st.list(limit=1000) if b["state"] not in ("delivered", "dropped")))
@@ -266,6 +269,11 @@ def test_kill9_at_every_occurrence_of_every_hook(tmp_path, point, k):
     if split and not pruning:
         sb, parts = split[0][1], split[0][2]
         assert rows(db, "SELECT state FROM batches WHERE id=?", (sb,)) == [("dropped",)] and len(parts) == 4
+    ticks = rows(db, "SELECT COUNT(*) FROM events WHERE dedup_id GLOB 'poll:pl:*'")[0][0]
+    if acks["polled"] and not pruning:
+        assert ticks == 1 and rows(db, "SELECT next_at FROM polls WHERE instance='pl'")[0][0] > T0 + 500
+    elif not pruning:
+        assert ticks == 0, "a tick was committed without its next_at"
     pre = [a[1] for a in out if a[0] == "pre_prune"]
     if pre:
         left = {r[0] for r in rows(db, "SELECT id FROM batches")}

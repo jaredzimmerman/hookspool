@@ -351,7 +351,7 @@ TOML_PAGES = [p for p in FOLLOWED if list(toml_blocks(p))]
 def test_toml_blocks_parse_and_pass_key_validation(path):
     for i, block in enumerate(toml_blocks(path)):
         doc = tomllib.loads(block)
-        if "name" in doc and "source" in doc:          # a bobbin manifest, not a config: it validates as one
+        if "name" in doc and ("source" in doc or "poll" in doc):    # a bobbin manifest, not a config: it validates as one
             assert bobbin_loader.validate_manifest(doc, doc["name"].replace(".", "/"), hs_config.DEFAULTS["spans"]) == [], \
                 f"{os.path.basename(path)} toml block {i}"
             continue

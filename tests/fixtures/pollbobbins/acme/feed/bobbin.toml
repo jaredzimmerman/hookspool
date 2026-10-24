@@ -1,0 +1,33 @@
+name = "acme.feed"
+version = "1"
+summary = "Test bobbin: polls a made-up feed that has no push"
+
+[provider]
+vendor = "Acme"
+product = "Feed"
+homepage = "https://github.com"
+api_docs = "https://docs.github.com/en/rest"
+no_push_note = "The made-up feed has no webhook, push or watch method, so it is polled."
+no_push_docs = "https://docs.github.com/en/rest/activity/feeds"
+
+[poll]
+every_s = 600
+module = "poller"
+timeout_s = 60
+state = true
+
+[secrets.api_key]
+description = "the feed's API key"
+
+[settings.feed]
+description = "which feed to poll"
+type = "string"
+required = true
+
+[settings.url]
+description = "the feed's items endpoint"
+type = "string"
+default = "https://feeds.example.com/v1/items"
+
+[outputs.item]
+description = "a new item in the feed"

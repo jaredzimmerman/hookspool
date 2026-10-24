@@ -16,7 +16,8 @@ The checks, in order (required unless marked advisory):
                 (``homepage``, ``webhook_docs``; ``signature_docs`` when a secret is declared; ``api_docs``
                 when the processor calls the provider's API), https only, never a placeholder or an
                 example host; README.md, SETUP.md and AGENTS.md open with the same frontmatter
-``files``       ``bobbin.toml``, ``README.md``, ``SETUP.md``, ``AGENTS.md`` and ``captures/*.http``
+``files``       ``bobbin.toml``, ``README.md``, ``SETUP.md``, ``AGENTS.md`` and ``captures/*.http`` (a poll
+                bobbin, 14.4: ``poller.py`` and ``captures/poll-*.json`` instead)
 ``todos``       no ``TODO`` placeholder is left
 ``core-only``   the 14.3.7 ban on every module (imports, calls, ``os.*``, ``sys.path``, another bobbin)
 ``docs``        SETUP.md and AGENTS.md name every secret and required setting, AGENTS.md has a
@@ -27,7 +28,8 @@ The checks, in order (required unless marked advisory):
 ``source-kit``  the shared source kit (``hookspool.testing.sourcekit``) with each accepted capture
 ``processor``   (when there is one) each capture's payload through the real runtime with a fake
                 context: stub HTTP, the network blocked, outputs within the declared ones, the
-                journal replayed on a second run, nothing but emits on stdout, 75 and 65 exits
+                journal replayed on a second run, nothing but emits on stdout, 75 and 65 exits; for a
+                poll bobbin, a tick through ``poll`` once per ``captures/poll-*.json`` (its stub API answers)
 ``tests``       the bobbin's own tests pass with the network blocked
 ``provider-links`` (advisory, ``--online`` only; CI passes it) every ``[provider]`` URL answers 2xx/3xx
 ``scope``       (advisory) whether the change touches anything outside the bobbin
@@ -47,6 +49,15 @@ Test values and stub answers for a bobbin live in ``captures/kit.toml`` (optiona
     url = "https://api.example.com/v1/items"
     status = 200
     json = { items = [] }
+
+A poll bobbin (``[poll]``, 14.4) has no source and no request captures. Each ``captures/poll-<name>.json`` is one
+poll: the stub API answers for that run and, optionally, how many items ``poll`` returns::
+
+    {"description": "two items changed", "now": 1800000000, "items": 2,
+     "http": [{"method": "GET", "url": "https://api.example.com/v1/items", "status": 200,
+               "headers": {"ETag": "\"v2\""}, "text": "{\"items\": [...]}"}]}
+
+A stub's ``text`` and ``headers`` answer ``ctx.http.get_text``, and a 304 stub is its not-modified answer.
 
 Nothing here reads a real secret: every secret is a test value written to a temporary file.
 """
@@ -83,12 +94,15 @@ SCHEMA = "hookspool.bobbin-check/1"
 DEFAULT_TEST_SECRET = BL.SCAFFOLD_SECRET
 KIT_FILE = os.path.join("captures", "kit.toml")
 KIT_KEYS = {"secrets", "settings", "body_signed", "timestamped", "tolerance_s", "http"}
-HTTP_STUB_KEYS = {"method", "url", "status", "json"}
+HTTP_STUB_KEYS = {"method", "url", "status", "json", "text", "headers"}
+POLL_CAPTURE_RE = re.compile(r"^poll-[A-Za-z0-9_.-]+\.json$")
+POLL_CAPTURE_KEYS = {"description", "now", "http", "items"}
 T0 = 1_800_000_000.0
 EXPECTS = ("queued", "ignored", "challenge", "unverified")
 REQUIRED_FILES = ("bobbin.toml", "README.md", "SETUP.md", "AGENTS.md")
 FRONTMATTER_DOCS = ("README.md", "SETUP.md", "AGENTS.md")
 FRONTMATTER_KEYS = ("bobbin", "provider", "webhook_docs")
+POLL_FRONTMATTER_KEYS = ("bobbin", "provider", "api_docs")    # a poll bobbin receives no webhooks (14.4)
 LINK_TIMEOUT_S = 10.0
 TEXT_EXT = (".toml", ".md", ".py", ".http", ".txt", ".json")
 PROCESSOR_TIMEOUT_S = 120.0
@@ -304,6 +318,29 @@ class Bobbin:
             out += [os.path.join(base, f) for f in sorted(files) if f.endswith(TEXT_EXT)]
         return out
 
+    @property
+    def is_poll(self) -> bool:
+        return self.pkg.poll is not None
+
+    def frontmatter_keys(self) -> tuple[str, ...]:
+        return POLL_FRONTMATTER_KEYS if self.is_poll else FRONTMATTER_KEYS
+
+    def poll_captures(self) -> list[tuple[str, dict | None, str]]:
+        """(path, parsed poll capture or None, problem) for every ``captures/poll-*.json`` (14.4)."""
+        d = self.file("captures")
+        names = sorted(f for f in os.listdir(d) if POLL_CAPTURE_RE.match(f)) if os.path.isdir(d) else []
+        out = []
+        for n in names:
+            p = os.path.join(d, n)
+            try:
+                with open(p, encoding="utf-8") as f:
+                    obj = json.load(f)
+            except (OSError, ValueError, UnicodeDecodeError) as e:
+                out.append((p, None, f"does not parse ({e.__class__.__name__})"))
+                continue
+            out.append((p, *_poll_capture_problem(obj)))
+        return out
+
     def captures(self) -> list[tuple[str, RawRequest | None, str]]:
         """(path, parsed request or None, parse error) for every ``captures/*.http``."""
         if self._captures is None:
@@ -448,6 +485,28 @@ def _read_kit(path: str) -> tuple[dict, list[Finding]]:
     return kit, errs
 
 
+def _poll_capture_problem(obj: Any) -> tuple[dict | None, str]:
+    """(the capture, "") or (None, what is wrong with it)."""
+    if not isinstance(obj, dict):
+        return None, "must be a JSON object"
+    extra = sorted(set(obj) - POLL_CAPTURE_KEYS)
+    if extra:
+        return None, f"unknown key(s) {', '.join(extra)} ({', '.join(sorted(POLL_CAPTURE_KEYS))})"
+    if not isinstance(obj.get("description"), str) or not obj["description"].strip():
+        return None, "description: required (what this poll finds)"
+    now = obj.get("now")
+    if now is not None and (isinstance(now, bool) or not isinstance(now, (int, float))):
+        return None, "now: must be unix seconds"
+    items = obj.get("items")
+    if items is not None and (isinstance(items, bool) or not isinstance(items, int) or items < 0):
+        return None, "items: must be a count >= 0"
+    http = obj.get("http", [])
+    if not isinstance(http, list) or not all(isinstance(h, dict) and isinstance(h.get("url"), str) and
+                                             not set(h) - HTTP_STUB_KEYS for h in http):
+        return None, "http: a list of { method, url, status, json | text, headers } stubs"
+    return obj, ""
+
+
 def _instances_of(doc: dict | None, name: str) -> dict[str, dict]:
     b = (doc or {}).get("bobbins")
     if not isinstance(b, dict):
@@ -519,7 +578,8 @@ def check_manifest(b: Bobbin) -> Result:
     found += _one_service(b)
     if found:
         return "fail", f"{len(found)} problem(s)", found
-    src = "template" if "template" in b.pkg.source else "source.py"
+    src = (f"poll every {b.pkg.poll.get('every_s')}s" if b.is_poll else
+           "template" if "template" in b.pkg.source else "source.py")
     return "pass", (f"{b.pkg.name} {b.pkg.version}: {src}, {len(b.pkg.secrets)} secret(s), {len(b.pkg.settings)} "
                     f"setting(s), outputs {', '.join(b.pkg.outputs) or '-'}"
                     + (", processor" if b.pkg.processor is not None else "")), []
@@ -740,10 +800,10 @@ def parse_frontmatter(text: str | None) -> tuple[dict[str, str] | None, int, str
 def processor_calls_api(b: Bobbin) -> bool:
     """True when the processor reaches the provider's API: it uses ``ctx.http`` / ``ctx.oauth`` or a
     ``hookspool.providers`` helper (which is written on them)."""
-    if b.pkg.processor is None:
+    if b.pkg.worker is None:
         return False
     try:
-        with open(b.file("processor.py"), encoding="utf-8") as f:
+        with open(b.file(b.pkg.worker_module + ".py"), encoding="utf-8") as f:
             tree = ast.parse(f.read())
     except (OSError, UnicodeDecodeError, SyntaxError):
         return False
@@ -770,6 +830,9 @@ def check_provider(b: Bobbin) -> Result:
     found = [Finding(rel, _toml_line(text, e.split(":")[0]), e) for e in b.pkg.errors if _own_row(e) == "provider"]
     raw = b.pkg.manifest.get("provider") if isinstance(b.pkg.manifest, dict) else None
     if raw is None:
+        if b.is_poll:
+            return "fail", "no [provider] table", [Finding(rel, 1, "[provider]: required: vendor, product, homepage,"
+                                                                   " api_docs, no_push_note and no_push_docs")]
         return "fail", "no [provider] table", [Finding(rel, 1, "[provider]: required: vendor, product, homepage and"
                                                                " webhook_docs (the provider's developer page for these"
                                                                " webhooks)")]
@@ -790,15 +853,37 @@ def check_provider(b: Bobbin) -> Result:
                                  " it writes it)"))
         elif _PLACEHOLDER.search(v):
             found.append(Finding(rel, _toml_line(text, f"provider.{k}"), f"provider.{k}: {v!r} is a placeholder"))
-    need = ["homepage", "webhook_docs"]
-    if b.pkg.secrets:
-        need.append("signature_docs")              # the source verifies a signature or a token with a secret
-    if processor_calls_api(b):
-        need.append("api_docs")
+    if b.is_poll:
+        # a poll bobbin (14.4) receives nothing: it links the API it polls and the page that shows there is no push
+        need = ["homepage", "api_docs", "no_push_docs"]
+        note = prov.get("no_push_note")
+        if not isinstance(note, str) or not note.strip():
+            found.append(Finding(rel, _toml_line(text, "provider"), "provider.no_push_note: required (one plain"
+                                 " sentence: why this service has no webhook, push or watch method)"))
+        elif "://" in note or len(note) > 300 or not note.rstrip().endswith("."):
+            found.append(Finding(rel, _toml_line(text, "provider.no_push_note"), "provider.no_push_note: one plain"
+                                 " sentence ending with a full stop, at most 300 characters, no link (the link is"
+                                 " no_push_docs)"))
+        for k in ("webhook_docs", "signature_docs"):
+            if prov.get(k):
+                found.append(Finding(rel, _toml_line(text, f"provider.{k}"), f"provider.{k}: a poll bobbin receives"
+                                     " no webhooks; if the service can push, write a webhook bobbin instead"))
+    else:
+        need = ["homepage", "webhook_docs"]
+        if b.pkg.secrets:
+            need.append("signature_docs")              # the source verifies a signature or a token with a secret
+        if processor_calls_api(b):
+            need.append("api_docs")
+        for k in ("no_push_note", "no_push_docs"):
+            if k in prov:
+                found.append(Finding(rel, _toml_line(text, f"provider.{k}"), f"provider.{k}: only for a poll bobbin"
+                                     " ([poll]); this one receives webhooks"))
     why = {"signature_docs": " (the bobbin declares a secret, so the source verifies a signature or token: link the"
                              " page that describes it)",
-           "api_docs": " (the processor calls the provider's API: link its reference)",
-           "webhook_docs": " (the provider's developer page for the webhooks or push this bobbin receives)"}
+           "api_docs": (" (the API this bobbin polls: link its reference)" if b.is_poll else
+                        " (the processor calls the provider's API: link its reference)"),
+           "webhook_docs": " (the provider's developer page for the webhooks or push this bobbin receives)",
+           "no_push_docs": " (the provider's page or reference that shows there is no webhook, push or watch method)"}
     for k in BL.PROVIDER_URL_KEYS:
         v = prov.get(k)
         if v is None or v == "":
@@ -809,20 +894,21 @@ def check_provider(b: Bobbin) -> Result:
         if problem:
             found.append(Finding(rel, _toml_line(text, f"provider.{k}"), f"provider.{k}: {problem}"))
     want = {"bobbin": b.name, "provider": f"{prov.get('vendor', '')} {prov.get('product', '')}".strip(),
-            "webhook_docs": str(prov.get("webhook_docs", ""))}
+            "webhook_docs": str(prov.get("webhook_docs", "")), "api_docs": str(prov.get("api_docs", ""))}
+    fm_keys = b.frontmatter_keys()
     for d, (fm, line, err) in fronts.items():
         drel = b.rel(b.file(d))
         if fm is None:
             if err != "missing":                     # a missing doc is the files row's
                 found.append(Finding(drel, line, f"frontmatter: {err}; open the file with ---, " +
-                                     ", ".join(f"{k}: {want[k]}" for k in FRONTMATTER_KEYS) + ", ---"))
+                                     ", ".join(f"{k}: {want[k]}" for k in fm_keys) + ", ---"))
             continue
-        for k in FRONTMATTER_KEYS:
+        for k in fm_keys:
             if k not in fm:
                 found.append(Finding(drel, 1, f"frontmatter: {k}: missing (want {want[k]!r})"))
             elif fm[k] != want[k]:
                 found.append(Finding(drel, 1, f"frontmatter: {k}: {fm[k]!r} does not match bobbin.toml ({want[k]!r})"))
-        extra = sorted(set(fm) - set(FRONTMATTER_KEYS))
+        extra = sorted(set(fm) - set(fm_keys))
         if extra and d != "AGENTS.md":
             found.append(Finding(drel, 1, f"frontmatter: unknown key(s) {', '.join(extra)} (only AGENTS.md may add"
                                           " agents.md keys)"))
@@ -883,11 +969,19 @@ def check_provider_links(b: Bobbin) -> Result:
 
 def check_files(b: Bobbin) -> Result:
     missing = [f for f in REQUIRED_FILES if not os.path.isfile(b.file(f))]
-    if not any(c[0].endswith(".http") for c in b.captures()):
-        missing.append("captures/*.http")
+    if b.is_poll:
+        if not os.path.isfile(b.file(BL.POLL_MODULE + ".py")):
+            missing.append(BL.POLL_MODULE + ".py")
+        if not b.poll_captures():
+            missing.append("captures/poll-*.json")
+        n = len(b.poll_captures())
+    else:
+        if not any(c[0].endswith(".http") for c in b.captures()):
+            missing.append("captures/*.http")
+        n = len(b.captures())
     if missing:
         return "fail", "missing: " + ", ".join(missing), [Finding(b.rel(b.dir) + "/" + m, 0, "missing") for m in missing]
-    return "pass", "bobbin.toml, README.md, SETUP.md, AGENTS.md, " + f"{len(b.captures())} capture(s)", []
+    return "pass", "bobbin.toml, README.md, SETUP.md, AGENTS.md, " + f"{n} capture(s)", []
 
 
 def check_todos(b: Bobbin) -> Result:
@@ -1170,7 +1264,7 @@ def check_docs(b: Bobbin) -> Result:
                         found.append(Finding(rel, line, f"step {s.group(1)} changes something at the provider"
                                                         " but is not marked `outward`"))
                         break
-            if not marked:
+            if not marked and not b.is_poll:      # a poll bobbin registers nothing at the provider
                 found.append(Finding(rel, 0, "no step is marked `outward` (registering the webhook at the provider"
                                              " changes something there)"))
     if found:
@@ -1179,7 +1273,43 @@ def check_docs(b: Bobbin) -> Result:
                     "AGENTS.md has the human list, numbered steps, outward marks"), []
 
 
+def _check_poll_captures(b: Bobbin) -> Result:
+    found: list[Finding] = list(b.kit_errors)
+    for f in found:
+        f.file = b.rel(b.file(KIT_FILE))
+    caps = b.poll_captures()
+    if not caps:
+        return "fail", "no captures/poll-*.json", [Finding(b.rel(b.file("captures")), 0, "a poll bobbin carries one"
+                                                           " captures/poll-<name>.json per poll (its stub API answers)")]
+    for p, obj, err in caps:
+        rel = b.rel(p)
+        if obj is None:
+            found.append(Finding(rel, 1, err))
+        try:
+            with open(p, encoding="utf-8") as f:
+                text = f.read()
+        except (OSError, UnicodeDecodeError):
+            text = ""
+        scan_rel = f"bobbins/{b.path_rel}/captures/{os.path.basename(p)}"
+        for line, kind, ex in S.secret_findings(text, scan_rel):
+            found.append(Finding(rel, line, f"{kind}: {ex} (captures hold test secrets only)"))
+        for line, kind, ex in S.personal_findings(text):
+            found.append(Finding(rel, line, f"{kind}: {ex} (redact real people: example.com addresses, 555-01xx)"))
+    for n, v in b.test_secrets().items():
+        if "test" not in v.lower():
+            found.append(Finding(b.rel(b.file(KIT_FILE)), 0, f"secrets.{n}: a kit secret must say it is a test value"
+                                                             " (contain \"test\")"))
+    stray = [c for c in b.captures()]
+    for p, _raw, _e in stray:
+        found.append(Finding(b.rel(p), 1, "a poll bobbin receives no requests: its captures are poll-*.json"))
+    if found:
+        return "fail", f"{len(found)} problem(s)", found
+    return "pass", f"{len(caps)} poll capture(s); no secrets or personal data", []
+
+
 def check_captures(b: Bobbin) -> Result:
+    if b.is_poll:
+        return _check_poll_captures(b)
     caps = b.captures()
     found: list[Finding] = list(b.kit_errors)
     for f in found:
@@ -1391,6 +1521,8 @@ class _ReplaySigner:
 def check_source_kit(b: Bobbin) -> Result:
     if b.pkg.errors:
         return "skip", "the manifest is invalid (see name and manifest)", []
+    if b.is_poll:
+        return "skip", "a poll bobbin has no source (the processor row runs poller.py)", []
     caps = [(p, _at_path(b, raw)) for p, raw, _e in b.captures() if raw is not None]
     accepted = [(p, r) for p, r in caps if r.meta.get("expect") == "queued"]
     if not accepted:
@@ -1505,15 +1637,16 @@ def _proc_env(b: Bobbin, cfg: dict, i: int, state_dir: str | None) -> dict:
     return env
 
 
-def _run_processor(b: Bobbin, env: dict, doc: dict, mode: str, via_http: bool, now: float) -> dict:
+def _run_processor(b: Bobbin, env: dict, doc: dict, mode: str, via_http: bool, now: float,
+                   http: list | None = None) -> dict:
     work = tempfile.mkdtemp(dir=b.work)
     spec_path, report_path = os.path.join(work, "spec.json"), os.path.join(work, "report.json")
     with open(spec_path, "w", encoding="utf-8") as f:
         json.dump({"instance": b.inst, "mode": mode, "fault_via_http": via_http, "now": now,
-                   "http": b.kit.get("http") or [], "report": report_path}, f)
+                   "http": list(http or []) + list(b.kit.get("http") or []), "report": report_path}, f)
     code = ("import sys; sys.path.insert(0, " + repr(ROOT_PARENT) + "); "
             "from hookspool.testing import _procrun; sys.exit(_procrun.main(sys.argv[1:]))")
-    timeout = min(float((b.pkg.processor or {}).get("timeout_s") or PROCESSOR_TIMEOUT_S), PROCESSOR_TIMEOUT_S)
+    timeout = min(float((b.pkg.worker or {}).get("timeout_s") or PROCESSOR_TIMEOUT_S), PROCESSOR_TIMEOUT_S)
     try:
         p = subprocess.run([sys.executable, "-I", "-B", "-c", code, spec_path], input=json.dumps(doc), env=env,
                            capture_output=True, text=True, timeout=timeout, cwd=work)
@@ -1548,7 +1681,81 @@ def _non_emit_lines(out: str) -> list[int]:
     return bad
 
 
+def _check_poller(b: Bobbin) -> Result:
+    """A poll bobbin (14.4): one tick per ``captures/poll-*.json`` through ``poll``, with that capture's stub API."""
+    cfg, errs = b.instance()
+    if cfg is None:
+        return "fail", "the kit instance does not expand", [Finding(b.rel(b.file("bobbin.toml")), 0, e) for e in errs]
+    caps = [(p, obj) for p, obj, _e in b.poll_captures() if obj is not None]
+    if not caps:
+        return "fail", "no poll capture to run through poll", []
+    state = b.pkg.poll.get("state", True) is True
+    declared = set(b.pkg.outputs)
+    found: list[Finding] = []
+    runs = 0
+    for i, (p, cap) in enumerate(caps, 1):
+        rel = b.rel(p)
+        now = float(cap.get("now") or T0)
+        tick = {"tick": int(now), "instance": b.inst}
+        doc = {"source": b.inst, "route": b.inst, "key": "poll", "batch_id": i, "delivery_id": f"hs_kit_{i}",
+               "attempt": 1, "count": 1, "first_at": now, "last_at": now, "event_type": "poll",
+               "event_types": {"poll": 1}, "summary": f"1 {b.inst} event(s) for poll", "content_hash": "",
+               "events": [tick], "event_meta": [{"event_type": "poll"}]}
+        sdir = os.path.join(b.work, f"state-{i}") if state else None
+        env = _proc_env(b, cfg, i, sdir)
+        http = cap.get("http") or []
+        first = _run_processor(b, env, doc, "normal", False, now, http)
+        runs += 1
+        rep = first["report"]
+        if first["rc"] != 0:
+            found.append(Finding(rel, 1, f"poll exited {first['rc']} on this capture: {_tail(first['stderr'])}"))
+            continue
+        if rep.get("network"):
+            found.append(Finding(rel, 1, "the poller opened a network connection (to "
+                                 + ", ".join(sorted(set(rep["network"]))[:3]) + "); use ctx.http"))
+        bad = _non_emit_lines(first["stdout"])
+        if bad:
+            found.append(Finding(rel, 1, f"stdout line(s) {', '.join(map(str, bad[:5]))} are not emits: only the"
+                                         " runtime writes to stdout"))
+        extra = sorted(set(rep.get("event_types") or []) - declared) if BL.ALL_OUTPUTS not in declared else []
+        if extra:
+            found.append(Finding(b.rel(b.file("bobbin.toml")), 1, f"poll returned event type(s) {', '.join(extra)}"
+                                 " that are not declared outputs"))
+        if cap.get("items") is not None and rep.get("items") != cap["items"]:
+            found.append(Finding(rel, 1, f"poll returned {rep.get('items')} item(s), the capture expects"
+                                         f" {cap['items']}"))
+        second = _run_processor(b, env, doc, "normal", False, now, http)
+        runs += 1
+        if second["rc"] != 0:
+            found.append(Finding(rel, 1, f"the second run of the same tick exited {second['rc']}: "
+                                         f"{_tail(second['stderr'])}"))
+        elif state and (second["report"].get("process_calls") or "replaying the journal" not in second["stderr"]):
+            found.append(Finding(rel, 1, "the second run of the same tick did not replay the journal"))
+        elif second["stdout"] != first["stdout"]:
+            found.append(Finding(rel, 1, "the second run of the same tick printed different emits"))
+        if i == 1:
+            via_http = bool(rep.get("http_calls"))
+            for mode, want in (("raise", 75), ("permanent", 65)):
+                fenv = _proc_env(b, cfg, 1000 + i, os.path.join(b.work, f"state-{mode}") if state else None)
+                r = _run_processor(b, fenv, doc, mode, via_http, now, http)
+                runs += 1
+                if r["rc"] != want:
+                    how = "ctx.http raised " + ("Retryable" if mode == "raise" else "Permanent") if via_http else \
+                        ("poll raised" if mode == "raise" else "ctx.fail_permanent was called")
+                    found.append(Finding(rel, 1, f"when {how} the tick exited {r['rc']}, not {want}: let failures"
+                                                 " raise (Retryable / Permanent) to the runtime"))
+    detail = (f"{runs} run(s) over {len(caps)} poll capture(s): stub HTTP, network blocked, outputs declared, "
+              + ("journal replayed" if state else "no state (a retry polls again)") + ", exits 75/65")
+    if found:
+        return "fail", f"{len(found)} problem(s)", found
+    return "pass", detail, []
+
+
 def check_processor(b: Bobbin) -> Result:
+    if b.pkg.errors and b.pkg.worker is not None:
+        return "skip", "the manifest is invalid (see name and manifest)", []
+    if b.is_poll:
+        return _check_poller(b)
     if b.pkg.processor is None:
         return "skip", "no processor", []
     if b.pkg.errors:
@@ -1736,8 +1943,8 @@ CHECKS: list[tuple[str, bool, str, Callable[[Bobbin], Result]]] = [
     ("manifest", True, "fix bobbin.toml as listed (14.3.2); one bobbin covers one service, and code two bobbins share"
                        " moves to core", check_manifest),
     ("provider", True, "give bobbin.toml a [provider] table (vendor, product, homepage, webhook_docs, signature_docs"
-                       " when a secret is declared, api_docs when the processor calls the API; https pages of the"
-                       " provider itself) and open README.md, SETUP.md and AGENTS.md with the same frontmatter"
+                       " when a secret is declared, api_docs when the processor calls the API; a poll bobbin: homepage,"
+                       " api_docs, no_push_note, no_push_docs; https pages of the provider itself) and open README.md, SETUP.md and AGENTS.md with the same frontmatter"
                        " (docs/bobbins/writing-a-bobbin.md, Provider and frontmatter)", check_provider),
     ("files", True, "add bobbin.toml, README.md, SETUP.md, AGENTS.md and captures/*.http (14.3.1)", check_files),
     ("todos", True, "fill in the TODOs", check_todos),
