@@ -6,6 +6,10 @@ an interface, and the entry will say so.
 
 ## [Unreleased]
 
+### Changed
+
+- `google.gmail` Amazon pack: also matches "Your order with Amazon" (the Amazon store), digital orders (`D01-…` ids), order updates, seller purchases and returns; the DoorDash and Amazon packs are marked `verified` after a read-only run over a real mailbox.
+
 ### Added
 
 - Poll sources (ARCHITECTURE 14.4), for services with no push at all: a bobbin may declare `[poll]` (`every_s` >= 60,

@@ -1,11 +1,11 @@
-# DoorDash order mail (patterns written from the provider's published email conventions; not yet checked against real mail).
+# DoorDash order mail (patterns written from the provider's published email conventions; checked against a real mailbox on 2026-10-24).
 # Every rule needs order or reservation context in the subject (a bare word such as 'updated' or 'booking' is not enough),
 # and skip_subject vetoes policy, marketing, account and review-request subjects (whole words, outside double-quoted
 # text). Nothing is vetoed on the body, so a feedback or recommendations footer does not hide a real order. A rule of
 # a built-in pack never claims mail Gmail filed as promotions, social or forums.
 [pack]
 name = "doordash-orders"
-status = "unverified"
+status = "verified"
 description = "DoorDash order mail: receipts, order status updates and cancellations or refunds"
 
 [[rules]]
