@@ -1,12 +1,12 @@
-"""A scripted stand-in for the Google endpoints the Gmail, Calendar, Drive and Meet bobbins call (Calendar events, Gmail
-history/messages/profile, free/busy, the Drive change feed, Meet conference records, participants and sessions, the
-OAuth token endpoint), on 127.0.0.1. Test values only."""
+"""A scripted stand-in for the Google endpoints the Gmail, Calendar, Drive, Meet and Tasks bobbins call (Calendar
+events, Gmail history/messages/profile, free/busy, the Drive change feed, Meet conference records, participants and
+sessions, Tasks lists and tasks, the OAuth token endpoint), on 127.0.0.1. Test values only."""
 from __future__ import annotations
 
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 
 class GoogleStub:
@@ -28,6 +28,10 @@ class GoogleStub:
         self.meet_participants: dict = {}       # record name -> list of page bodies (page N answers pageToken "pN"),
         #                                         or int status
         self.meet_sessions: dict = {}           # participant name -> list of sessions
+        self.tasklists: list | int = []         # tasklists.list items, or an int status
+        self.tasks: dict = {}                   # list id -> list of task dicts (id, updated, ...), or an int status
+        self.tasks_page_size = 0                # when > 0, pages are this big whatever maxResults asks
+        self.reject_bearers: set[str] = set()   # bearer tokens the Tasks routes answer 401 to
         stub = self
 
         class H(BaseHTTPRequestHandler):
@@ -68,6 +72,29 @@ class GoogleStub:
                         if method == "DELETE":
                             stub.deleted.append(p.rsplit("/", 1)[-1])
                             return self._send(204)
+                    if p.startswith("/tasks/v1/"):
+                        if self.headers.get("Authorization", "").removeprefix("Bearer ") in stub.reject_bearers:
+                            return self._send(401, {"error": "stale token"})
+                        rest = unquote(p[len("/tasks/v1/"):])
+                        if rest == "users/@me/lists":
+                            if isinstance(stub.tasklists, int):
+                                return self._send(stub.tasklists, {"error": "scripted"})
+                            return self._send(200, {"items": stub.tasklists})
+                        if rest.startswith("lists/") and rest.endswith("/tasks"):
+                            rows = stub.tasks.get(rest[len("lists/"):-len("/tasks")], 404)
+                            if isinstance(rows, int):
+                                return self._send(rows, {"error": "scripted"})
+                            keep = [t for t in rows
+                                    if (q.get("showDeleted") == "true" or not t.get("deleted"))
+                                    and (q.get("showHidden") == "true" or not t.get("hidden"))
+                                    and (q.get("showCompleted") != "false" or t.get("status") != "completed")
+                                    and (not q.get("updatedMin") or t.get("updated", "") >= q["updatedMin"])]
+                            size = stub.tasks_page_size or int(q.get("maxResults", 20))
+                            at = int(q["pageToken"][1:]) if q.get("pageToken") else 0
+                            body = {"items": keep[at:at + size]}
+                            if at + size < len(keep):
+                                body["nextPageToken"] = f"p{at + size}"
+                            return self._send(200, body)
                     if p == "/drive/changes/startPageToken":
                         return self._send(200, {"startPageToken": stub.drive_start}) if stub.drive_start \
                             else self._send(200, {})
@@ -133,6 +160,10 @@ class GoogleStub:
     def drive_settings(self) -> dict[str, str]:
         """The drive bobbin settings that point it at this stub."""
         return {"api_url": self.base + "/drive/"}
+
+    def tasks_settings(self) -> dict[str, str]:
+        """The tasks bobbin settings that point it at this stub."""
+        return {"api_url": self.base + "/tasks/v1/"}
 
     def meet_settings(self) -> dict[str, str]:
         """The meet bobbin settings that point it at this stub."""

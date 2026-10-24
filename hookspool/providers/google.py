@@ -1,5 +1,5 @@
-"""Google building blocks shared by the ``google.gmail``, ``google.calendar``, ``google.drive`` and ``google.meet``
-bobbins (ARCHITECTURE 14.3.7).
+"""Google building blocks shared by the ``google.gmail``, ``google.calendar``, ``google.drive``, ``google.meet`` and
+``google.tasks`` bobbins (ARCHITECTURE 14.3.7).
 
 Two halves, so that each bobbin stays a thin description of its own service.
 
@@ -19,11 +19,13 @@ calendar or file id inside ``X-Goog-Resource-URI``) and ``channel_dedup_id`` are
 refresh, bearer header, timeouts, retries and the ``Retryable`` / ``Permanent`` mapping are the client's
 (``hookspool/net.py``). What is added here is only what Google's APIs mean: Gmail history paging and message
 parsing, Calendar sync-token listing, event insert and delete, free/busy, the Drive change feed (a start
-page token, then changes from a stored page token), and a Meet conference record with its participants and their
-sessions (Meet REST v2). Three answers are not failures and become exceptions the
+page token, then changes from a stored page token), the Tasks API (a user's task lists, and one list's tasks modified
+since a time, completed, hidden and deleted included), and a Meet conference record with its participants and their
+sessions (Meet REST v2). Four answers are not failures and become exceptions the
 caller handles: ``HistoryGone`` (Gmail answered 404 to a stale history id), ``SyncGone`` (Calendar answered 410
-to an expired sync token) and ``PageTokenGone`` (Drive answered 404 or 410 to a stored page token); each means
-"start again from a fresh bootstrap". Everything else that is not 2xx is raised by the client as ``Retryable`` or ``Permanent``.
+to an expired sync token), ``PageTokenGone`` (Drive answered 404 or 410 to a stored page token) and ``TasklistGone``
+(Tasks answered 404 for a list that was just deleted); the first three mean "start again from a fresh bootstrap",
+the last "leave that list out". Everything else that is not 2xx is raised by the client as ``Retryable`` or ``Permanent``.
 
 Base URLs are parameters, so a deployment (or a test) can point a processor elsewhere.
 """
@@ -46,6 +48,7 @@ __all__ = ["PUSH_TOKEN_PARAM", "PUSH_TOKEN_HEADER", "PUSH_AUTH_HEADERS", "verify
            "FREEBUSY_API", "DRIVE_API", "HistoryGone", "SyncGone", "PageTokenGone", "gmail_profile", "gmail_history", "gmail_message",
            "parse_message", "body_text", "address", "calendar_events", "calendar_insert", "calendar_delete",
            "freebusy", "drive_start_page_token", "drive_changes", "CHANGE_FIELDS",
+           "TASKS_API", "TasklistGone", "tasks_lists", "tasks_changes",
            "MEET_API", "MEET_RECORD_RE", "meet_conference", "meet_participants", "meet_sessions", "meet_participant",
            "meet_attendance"]
 
@@ -377,6 +380,73 @@ def drive_changes(client, page_token: str, *, base: str = DRIVE_API, drive_id: s
             return changes, str(d.get("newStartPageToken") or token), True
         token = str(nxt)
     return changes, token, False
+
+
+# ---- Tasks API v1 ---------------------------------------------------------------------------------------
+TASKS_API = "https://tasks.googleapis.com/tasks/v1/"
+TASKLIST_PAGES = 20
+TASK_PAGES = 100
+TASK_PAGE_SIZE = 100                     # the API's maximum for tasks.list and tasklists.list
+TASK_FIELDS = "nextPageToken,items(id,updated,status,due,deleted)"
+TASK_FIELDS_WITH_TITLE = "nextPageToken,items(id,title,updated,status,due,deleted)"
+
+
+class TasklistGone(Exception):
+    """Tasks answered 404 for a task list (it was deleted between listing the lists and reading it)."""
+
+
+def _tasks_url(base: str, path: str) -> str:
+    return base.rstrip("/") + "/" + path
+
+
+def tasks_lists(client, *, base: str = TASKS_API, max_pages: int = TASKLIST_PAGES) -> list[dict]:
+    """The account's task lists, ``{id, title, updated}`` each, in the API's order (``tasklists.list``)."""
+    out: list[dict] = []
+    page = None
+    for _ in range(max_pages):
+        params: dict[str, Any] = {"maxResults": TASK_PAGE_SIZE, "fields": "nextPageToken,items(id,title,updated)"}
+        if page:
+            params["pageToken"] = page
+        d = client.get(_tasks_url(base, "users/@me/lists"), params=params, label="tasks.lists")
+        d = d if isinstance(d, dict) else {}
+        out.extend(x for x in d.get("items") or [] if isinstance(x, dict) and x.get("id"))
+        page = d.get("nextPageToken")
+        if not page:
+            break
+    return out
+
+
+def tasks_changes(client, tasklist_id: str, updated_min: str = "", *, base: str = TASKS_API, titles: bool = False,
+                  max_pages: int = TASK_PAGES) -> tuple[list[dict], bool]:
+    """(the tasks of one list modified at or after ``updated_min`` (all of them when it is empty), whether the read
+    reached the end).
+
+    Completed, hidden and deleted tasks are included: a task completed in Google's own apps is hidden, and a deleted
+    one only shows with ``showDeleted``. Each task carries ``id``, ``updated``, ``status``, ``due``, ``deleted`` and,
+    when ``titles`` is true, ``title``. Pages come in no useful order, so the caller sorts. Raises ``TasklistGone``
+    when the list no longer exists (HTTP 404)."""
+    fields = TASK_FIELDS_WITH_TITLE if titles else TASK_FIELDS
+    url = _tasks_url(base, "lists/" + quote(str(tasklist_id), safe="") + "/tasks")
+    tasks: list[dict] = []
+    page = None
+    for _ in range(max_pages):
+        params: dict[str, Any] = {"maxResults": TASK_PAGE_SIZE, "showCompleted": "true", "showHidden": "true",
+                                  "showDeleted": "true", "fields": fields}
+        if updated_min:
+            params["updatedMin"] = updated_min
+        if page:
+            params["pageToken"] = page
+        d, status = _status_of(lambda: client.get(url, params=params, label="tasks.list"))
+        if status == 404:
+            raise TasklistGone()
+        if status is not None:
+            raise d
+        d = d if isinstance(d, dict) else {}
+        tasks.extend(x for x in d.get("items") or [] if isinstance(x, dict) and x.get("id"))
+        page = d.get("nextPageToken")
+        if not page:
+            return tasks, True
+    return tasks, False
 
 
 # ---- Meet REST v2 ---------------------------------------------------------------------------------------

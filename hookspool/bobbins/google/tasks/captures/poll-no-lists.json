@@ -1,0 +1,11 @@
+{
+  "description": "an account with no task lists at all: nothing to follow, nothing reported",
+  "now": 1800000300,
+  "items": 0,
+  "http": [
+    {"method": "POST", "url": "https://oauth2.example.com/token", "status": 200,
+     "json": {"access_token": "test-access-token", "expires_in": 3600}},
+    {"method": "GET", "url": "https://tasks.googleapis.com/tasks/v1/users/@me/lists", "status": 200,
+     "json": {}}
+  ]
+}

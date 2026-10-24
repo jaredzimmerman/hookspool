@@ -22,6 +22,15 @@ an interface, and the entry will say so.
 - `hookspool bobbin new <vendor>.<product> --poll` scaffolds a poll bobbin. The conformance kit runs `poller.py` once per
   `captures/poll-*.json` (stub API answers), and its `provider` row asks a poll bobbin for `api_docs`, `no_push_note` and
   `no_push_docs` in place of `webhook_docs` and `signature_docs`; the documents' frontmatter carries `api_docs`.
+- The `google.tasks` bobbin (`hookspool/bobbins/google/tasks/`), the first poll bobbin: Google Tasks has no watch or push
+  method, so the dispatcher ticks every `every_s` seconds (300 by default) and `poller.py` reads each followed list with
+  `tasks.list` and `updatedMin` (completed, hidden and deleted tasks included). The first pass, and any list added later,
+  only records where the list stands. `task-changed` carries the list id, task id, status, update time, due date and
+  whether the task was deleted (the title only with `include_titles`), and `tasks-synced` summarises a pass that found
+  changes. The settings are `tasklists` (ids or titles; empty follows all), `include_titles` and `api_url`; the secret is
+  an OAuth credential with the `tasks.readonly` scope.
+- `hookspool.providers.google`: `tasks_lists`, `tasks_changes` and `TasklistGone` for the Tasks API v1.
+- The wheel now carries `bobbins/*/*/captures/poll-*.json`, the poll bobbins' captures.
 - The `google.meet` bobbin (`hookspool/bobbins/google/meet/`): Google Meet events from a Google Workspace Events
   subscription on a user, delivered through a Cloud Pub/Sub push with the token in the URL. The source keys each
   CloudEvent by its conference record and dedups on `ce-id`. The processor returns `meeting-started` for the first

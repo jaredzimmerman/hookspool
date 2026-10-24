@@ -1,0 +1,41 @@
+name = "google.tasks"
+version = "1"
+summary = "Google Tasks (polled; the API has no push): tasks added, edited, completed or deleted, by id, never by content"
+
+[provider]
+vendor = "Google"
+product = "Tasks"
+homepage = "https://workspace.google.com/products/tasks/"
+api_docs = "https://developers.google.com/workspace/tasks/reference/rest"
+no_push_note = "The Tasks API has no watch or push method."
+no_push_docs = "https://developers.google.com/workspace/tasks/reference/rest"
+
+[poll]
+every_s = 300
+timeout_s = 120
+state = true
+
+[secrets.cred]
+description = "OAuth credential JSON (client_id, client_secret, refresh_token, token_uri) with read access to Google Tasks (scope tasks.readonly)"
+processor = true
+
+[settings.tasklists]
+description = "task lists to follow, by id or by title (case does not matter); empty follows every list of the account"
+type = "list"
+default = []
+
+[settings.include_titles]
+description = "also put each task's title in task-changed; off by default, so no task text leaves Google"
+type = "bool"
+default = false
+
+[settings.api_url]
+description = "Tasks API base URL (change only to use a test server)"
+type = "string"
+default = "https://tasks.googleapis.com/tasks/v1/"
+
+[outputs.task-changed]
+description = "a task was added, edited, completed, reopened or deleted; carries the list id, task id, status, update time, due date and whether it was deleted (and the title when include_titles is on)"
+
+[outputs.tasks-synced]
+description = "one per poll that found changes: the ids of the lists that changed and how many tasks changed"
