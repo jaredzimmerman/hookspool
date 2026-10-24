@@ -1,0 +1,13 @@
+{
+  "github-ci": {
+    "secret": "test-secret-github-ci",
+    "events": ["workflow_run"],
+    "prompt": "CI {workflow_run.name} finished: {workflow_run.conclusion}"
+  },
+  "invoices": {
+    "secret": "test-secret-invoices",
+    "profile": "test-profile",
+    "events": ["invoice.paid"],
+    "prompt": "Invoice {id} for {customer.id} was paid"
+  }
+}

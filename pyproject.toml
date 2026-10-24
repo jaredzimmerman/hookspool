@@ -11,18 +11,25 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = []
-keywords = ["webhooks", "spool", "queue", "coalescing", "sqlite", "self-hosted"]
+authors = [{ name = "Jared Zimmerman" }]
+keywords = ["webhooks", "webhook relay", "durable queue", "coalescing", "sqlite", "self-hosted", "hermes-agent",
+            "ai agents", "pubsub"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: No Input/Output (Daemon)",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
     "Operating System :: POSIX",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: System :: Networking",
     "Topic :: System :: Systems Administration",
 ]
 
@@ -35,10 +42,11 @@ dev = ["pytest>=8", "ruff", "cryptography>=42", "PyJWT>=2.8"]
 hookspool = "hookspool.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/jaredzimmerman/hookspool"
-Documentation = "https://github.com/jaredzimmerman/hookspool/tree/main/docs"
-Changelog = "https://github.com/jaredzimmerman/hookspool/blob/main/CHANGELOG.md"
+Homepage = "https://jaredzimmerman.github.io/hookspool/"
+Documentation = "https://jaredzimmerman.github.io/hookspool/"
+Source = "https://github.com/jaredzimmerman/hookspool"
 Issues = "https://github.com/jaredzimmerman/hookspool/issues"
+Changelog = "https://github.com/jaredzimmerman/hookspool/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 include-package-data = true

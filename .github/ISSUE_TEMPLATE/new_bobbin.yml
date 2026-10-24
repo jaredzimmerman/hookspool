@@ -1,0 +1,52 @@
+name: New bobbin
+description: Propose a bobbin for an outside service that hookspool does not cover yet.
+labels: ["new bobbin"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A bobbin covers exactly one service and is named `<vendor>.<product>`, for example `atlassian.jira` or
+        `stripe.events`. Read [Writing a bobbin](https://jaredzimmerman.github.io/hookspool/bobbins/writing-a-bobbin/)
+        first. If the service signs a JSON POST with a scheme the generic `hookspool.webhook` bobbin supports, that
+        bobbin may already cover what you need.
+  - type: input
+    id: name
+    attributes:
+      label: Bobbin name (vendor.product)
+      description: The company that runs the service, then the product or API whose webhooks the bobbin receives.
+      placeholder: stripe.events
+    validations:
+      required: true
+  - type: input
+    id: webhook-docs
+    attributes:
+      label: The provider's webhook documentation
+      description: A link to the provider's own page about the webhooks or push notifications it sends.
+      placeholder: https://...
+    validations:
+      required: true
+  - type: textarea
+    id: signature
+    attributes:
+      label: Signature scheme
+      description: |
+        How the provider proves a delivery is genuine: the header, the algorithm (HMAC-SHA256, a JWT, a token in the
+        URL and so on), what is signed, and a link to where the provider documents it. Say if it uses a handshake.
+    validations:
+      required: true
+  - type: textarea
+    id: events
+    attributes:
+      label: What it should turn into work
+      description: Which events matter, what key should group them into a batch, and whether a processor needs to call the provider's API.
+  - type: dropdown
+    id: maintain
+    attributes:
+      label: Will you maintain it?
+      description: A bobbin that breaks and has no one to fix it is removed.
+      options:
+        - Yes, I will write it and keep it working
+        - I can write it, but cannot promise to maintain it
+        - No, I am asking for someone else to write it
+    validations:
+      required: true

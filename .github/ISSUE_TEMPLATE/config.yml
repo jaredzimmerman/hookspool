@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://jaredzimmerman.github.io/hookspool/
+    about: Installing, configuring, operating and writing bobbins. Please check here first.
+  - name: Report a security vulnerability
+    url: https://github.com/jaredzimmerman/hookspool/security/advisories/new
+    about: Report it privately, never in a public issue. See SECURITY.md.

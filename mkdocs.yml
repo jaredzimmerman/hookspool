@@ -1,0 +1,82 @@
+# The documentation site: https://jaredzimmerman.github.io/hookspool/
+# Build it locally with `python -m pip install -r requirements-docs.txt && mkdocs serve`.
+# .github/workflows/docs.yml builds it with --strict on pull requests and publishes it from main.
+# The navigation comes from the docs themselves (docs-site/hooks.py): the folder table in docs/README.md, each
+# folder's README.md as its index, then the pages in the order that index links them.
+site_name: hookspool
+site_description: >-
+  Durable, coalescing intake for inbound webhooks: spool to disk before the 2xx, deliver later, never lose an event.
+site_url: https://jaredzimmerman.github.io/hookspool/
+repo_url: https://github.com/jaredzimmerman/hookspool
+repo_name: jaredzimmerman/hookspool
+edit_uri: edit/main/docs/
+docs_dir: docs
+copyright: MIT License
+
+theme:
+  name: material
+  custom_dir: docs-site/overrides
+  features:
+    - content.action.edit
+    - content.action.view
+    - content.code.copy
+    - navigation.indexes
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to the dark theme
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to the light theme
+
+hooks:
+  - docs-site/hooks.py
+
+plugins:
+  - search
+
+# docs/ARCHITECTURE.md only points GitHub readers at architecture/ARCHITECTURE.md; the site has the real page.
+exclude_docs: |
+  /ARCHITECTURE.md
+
+# The banner notes are a page, but not a chapter of the guide.
+not_in_nav: |
+  /assets/banners/README.md
+
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: warn
+    unrecognized_links: warn
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+
+extra:
+  source_branch: main
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/jaredzimmerman/hookspool
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/hookspool/

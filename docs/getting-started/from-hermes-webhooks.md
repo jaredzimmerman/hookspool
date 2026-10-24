@@ -1,0 +1,256 @@
+# Moving from Hermes webhooks
+
+You already run a Hermes Agent gateway that takes webhooks directly: each sender posts to a route such as
+`/webhooks/github-ci`, and the gateway checks the signature and wakes the agent. This page moves that setup to hookspool
+without touching the senders or the Hermes routes' prompts. The gateway keeps running and waking the agent. The difference is that a request is verified and written to disk first, retried
+until the gateway accepts it, and grouped if you choose.
+
+The first pass changes no sender URL and no prompt. Each event reaches its route exactly as the
+sender sent it, one request per event, so a route's prompt template and its `events` filter keep working. Coalescing is a separate second step ([After it runs](#after-it-runs)).
+
+You need hookspool installed on the host that runs the gateway ([Install](install.md)), the reverse proxy config that
+fronts the gateway, and the secret each sender uses. Do one route at a time; the others keep working untouched.
+
+## 1. Install next to the gateway
+
+Follow [Running hookspool](../operations/running.md) for the service units, but skip its step 5 advice to remove the
+routes' `events` filters and `coalesce` blocks: the routes here are unwrapped, `check` does not ask for it, and without
+the filter every event type wakes the agent. In `config.toml`, tell hookspool where the gateway is:
+
+```toml
+[hermes]
+base_url = "http://127.0.0.1:8644"
+subscriptions_path = "/home/agent/.hermes/webhook_subscriptions.json"
+```
+
+* `base_url` is the gateway's webhook listener, on the same host. hookspool delivers to it directly, never through the
+  public proxy.
+* `subscriptions_path` is the gateway's own routes file: the gateway user's absolute path, here `agent`. Do not leave the
+  default `~/.hermes/...`: `~` is expanded for the user each process runs as, so under the `hookspool` service user it
+  points at `/var/lib/hookspool/.hermes`, not the gateway's file. hookspool reads each route's secret and profile from it on every
+  attempt, so a rotation needs no restart and the Hermes side stays the one place those live. A route bound to a profile is
+  delivered to `/p/<profile>/webhooks/<route>`, the path the gateway expects.
+
+The service user must be able to read that file (`sudo -u hookspool -- test -r /home/agent/.hermes/webhook_subscriptions.json`),
+or the units must run as the gateway user: [Running hookspool](../operations/running.md), step 2. To grant read access,
+put `hookspool` in the gateway user's group, give the file group read (`chmod g+r`) and each directory above it group
+search (`chmod g+x`). The gateway may write the file anew when a route changes (`hermes webhook` edits), and a new file
+can come back without group read; run the `test -r` again after any such edit, or run the units as the gateway user
+instead. Nothing is moved yet: the gateway still takes every request, because no sender or proxy points at hookspool.
+
+Run `hookspool` commands as the service user (`sudo -u hookspool -- env HOOKSPOOL_HOME=/var/lib/hookspool hookspool check`, as
+in Running), not as root. A `check` run as root passes on files the service user cannot read, and the first real delivery
+then fails.
+
+## 2. Describe each route as an instance
+
+List the routes you have:
+
+```sh
+hermes webhook list
+```
+
+For each one, add an instance of the sender's bobbin (the plugin for that service, see [Bobbins](../bobbins/README.md)):
+
+* `github.repo` for GitHub, or the bobbin for the sender if there is one (`hookspool bobbin list`);
+* `hookspool.webhook` for any other sender that signs a JSON POST ([the guide](../bobbins/webhook.md)).
+
+Each instance needs:
+
+| line | why |
+|---|---|
+| `bobbin = "<vendor>.<product>"` | the sender's rules for proving a request is genuine |
+| `secrets.secret = { file = "..." }` | the sender's existing secret, as a file. It is the same value the Hermes route holds |
+| `span = "immediate"` | no waiting and no grouping: each event is its own delivery, in order |
+| `outputs = { "*" = "hermes:<route>" }` | send everything to the gateway route of that name |
+| `[destinations."hermes:<route>"]` with `unwrap = true` | deliver the original payload, one request per event, instead of hookspool's batch document |
+
+The secret file is written by the person who owns the secret, and it must belong to the service user (the units run as
+`hookspool`, and a root-owned 0600 file cannot be read by them). One way that never prints it, run by that person: create
+the empty file with the right owner, then fill it.
+
+```sh
+sudo install -m 0600 -o hookspool -g hookspool /dev/null /etc/hookspool/secrets/github-ci
+jq -r '."github-ci".secret' /home/agent/.hermes/webhook_subscriptions.json | sudo tee /etc/hookspool/secrets/github-ci > /dev/null
+```
+
+### Worked example: a GitHub CI route
+
+The gateway route `github-ci` receives GitHub's `workflow_run` events. It keeps its own `events` filter and its prompt
+template (which reads fields such as `{workflow_run.conclusion}`). The matching hookspool config:
+
+```toml
+[bobbins.github-ci]
+bobbin = "github.repo"
+secrets.secret = { file = "/etc/hookspool/secrets/github-ci" }
+span = "immediate"
+outputs = { "*" = "hermes:github-ci" }
+
+[destinations."hermes:github-ci"]
+unwrap = true
+```
+
+The GitHub bobbin already tells hookspool to carry the event type in `X-GitHub-Event`, so the route's `events` filter sees
+what it saw before. Its setup steps are in the [bobbin's AGENTS.md](../../hookspool/bobbins/github/repo/AGENTS.md).
+
+### Worked example: a sender without a bobbin
+
+A service that signs its body with HMAC-SHA256 and sends the result in `X-Invoices-Signature`, with the Hermes route
+`invoices`. The sender's own documentation gives the scheme and header:
+
+```toml
+[bobbins.invoices]
+bobbin = "hookspool.webhook"
+secrets.secret = { file = "/etc/hookspool/secrets/invoices" }
+settings = { scheme = "hmac-sha256-hex", header = "X-Invoices-Signature", prefix = "sha256=", key = ["customer.id"], event_type = "type", dedup = "id", sender_retries = true }
+span = "immediate"
+outputs = { "*" = "hermes:invoices" }
+
+[destinations."hermes:invoices"]
+unwrap = true
+event_header = "X-Invoices-Event"
+```
+
+`key` is what events are ordered on (here, one customer's events stay in order). `event_type` reads the event's type from
+the payload, and `event_header` sends it to the gateway so a route `events` filter keeps working. Leave `event_header` out
+if the route has no such filter.
+
+## 3. Check it before anything points at it
+
+```sh
+hookspool check
+hookspool bobbin expand github-ci
+```
+
+`check` must print `ok` (a warning that GitHub does not retry is expected; step 5 deals with it). `bobbin expand` prints the
+ordinary tables the instance becomes, with the secret as a reference and never its value. Then load it and send one signed
+request straight to the intake, on the same host:
+
+```sh
+hookspool reload
+body='{"repository":{"full_name":"example/widgets"},"action":"completed","workflow_run":{"name":"test run","conclusion":"success"}}'
+sig=$(printf '%s' "$body" | sudo -u hookspool python3 -c 'import hmac,hashlib,sys; k=open(sys.argv[1],"rb").read().rstrip(b"\n"); print(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())' /etc/hookspool/secrets/github-ci)
+curl -s -X POST http://127.0.0.1:8650/hooks/github-ci -H "X-Hub-Signature-256: sha256=$sig" -H "X-GitHub-Event: workflow_run" -H "X-GitHub-Delivery: test-1" -d "$body"
+hookspool list --source github-ci
+```
+
+The signing line runs as the service user because the secret file is not readable by anyone else. The reply is `{"status":"queued"}`, and the batch then moves to `delivered`. The request reaches the real route, so the agent
+sees a `workflow_run` event; use a body its prompt will treat as ordinary, or rehearse on a scratch route first (see
+[Drills](../operations/drills.md)). If the gateway answers `duplicate`, `ignored` or `coalesced`, that is its own filter or
+deduplication at work, not a fault. If the batch does not deliver, `hookspool issues` says why; the usual causes are a secret
+file that differs from the route's secret and a route name that is not in the subscriptions file.
+
+## 4. Switch at the reverse proxy
+
+Until now senders reach the gateway through your proxy. Change the one location for the route so it forwards to the
+intake instead. For nginx, using the exact-match form from
+[`deploy/nginx.example.conf`](../../deploy/nginx.example.conf). The "after" block reuses that file's `hs_github` rate-limit
+zone. Copy its `limit_req_zone` line into the `http` context (outside any `server` block), or `nginx -t` fails:
+
+```nginx
+limit_req_zone $binary_remote_addr zone=hs_github:10m rate=20r/s;
+```
+
+```nginx
+# before
+location = /webhooks/github-ci {
+    proxy_pass http://127.0.0.1:8644;
+}
+
+# after
+location = /webhooks/github-ci {
+    limit_req zone=hs_github burst=60 nodelay;
+    proxy_pass http://127.0.0.1:8650/hooks/github-ci;
+}
+```
+
+A route bound to a profile is `location = /p/<profile>/webhooks/<route>`, forwarded the same way. The senders keep the URL
+they have. Copy the example file's body-size, buffering and header settings into the server block too: the intake needs a
+`Content-Length`, so the proxy must buffer the request.
+
+Reload the proxy (`nginx -t && systemctl reload nginx`). Then ask the sender for a real delivery, or redeliver a recent one,
+and confirm `hookspool list --source github-ci` shows it and the sender's delivery log shows a 200.
+
+Two things change for the sender. Before, the gateway took the request directly; now the intake refuses a body over the
+source's `max_body_bytes` (768 KiB for GitHub by default, within nginx's 1 MiB) with a 413. The gateway may have accepted
+such a body. GitHub does not retry a 413 and the redelivery sweep cannot recover it. If your repos send large payloads, raise
+the limits first, in the order the [sweeps page](../operations/sweeps.md) gives, and `hookspool check` enforces it.
+
+### Rolling back
+
+1. Point the location back at the gateway and reload the proxy.
+2. Leave the instance and its `[destinations."hermes:<route>"]` table in the config. Batches are delivered with the
+   destination config current at delivery time. If you remove the table while batches are queued, they go out as batch
+   documents, without `unwrap`, to a route that still has its `events` filter and its prompt, and `check` no longer warns
+   because the destination is no longer in use.
+3. Wait until `hookspool list --source github-ci` shows nothing open, sealed, leased or retry.
+4. Then remove the instance and the destination table, and run `hookspool check` and `hookspool reload`.
+
+## 5. Senders that do not retry
+
+hookspool commits an event before the sender sees its 2xx. A sender that does not retry still loses what never reached
+hookspool, for example during a proxy restart. GitHub is the common one. Install the redelivery sweep so those are redelivered
+from GitHub's side and deduplicated: see [Sweeps](../operations/sweeps.md) and the GitHub bobbin's setup steps. Set
+`expect_every_s` on a sender that is rarely silent, so a broken path opens an issue.
+
+## After it runs
+
+Leave the first pass running for a few days, then go route by route.
+
+Coalesce bursts. A push that triggers twenty checks wakes the agent twenty times in the first pass. To get one wake-up
+per burst, remove `unwrap` from the destination, return the instance to the bobbin's own span, and change the prompt to read
+the batch. The order matters, because queued batches are delivered with whatever the config says at that moment:
+
+1. `hookspool pause hermes:github-ci`. Events keep spooling and nothing is delivered.
+2. In the subscriptions file, change the prompt to read the batch and delete the route's `events` and `coalesce` entries
+   (below). Do this first: `check` refuses the new config while they are there.
+3. In `config.toml`, make the instance this:
+
+```toml
+[bobbins.github-ci]
+bobbin = "github.repo"
+secrets.secret = { file = "/etc/hookspool/secrets/github-ci" }
+span = "burst"
+outputs = { "*" = "hermes:github-ci" }
+```
+
+4. `hookspool check`, `hookspool reload`, then `hookspool resume hermes:github-ci`. Events that were queued during the
+   pause go out as one-event batch documents, which the new prompt reads like any other.
+
+If you skip the pause, wait until `hookspool list --source github-ci` shows nothing open, sealed, leased or retry before
+you save the first edit. If you delete the `events` filter and leave `unwrap` on, every event type wakes the agent.
+
+The route then receives one document per burst: the original events are `events`, with `count`, `summary` and
+`event_types` beside them, so a prompt can say "{summary}" and look at the list. The route's own `events` and
+`coalesce` entries must go from the subscriptions file. `hookspool check` fails while they are there, because a gateway filter
+looks at a whole batch as if it were one event, and the gateway's own coalescing keeps only the last event. Filter by event
+type in hookspool instead (an `outputs` entry per type, or a [route](../configuration/README.md#routes)) and let the batch
+carry the rest.
+
+Wake cron jobs instead of polling. A tee route sends a copy of each matching event to a second destination, without
+changing where the original goes. A script that starts a job once per burst replaces a poll:
+
+```toml
+[[routes]]
+name = "github-ci-wake"
+source = "github-ci"
+tee = true
+destination = "script:wake-ci"
+quiet_s = 120
+max_s = 600
+
+[destinations."script:wake-ci"]
+argv = ["/usr/local/bin/run-job", "ci-check"]
+```
+
+Local bridges and scripts. Anything on the host that posted to the gateway's `/webhooks/<route>` should now go through
+the spool, so its events get the same retries. A script on the same host can use
+`hookspool enqueue --source github-ci --key example/widgets --event-type workflow_run --dedup-id <delivery id> --file payload.json`,
+which needs no signature. Pass `--event-type`: without it the
+event has no type, the unwrapped delivery carries no `X-GitHub-Event`, and the route's `events` filter makes the gateway
+answer `ignored`, which counts as delivered, so the wake-up is lost with no notice. Later, after coalescing, an untyped
+event is missing from `event_types` and `summary`, and outputs keyed on event type never match it. Pass `--dedup-id`
+when the bridge has an id for the event, so a repeat is dropped instead of delivered twice. A sender off the host posts a signed request to
+`/hooks/github-ci` like any other.
+
+Once every route has moved and run clean, the old proxy locations are gone and only hookspool posts to the gateway.

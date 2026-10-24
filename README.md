@@ -1,5 +1,7 @@
 # hookspool
 
+[![CI](https://github.com/jaredzimmerman/hookspool/actions/workflows/ci.yml/badge.svg)](https://github.com/jaredzimmerman/hookspool/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/hookspool)](https://pypi.org/project/hookspool/) [![Python](https://img.shields.io/pypi/pyversions/hookspool)](https://pypi.org/project/hookspool/) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![Docs](https://github.com/jaredzimmerman/hookspool/actions/workflows/docs.yml/badge.svg)](https://jaredzimmerman.github.io/hookspool/)
+
 **Durable, coalescing intake for inbound webhooks.** hookspool sits between your reverse proxy and whatever consumes the
 events, whether that is an agent gateway, a script or an HTTP endpoint. It writes every event to disk before its sender
 gets a 2xx, holds it until the destination accepts it, and turns a burst of events into one wake-up.
@@ -62,6 +64,10 @@ A bobbin is the plugin for one outside service. It knows how that service proves
 events on, and sometimes how to ask it what changed. You turn one on with a few lines of config. Built in today: GitHub,
 Gmail, Google Calendar, Google Drive, Plaid, Trello, Zoom and Kaneo, plus `hookspool.webhook` for any service that signs a
 JSON POST. Each is named `<vendor>.<product>` (`google.gmail`, `atlassian.trello`).
+
+**Already using Hermes webhooks?** hookspool can sit in front of the gateway without changing any sender URL or route
+prompt: each route becomes a bobbin instance that delivers the original payload, and you switch one proxy location per
+route, with a one-line rollback. See [From Hermes webhooks](docs/getting-started/from-hermes-webhooks.md).
 
 [The catalogue](docs/bobbins/README.md) lists them with a line each, and `hookspool bobbin list` prints the same from the
 installed copy. Setup steps and how to write a new one are in [docs/bobbins/](docs/bobbins/README.md).
