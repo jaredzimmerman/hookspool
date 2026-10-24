@@ -63,6 +63,10 @@ events on, and sometimes how to ask it what changed. You turn one on with a few 
 Gmail, Google Calendar, Google Drive, Plaid, Trello, Zoom and Kaneo, plus `hookspool.webhook` for any service that signs a
 JSON POST. Each is named `<vendor>.<product>` (`google.gmail`, `atlassian.trello`).
 
+**Already using Hermes webhooks?** hookspool can sit in front of the gateway without changing any sender URL or route
+prompt: each route becomes a bobbin instance that delivers the original payload, and you switch one proxy location per
+route, with a one-line rollback. See [From Hermes webhooks](docs/getting-started/from-hermes-webhooks.md).
+
 [The catalogue](docs/bobbins/README.md) lists them with a line each, and `hookspool bobbin list` prints the same from the
 installed copy. Setup steps and how to write a new one are in [docs/bobbins/](docs/bobbins/README.md).
 

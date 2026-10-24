@@ -153,6 +153,29 @@ You are helping a person run hookspool on a host or turn on a service. Look befo
 5. Verify with the steps in the bobbin's AGENTS.md, and with `hookspool status`, `hookspool list --source <instance>` and
    `hookspool issues`. [Verifying](docs/getting-started/verifying.md) says what healthy looks like.
 
+### Moving a Hermes setup to hookspool
+
+For a person whose senders post straight to a Hermes gateway's webhook routes. The goal is no sender URL change and no
+prompt change. The full guide, with config examples, is [From Hermes webhooks](docs/getting-started/from-hermes-webhooks.md).
+
+**Needs from the human:** which routes to move (`hermes webhook list`), access to the reverse proxy config, each sender's
+secret written to a file (the person does this), and a clear yes for step 5 (`outward`: it changes what the proxy forwards).
+
+1. Set `[hermes] base_url` (the gateway's listener) and `subscriptions_path`. **Check:** `hookspool check` has no `hermes` error.
+2. Per route, add `[bobbins.<instance>]` with the sender's bobbin, the secret file, `span = "immediate"` and
+   `outputs = { "*" = "hermes:<route>" }`, and a `[destinations."hermes:<route>"]` table with `unwrap = true`.
+   **Check:** `hookspool bobbin expand <instance>` shows the secret as a reference only.
+3. `hookspool check`, then `hookspool reload`. **Check:** `ok`, no error naming the instance or route.
+4. Send a signed test request to the intake on loopback, at `/hooks/<instance>`, as the guide shows. **Check:**
+   `hookspool list --source <instance>` shows it `delivered`. It reaches the real route: say so first.
+5. **Outward:** the person changes the proxy location for the route to forward to `/hooks/<instance>`. **Check:** a real
+   delivery from the sender appears in `hookspool list --source <instance>`.
+6. For a sender that does not retry (GitHub), install its redelivery sweep ([Sweeps](docs/operations/sweeps.md)).
+
+**Rollback:** the person points the proxy location back at the gateway. Accepted events still deliver; remove the
+instance, then `hookspool check` and `hookspool reload`. Coalescing, tee routes and bridges come after it has run clean;
+they are in the guide, and `hookspool check` fails while a gateway route still sets `events` or `coalesce` without `unwrap`.
+
 ### Day two
 
 - `hookspool status` is the one-screen health view; `hookspool list --state dead` finds stuck batches; `hookspool issues`
