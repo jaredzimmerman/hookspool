@@ -6,10 +6,10 @@ bobbins, ARCHITECTURE 14.3.4), which reads the batch document, builds and prints
 keeps the journal. `import hookspool_batch` gives that very module, so the script needs hookspool installed for
 the interpreter that runs it (or run it from this checkout).
 
-The Gmail and Google Calendar "delta" scripts that used to live here are the `gmail` and `gcal` bobbins now
-(`hookspool/bobbins/gmail/` and `hookspool/bobbins/gcal/`): their settings replace the old environment variables
+The Gmail and Google Calendar "delta" scripts that used to live here are the `google.gmail` and `google.calendar` bobbins now
+(`hookspool/bobbins/google/gmail/` and `hookspool/bobbins/google/calendar/`): their settings replace the old environment variables
 (each README lists the mapping), their credentials are secrets, their state lives in
-`<home>/services/<instance>` (set `state_dir` to the old directory to keep a history id or sync token), and
+`<home>/bobbins/<instance>` (set `state_dir` to the old directory to keep a history id or sync token), and
 what the scripts started on the side (the event-store refresh) is the gcal `changed` output, which a deployment
 maps to a `script:` destination of its own.
 

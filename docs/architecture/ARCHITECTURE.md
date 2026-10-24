@@ -632,41 +632,72 @@ Prefect's blocks: a typed, versioned unit with declared secrets and settings.)
 #### 14.3.1 Layout
 
 ```
-hookspool/bobbins/<bobbin>/          built in; or <dir>/<bobbin>/ under a configured spool.bobbin_path
-    bobbin.toml                        the manifest (required)
+hookspool/bobbins/<vendor>/<product>/  built in; or <dir>/<vendor>/<product>/ under a configured spool.bobbin_path
+hookspool/bobbins/<vendor>/__init__.py   built in only: empty (no code the vendor's bobbins share; that is core, 14.3.7)
+    bobbin.toml                        the manifest, with its [provider] table (required)
     source.py                           a code source plugin (14.1), optional
     processor.py                        post-commit work, optional (14.3.4)
     captures/*.http                     conformance captures (docs/bobbins/writing-a-bobbin.md, "Capture files"), required
     README.md                           what it does, how it works, settings, outputs, limits; required
     SETUP.md                            human setup: provider-side steps, secrets to create, config table, verify, rollback; required
     AGENTS.md                           agent setup: the same procedure as numbered, executable steps (14.3.8); required
+                                        (the three documents open with the same frontmatter, 14.3.2)
 ```
 
 **One bobbin per service.** A bobbin covers exactly one outside service and contains everything needed to
 run that service on top of hookspool: its functional code (source, processor), its settings and secrets,
 its outputs, its captures, and its documentation and setup instructions. Bobbins are never combined (no
-"google" bobbin for Gmail and Calendar: `gmail`, `gcal` and `drive` are three bobbins), and a bobbin never
-imports or reads another bobbin. Code that two bobbins would both need is not shared between them; it
-moves into hookspool core (14.3.7) and both call it. Several instances of one bobbin (e.g. `github-ci` and
+"google" bobbin for Gmail and Calendar: `google.gmail`, `google.calendar` and `google.drive` are three bobbins),
+and a bobbin never imports or reads another bobbin, a sibling under the same vendor included. Code that two
+bobbins would both need is not shared between them; it moves into hookspool core (14.3.7, e.g.
+`hookspool/providers/google.py`) and both call it. Several instances of one bobbin (e.g. `github-ci` and
 `github-prs`) are configuration, not separate bobbins.
 
-Bobbin names match `^[a-z][a-z0-9-]{0,39}$`; `-` maps to `_` for the module name, so two bobbins whose
-names differ only by `-`/`_` are refused. Built-in bobbins import as
-`hookspool.bobbins.<bobbin_with_underscores>`. A bobbin under `spool.bobbin_path` is loaded by file path
-under a private module name (never added to `sys.path`), and may not share a name with a built-in.
+**Names.** A bobbin's name is `<vendor>.<product>`, exactly one dot, each part matching `^[a-z][a-z0-9-]{0,39}$`:
+
+- `<vendor>` is the company that runs the service (`google`, `atlassian`, `github`, `zoom`, `plaid`, `kaneo`);
+- `<product>` is the product or API surface whose webhooks the bobbin receives (`google.gmail`, `google.drive`,
+  `atlassian.trello`). A vendor with one product still names the surface: `github.repo` (repository webhooks),
+  `zoom.meetings`, `plaid.items`, `kaneo.projects`.
+
+The namespace `hookspool.` is reserved for the generic bobbins shipped with core (`hookspool.webhook`): a bobbin
+under `spool.bobbin_path` may not use it, nor take a built-in's name. A name without exactly one dot is refused by
+`hookspool check` (for a bobbin it loads) and by `hookspool bobbin check` (the `name` row, 14.3.5). There are no
+aliases for the unnamespaced names of the 0.2 development line. Later bobbins follow the same rule
+(`google.meet`, `google.tasks`, `atlassian.jira`, `atlassian.statuspage`, `atlassian.bitbucket`,
+`cloudflare.notifications`, `slack.events`, `stripe.events`).
+
+The bobbin's directory is `<vendor>/<product>/` below its root (each part may be written with `_` for `-`, which a
+built-in needs because its directories are Python packages), so two bobbins whose names differ only by `-`/`_` are
+refused. A built-in's vendor directory holds its bobbins and an empty `__init__.py`, nothing else. Built-in bobbins
+import as `hookspool.bobbins.<vendor>.<product_with_underscores>`. A bobbin under `spool.bobbin_path` is loaded by
+file path under a private module name (`_hookspool_bobbins.<vendor>.<product>`, never added to `sys.path`).
+
+Config instances stay plain identifiers: `[bobbins.<instance>]` names the bobbin with `bobbin = "<vendor>.<product>"`
+(required, since an instance name has no dot), and the URL is `/hooks/<instance>`. The docs' examples name an instance
+after the product (`gmail`, `calendar`, `drive`, `trello`, `meetings`) or the service (`github-ci` and `github-prs`,
+`kaneo`, `plaid`, `webhook`).
 
 #### 14.3.2 Manifest (`bobbin.toml`)
 
 ```toml
-name = "gmail"                                   # must equal the directory name
-version = "1"                                    # free text, shown by `service list`
+name = "google.gmail"                            # <vendor>.<product>; the directory is google/gmail/
+version = "1"                                    # free text, shown by `bobbin list`
 summary = "Gmail push (Cloud Pub/Sub): new mail in watched mailboxes"
+
+[provider]                                       # required: who runs the service, and its developer pages (https)
+vendor = "Google"                                # display names, as the provider writes them
+product = "Gmail"
+homepage = "https://workspace.google.com/products/gmail/"
+webhook_docs = "https://developers.google.com/workspace/gmail/api/guides/push"  # the webhooks / push received; required
+signature_docs = "https://cloud.google.com/pubsub/docs/push"   # how a delivery is verified; required with a secret
+api_docs = "https://developers.google.com/workspace/gmail/api/reference/rest"  # required when the processor calls the API
 
 [source]                                         # exactly one of `module` or `template`
 module = "source"                                # source.py in this bobbin, or a dotted module
 # template = { scheme = "hmac-sha256-hex", header = "X-Hub-Signature-256", prefix = "sha256=", key = "repository.full_name", ... }
 # template = "settings"                          # no fixed table: every template key comes from the instance's settings of
-#                                                # the same names (14.3.2a; the `webhook` bobbin)
+#                                                # the same names (14.3.2a; the `hookspool.webhook` bobbin)
 span = "mail"                                    # default span preset name
 # config = ["env"]                               # settings that become keys of the source's own table (its `config_keys`)
 sender_retries = true
@@ -697,11 +728,36 @@ description = "new mail in the assistant's own mailbox"
 
 Without a processor the outputs are the source's own event types; `[outputs."*"]` means "every accepted
 event" (the only key that may stand for more than one event type). `check` validates every manifest it
-loads: unknown keys, name/directory mismatch, both or neither of `module`/`template`, a span that is not a
-preset, a setting without `type`, a `default` of the wrong type, a non-required setting without `default`,
-and an output key that is not an event-type token or `"*"` are errors.
+loads: unknown keys, a name that is not `<vendor>.<product>` (14.3.1) or not its `<vendor>/<product>/` directory,
+both or neither of `module`/`template`, a span that is not a preset, a setting without `type`, a `default` of the
+wrong type, a non-required setting without `default`, a `[provider]` value that is not a string, and an output key
+that is not an event-type token or `"*"` are errors.
 
-#### 14.3.2a Template settings, and the `webhook` bobbin (general web services)
+**Provider and frontmatter.** `[provider]` is the bobbin's structured frontmatter, and the conformance kit
+(`hookspool bobbin check`, the `provider` row) requires it: `vendor` and `product` (display names), `homepage`,
+`webhook_docs` (the provider's developer page for the webhooks or push this bobbin receives), `signature_docs` (the
+page that describes the signature or token; required when the manifest declares a secret, which every built-in
+does) and `api_docs` (the API reference; required when the processor calls the provider's API through `ctx.http`,
+`ctx.oauth` or a `hookspool.providers` helper). Every URL is `https`, on the provider's own public host: an
+`example.com`/`.org`/`.net` or `.test`/`.example`/`.invalid`/`localhost` host, an IP address and a placeholder
+(`TODO`, `<...>`, `...`) are refused. `README.md`, `SETUP.md` and `AGENTS.md` each open with YAML frontmatter that
+repeats the manifest exactly:
+
+```
+---
+bobbin: google.gmail
+provider: Google Gmail
+webhook_docs: https://developers.google.com/workspace/gmail/api/guides/push
+---
+```
+
+(`provider` is `vendor` and `product` joined by a space; `AGENTS.md` may add keys of the agents.md convention, the
+other two may not). `hookspool check` reads only the table's shape, so a deployment's private bobbin is not refused
+at load time for a documentation link; the kit is where the links are enforced. The advisory `provider-links` row
+fetches each URL (`HEAD`, then `GET`; 10 s; redirects followed; 2xx or 3xx is fine) when the kit runs with
+`--online`, which CI passes and a local run does not by default; it never blocks a merge.
+
+#### 14.3.2a Template settings, and the `hookspool.webhook` bobbin (general web services)
 
 **The rule (one rule, two forms).** A template bobbin has no `source.py`; its source is the template source
 (14.1) and its keys are `scheme`, `header`, `prefix`, `param`, `callback_url`, `head_handshake`, `key`, `dedup`,
@@ -723,8 +779,8 @@ goes through the template source's own checks, exactly as a hand-written `[sourc
 value it refuses fails `hookspool check` with the template's message (for example
 `header: required by scheme hmac-sha256-hex`).
 
-**The `webhook` bobbin.** `hookspool/bobbins/webhook/` is the bobbin for any web service that has no bobbin of
-its own and sends a signed or tokened JSON POST. Its manifest says `template = "settings"` and declares one typed
+**The `hookspool.webhook` bobbin.** `hookspool/bobbins/hookspool/webhook/` is the bobbin for any web service that has
+no bobbin of its own and sends a signed or tokened JSON POST. Its manifest says `template = "settings"` and declares one typed
 setting per template key (`scheme` and `key` required; the rest default to unset). It has one secret
 (`secret`), no processor, and the output `"*"`. Because the sender's event types cannot be listed in a
 manifest, an instance of a `"settings"` bobbin may map any event-type token next to `"*"`; each becomes a route
@@ -737,15 +793,18 @@ redelivers what a sender that does not retry loses (14.3.8). Its
 `captures/` hold the kit's captures for one example instance (`captures/kit.toml`) and `captures/schemes/`
 one accepted delivery per scheme.
 
-**The scaffold.** `hookspool bobbin new <name>` copies the `webhook` bobbin's shape and freezes its settings into
-a fixed `[source] template` table: the example values for the scheme, with `--set NAME=VALUE` over them (a value
+**The scaffold.** `hookspool bobbin new <vendor>.<product>` writes `<dir>/<vendor>/<product>/` (and, in a Python package
+directory such as `hookspool/bobbins/`, a new vendor's empty `__init__.py`), copies the `hookspool.webhook` bobbin's
+shape and freezes its settings into a fixed `[source] template` table: the example values for the scheme, with `--set NAME=VALUE` over them (a value
 is TOML, or a bare string; an empty value removes the key), each checked by the template source before
 anything is written. The captures are signed for the chosen scheme. A value only the deployment knows
 (`callback_url` of `hmac-sha1-base64-url`) is not frozen: the new bobbin declares it as a required
 `[settings.callback_url]` (a fixed template keeps it as a setting, as Trello does), and the example used for the
-captures is the kit instance's setting in `captures/kit.toml`. This is how a dedicated bobbin starts.
-When the same service is set up through `webhook` by several deployments, that is the signal to give it its
-own bobbin.
+captures is the kit instance's setting in `captures/kit.toml`. The example instance is named after the product
+(`[bobbins.<product>]` with `bobbin = "<vendor>.<product>"`, `/hooks/<product>`). `[provider]` and the three documents'
+frontmatter are written with `TODO` placeholders, which the kit's `provider` row reports as one problem until they are
+filled in. This is how a dedicated bobbin starts. When the same service is set up through `hookspool.webhook` by
+several deployments, that is the signal to give it its own bobbin.
 
 #### 14.3.3 Instances in config
 
@@ -753,8 +812,8 @@ own bobbin.
 [spool]
 bobbin_path = ["/etc/hookspool/bobbins"]        # extra bobbin directories, searched after the built-ins
 
-[bobbins.gmail]                                 # instance name = table key; the URL is /hooks/<instance>
-bobbin = "gmail"                                 # default: the instance name
+[bobbins.gmail]                                 # instance name = table key, a plain identifier; the URL is /hooks/<instance>
+bobbin = "google.gmail"                          # the bobbin, <vendor>.<product>; required
 secrets.push_token = { file = "/etc/hookspool/secrets/gmail_push_token" }
 secrets.cred_owner = { file = "/etc/hookspool/google/owner.json" }
 settings = { owner = "owner@example.com", tz = "America/New_York" }
@@ -768,7 +827,10 @@ expect = true                                    # apply the manifest's expect_e
 ```
 
 Two instances of one bobbin are two tables with different keys and the same `bobbin` (e.g.
-`github-ci` and `github-prs`, each with its own secret).
+`github-ci` and `github-prs`, both `bobbin = "github.repo"`, each with its own secret). A table without `bobbin` is an
+error that names the bobbin when the instance is called after its product (`bobbins.gmail.bobbin: required ... (did
+you mean bobbin = "google.gmail"?)`), and a dotted table header (`[bobbins.google.gmail]`, which TOML reads as a nested
+table) is refused with the plain form to write instead.
 
 **Expansion.** Expansion happens inside `load_config`, on every path that builds a config from a file
 (startup, `check`, the intake's and the dispatcher's reload), so every other part of hookspool sees only
@@ -780,11 +842,11 @@ ordinary tables:
 2. With a processor, `destinations."script:<i>"` with `processor = "<i>"` (a new script key that replaces
    `argv`: the **dispatcher** builds `[sys.executable, "-I", "-m", "hookspool.processor", "<i>"]` at spawn,
    so the interpreter is always the dispatcher's own and `-I` keeps the working directory off
-   `sys.path`), `timeout_s`, `state_dir` (instance override, else `<spool.home>/services/<i>`, when
+   `sys.path`), `timeout_s`, `state_dir` (instance override, else `<spool.home>/bobbins/<i>`, when
    `state = true`), `max_inflight = 1`, and an `env` table (a new script key: string values only, names
    `^[A-Z][A-Z0-9_]*$`, never `HOOKSPOOL_*` from config, merged over `env_file`) holding:
-   - `HOOKSPOOL_BOBBIN`, `HOOKSPOOL_BOBBIN_INSTANCE`, the bobbin's resolved directory as
-     `HOOKSPOOL_BOBBIN_DIR`;
+   - `HOOKSPOOL_BOBBIN` (the dotted name, `google.gmail`), `HOOKSPOOL_BOBBIN_INSTANCE`, the bobbin's resolved
+     directory as `HOOKSPOOL_BOBBIN_DIR`;
    - `HOOKSPOOL_SETTINGS`: one JSON object, setting name → typed value, defaults applied;
    - `HOOKSPOOL_DELTA_ROUTES`: the JSON of `outputs`;
    - `HOOKSPOOL_SECRET_REFS`: JSON, secret name → its **reference** (never a value) for each secret the
@@ -797,7 +859,7 @@ ordinary tables:
    `attrs`), inserted before the file's own routes; the source's `action` is the `"*"` output, and `check`
    refuses a multi-output instance without `"*"` mapped, so no event can reach a route with no action.
 4. An explicit `[sources.<i>]` or `[destinations."script:<i>"]` that collides with an expansion is an
-   error (no silent override). Unknown instance keys, an unknown bobbin, a missing required setting or
+   error (no silent override). Unknown instance keys, a missing `bobbin`, an unknown bobbin, a missing required setting or
    secret, a setting value that does not match its `type`, a setting or output not in the manifest, and a
    processor bobbin's output mapped to a destination that does not exist are errors. An output the
    instance leaves out is dropped by the processor with one log line per batch (the deployment does not
@@ -815,7 +877,7 @@ at start and on reload.
 #### 14.3.4 Processors
 
 `hookspool.processor` is the runtime. `deploy/scripts/hookspool_batch.py` is a re-export of it; the stand-alone
-"copy three files" mode is retired, and the Gmail and Calendar delta scripts are the `gmail` and `gcal` bobbins
+"copy three files" mode is retired, and the Gmail and Calendar delta scripts are the `google.gmail` and `google.calendar` bobbins
 ([Upgrading](../operations/upgrading.md#upgrading-to-02-bobbins) moves a deployment across).
 `python -m hookspool.processor <instance>` loads the processor module from `HOOKSPOOL_BOBBIN_DIR` and calls
 
@@ -844,41 +906,49 @@ emit lines ever reaches stdout. Unmapped event types are dropped with one log li
 
 #### 14.3.5 Tooling
 
-- `hookspool bobbin list` — bobbins found (built-in, then each `spool.bobbin_path` dir): name, version,
-  origin, summary, and which instances use them.
-- `hookspool bobbin show <bobbin>` — secrets, settings (type/required/default), outputs, span,
-  sender_retries, proxy note.
+- `hookspool bobbin list` — bobbins found (built-in, then each `spool.bobbin_path` dir): the `<vendor>.<product>`
+  name, version, origin, summary, and which instances use them.
+- `hookspool bobbin show <vendor>.<product>` — the provider and its pages, secrets, settings
+  (type/required/default), outputs, span, sender_retries, proxy note.
 - `hookspool bobbin expand [<instance>]` — 14.3.3.
-- `hookspool bobbin new <name> [--dir D] [--set NAME=VALUE ...] [--code] [--processor]` — a copy of the `webhook`
-  bobbin with its settings frozen into a fixed `[source] template` (14.3.2a): manifest, an accepted and a
-  rejected capture signed for the scheme, README, SETUP.md, AGENTS.md (`--code`: a `source.py` instead of the
-  template; `--processor`: also a `processor.py`). It passes the conformance kit once its TODO placeholders are
-  filled in (until then the kit's `todos` check is its one failure).
+- `hookspool bobbin new <vendor>.<product> [--dir D] [--set NAME=VALUE ...] [--code] [--processor]` — a copy of the
+  `hookspool.webhook` bobbin in `<D>/<vendor>/<product>/` with its settings frozen into a fixed `[source] template`
+  (14.3.2a): manifest with a `[provider]` table, an accepted and a rejected capture signed for the scheme, README,
+  SETUP.md, AGENTS.md with their frontmatter (`--code`: a `source.py` instead of the template; `--processor`: also a
+  `processor.py`). It passes the conformance kit once its TODO placeholders are filled in (until then the kit's
+  `provider` and `todos` checks are its failures; `provider` says it in one message).
 - **Conformance** (`hookspool.testing.bobbinkit`, run by CI for every bobbin in the repo and by
   `.github/scripts/plugin_ci.py` for every changed bobbin): manifest valid; the 14.3.7 rules; the source
   passes the source kit with each capture; the processor (if any) runs each capture's payload through
   `process` with a fake `Context` (stub HTTP), its items' event types are declared outputs, a second run
   of the same batch id replays the journal, and nothing but emits reaches stdout.
-  `hookspool bobbin check <dir> [--report text|md|json] [--strict] [--base REF]` runs the kit on one bobbin and prints a
-  scorecard (each check, pass / fail / skip, every problem as `file:line` with how to fix it); CI runs that same command,
-  so no check is CI-only. The checks: `manifest` (including one service per bobbin), `files`, `todos`, `core-only`
-  (14.3.7), `docs` (14.3.8), `captures` (an accepted and a rejected capture, each `# expect:` holds, no secret-looking
-  value or real-looking personal data), `source-kit`, `processor`, `tests` (the bobbin's own, network blocked), and the
-  advisory `scope` (`bobbin-only` or `touches-core`). Test values and stub API answers live in `captures/kit.toml`.
+  `hookspool bobbin check <dir> [--report text|md|json] [--strict] [--base REF] [--online]` runs the kit on one bobbin and
+  prints a scorecard (each check, pass / fail / skip, every problem as `file:line` with how to fix it); CI runs that same
+  command (with `--online`), so no check is CI-only. The checks: `name` (`<vendor>.<product>`, one dot, the directory is
+  `<vendor>/<product>/`, `hookspool.` only for a bobbin shipped in `hookspool/bobbins/`, no `spool.bobbin_path` bobbin
+  shadowing a built-in; 14.3.1), `manifest` (including one service per bobbin), `provider` (the `[provider]` table, its
+  required pages and URL rules, and the same frontmatter in README.md, SETUP.md and AGENTS.md; 14.3.2), `files`, `todos`,
+  `core-only` (14.3.7, and a vendor directory with no code), `docs` (14.3.8), `captures` (an accepted and a rejected
+  capture, each `# expect:` holds, no secret-looking value or real-looking personal data), `source-kit`, `processor`,
+  `tests` (the bobbin's own, network blocked: `tests/bobbins/test_<vendor>_<product>.py` for a built-in), and the advisory
+  `provider-links` (each provider page answers 2xx/3xx; only with `--online`) and `scope` (`bobbin-only` or
+  `touches-core`). Test values and stub API answers live in `captures/kit.toml`.
 
-  **Merge criteria.** A pull request that changes only `hookspool/bobbins/<name>/` (and its own tests), whose scorecard
-  passes every required check, and whose author has ticked the template's three boxes (the provider's signature
-  documentation is linked and matches the declared scheme; the captures came from a real delivery and were redacted; the
-  author can maintain the bobbin or accepts its removal if it breaks) is the expected merge. What the maintainer still
-  checks by hand is the provider's documentation against the declared scheme and the capture bodies; a `touches-core`
-  diff is reviewed as a core change. [Reviewing a bobbin](../bobbins/review.md) is the reviewer's page.
+  **Merge criteria.** A pull request that changes only `hookspool/bobbins/<vendor>/<product>/` (and its own tests, and a
+  new vendor's empty `__init__.py`), whose scorecard passes every required check, and whose author has ticked the
+  template's two boxes (the captures came from a real delivery and were redacted; the author can maintain the bobbin or
+  accepts its removal if it breaks) is the expected merge. The provider's documentation link is no longer a box: the
+  `provider` row requires `webhook_docs` and `signature_docs`, and `provider-links` fetches them. What the maintainer
+  still checks by hand is that documentation against the declared scheme, and the capture bodies; a `touches-core` diff
+  is reviewed as a core change. [Reviewing a bobbin](../bobbins/review.md) is the reviewer's page.
 
   **Bobbin-only is reachable.** Such a pull request needs nothing outside the bobbin: the catalogue in
   `docs/bobbins/README.md` is the output of `hookspool bobbin list --markdown` (one row per manifest `summary`; the
   docs test checks every row it has and does not demand a row for a new bobbin), the README has no bobbin table, and
   the `CHANGELOG.md` line is the maintainer's, written on merge. So `README.md`, `CHANGELOG.md` and the catalogue are
   outside the bobbin like any other file, and `scope` stays the one rule: every changed file is under the bobbin's
-  directory or is `tests/bobbins/test_<name>.py`. The labelling job (`.github/scripts/bobbin_label.py`) applies that rule
+  directory, is `tests/bobbins/test_<vendor>_<product>.py` (`.` and `-` as `_`), or is its vendor's
+  `hookspool/bobbins/<vendor>/__init__.py` (which the kit's `core-only` row requires to be empty). The labelling job (`.github/scripts/bobbin_label.py`) applies that rule
   to GitHub's own list of the pull request's files (`GET /repos/{owner}/{repo}/pulls/{n}/files`, every page), never to
   the scorecard, which the pull request's code produced; the scorecard's `scope` is a cross-check, and a disagreement
   labels the pull request `touches-core` with a note in the comment.
@@ -895,8 +965,8 @@ A deployment never edits a built-in bobbin. Behaviour changes through:
 
 1. **Settings** (14.3.2).
 2. **A hooks module**: a bobbin that supports hooks declares `[settings.hooks]` with `type = "path"` and
-   documents the functions it calls (e.g. gmail calls `hooks.classify(message, account, ctx) -> dict | None`
-   before its own rules; gcal calls `hooks.travel(event, day_events, ctx) -> dict | None` for travel blocks). The
+   documents the functions it calls (e.g. `google.gmail` calls `hooks.classify(message, account, ctx) -> dict | None`
+   before its own rules; `google.calendar` calls `hooks.travel(event, day_events, ctx) -> dict | None` for travel blocks). The
    runtime loads it by file path and passes it as `ctx.hooks`. Hooks are deployment code: the 14.3.7
    rules apply to bobbins, not to hooks.
 3. **A private bobbin** in a `spool.bobbin_path` directory, when the service is not in the repo at all.
@@ -932,8 +1002,10 @@ Enforcement: the conformance kit walks the AST of every bobbin module and fails 
 `multiprocessing`, `signal`, `sqlite3`, `fcntl`, `tempfile`, `shutil`, `pickle`, `logging`, `importlib`;
 on calls to `open`, `print`, `exec`, `eval`, `compile`, `__import__`, `os.*` other than `os.path.*`,
 `time.sleep`, any `.write_text`/`.write_bytes`/`.open`/`.unlink` method, and on any use of `sys.path` or
-`os.environ`, and on any import of `hookspool.bobbins` (a bobbin never imports another bobbin, or itself by
-package path; its own files are siblings loaded by the runtime). A bobbin that needs something core lacks gets it added to core (a PR to `hookspool/net.py`,
+`os.environ`, on any import of `hookspool.bobbins` (a bobbin never imports another bobbin, a sibling under the same
+vendor or its vendor package included, or itself by package path; its own files are siblings loaded by the runtime),
+and on a bare import of a sibling product's directory name that is not a standard-library module. The vendor directory
+holds no code: any `.py` file in it other than an empty `__init__.py` fails `core-only`. A bobbin that needs something core lacks gets it added to core (a PR to `hookspool/net.py`,
 `hookspool/verify.py`, `hookspool/providers/`, the runtime or the plugin API), never a private copy.
 `.github/scripts/plugin_ci.py` runs the same check on every changed bobbin.
 
@@ -961,7 +1033,7 @@ config table shown in both expands without errors.
 `[sources.*]` tables keep working exactly as before (they are what an expansion produces). The built-in code
 sources live in their bobbins; `hookspool.sources.<name>` stays importable as a re-export, so existing
 configs with `[sources.gmail]` (implicit module) still load. The config templates that were
-`examples/sources/*.toml` are the `github`, `trello` and `kaneo` bobbins on the `template` source; the old files are
+`examples/sources/*.toml` are the `github.repo`, `atlassian.trello` and `kaneo.projects` bobbins on the `template` source; the old files are
 one-line pointers kept for old links. A deployment that still runs the removed delta scripts moves to
 `[bobbins.*]` instances as [Upgrading](../operations/upgrading.md#upgrading-to-02-bobbins) describes.
 
@@ -1027,6 +1099,7 @@ sync = { quiet_s = 60, max_s = 300 }
 immediate = { quiet_s = 0, max_s = 0 }
 
 [bobbins.github]                       # a bobbin instance (14.3.3); it expands to [sources.github]
+bobbin = "github.repo"
 secrets.secret = { file = "/etc/hookspool/secrets/github" }   # or { env = "…" } / { env_file = "…", key = "…" }
 outputs = { "*" = "hermes:github-prs" }  # the source's `action`: what no route claims
 dedup_window_s = 86400
@@ -1034,6 +1107,7 @@ expect_every_s = 0                     # 0 = no liveness expectation
 max_body_bytes = 786432                # per-source override; `check` requires <= the route's max_bytes
 
 [bobbins.plaid]
+bobbin = "plaid.items"
 span = "sync"
 secrets.client_id = { env_file = "/etc/hookspool/plaid.env", key = "PLAID_CLIENT_ID" }
 secrets.secret    = { env_file = "/etc/hookspool/plaid.env", key = "PLAID_SECRET" }
@@ -1041,11 +1115,13 @@ settings = { env = "production" }
 outputs = { "*" = "hermes:plaid" }
 dedup_window_s = 600
 
-[bobbins.zoom]
+[bobbins.meetings]
+bobbin = "zoom.meetings"
 secrets.webhook_secret = { file = "…" }
-outputs = { "*" = "hermes:zoom" }
+outputs = { "*" = "hermes:meetings" }
 
-[bobbins.gcal]                         # a processor bobbin: its outputs, not an `action`, say where results go
+[bobbins.calendar]                     # a processor bobbin: its outputs, not an `action`, say where results go
+bobbin = "google.calendar"
 secrets.channel_token = { file = "…" }
 secrets.cred = { file = "…" }
 outputs = { changed = "script:calendar-refresh" }

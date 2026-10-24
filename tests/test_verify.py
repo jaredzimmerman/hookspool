@@ -313,7 +313,9 @@ def test_compare_digest_only_inside_equal():
 
 def _plugin_files():
     files = glob.glob(os.path.join(ROOT, "hookspool", "sources", "*.py"))
-    files += glob.glob(os.path.join(ROOT, "hookspool", "bobbins", "*", "source.py"))
+    bobbin_sources = glob.glob(os.path.join(ROOT, "hookspool", "bobbins", "*", "*", "source.py"))     # <vendor>/<product>/
+    assert len(bobbin_sources) >= 5, "the code bobbins' sources are found"
+    files += bobbin_sources
     files += glob.glob(os.path.join(ROOT, "tests", "kitplugins", "*.py"))
     # hookspool/sources/<name>.py may be a re-export of the bobbin's source (ARCHITECTURE 14.3.9): that source is listed above
     return [f for f in files if not f.endswith("__init__.py") and "sys.modules[__name__]" not in open(f).read()]

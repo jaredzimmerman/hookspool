@@ -32,7 +32,7 @@ the Gmail or Calendar delta script.
 
 ### What was removed
 
-- `deploy/scripts/gmail_delta.py` and `deploy/scripts/gcal_delta.py`. They are now the `gmail` and `gcal` bobbins and
+- `deploy/scripts/gmail_delta.py` and `deploy/scripts/gcal_delta.py`. They are now the `google.gmail` and `google.calendar` bobbins and
   their processors. A config that still has `[destinations."script:gmail_delta"]` or `[destinations."script:gcal_delta"]`
   still loads, but every batch fails when the script is started and is dead-lettered after its retries.
 - The copy mode of `deploy/scripts/hookspool_batch.py`, where the delta scripts and the batch helper were copied to a
@@ -40,8 +40,19 @@ the Gmail or Calendar delta script.
   installed in.
 - The default `action` of `hookspool.sources.gmail` and `hookspool.sources.gcal`. A hand-written `[sources.gmail]` or
   `[sources.gcal]` table still loads but must name its own `action`; an instance's `outputs` choose it instead.
-- The config templates in `examples/sources/`. They are the `github`, `trello` and `kaneo` bobbins; the old files are
+- The config templates in `examples/sources/`. They are the `github.repo`, `atlassian.trello` and `kaneo.projects` bobbins; the old files are
   one-line pointers kept for old links. A `[sources.github]` table you copied from one still works unchanged.
+
+### Bobbin names are `<vendor>.<product>`
+
+The bobbins are named for the company that runs the service and the product whose webhooks they receive
+([Architecture](../architecture/ARCHITECTURE.md#1431-layout)): `google.gmail`, `google.calendar`, `google.drive`,
+`github.repo`, `atlassian.trello`, `kaneo.projects`, `zoom.meetings`, `plaid.items` and `hookspool.webhook`. A config
+written against a 0.2 development build with the short names (`bobbin = "gmail"`, or no `bobbin` key) needs one change per
+instance: give it `bobbin = "<vendor>.<product>"`. Instance names, and so the URLs, stay as they are. `hookspool check`
+names the bobbin to write when the instance is called after its product (`did you mean bobbin = "google.gmail"?`). There
+are no aliases for the short names. A processor's state now defaults to `<home>/bobbins/<instance>` (it was
+`<home>/services/<instance>` in those builds): move the directory, or set `state_dir` to the old one.
 
 ### Moving a service to its instance
 
@@ -54,6 +65,7 @@ processor reads everything since the stored history id (Gmail) or sync token (Ca
 
    ```toml
    [bobbins.gmail]
+   bobbin = "google.gmail"
    secrets.push_token = { file = "/etc/hookspool/secrets/gmail_push_token" }   # the source's secret, unchanged
    secrets.cred_owner = { file = "/etc/hookspool/google/owner@example.com.json" }
    settings = { owner = "owner@example.com", tz = "America/New_York" }
@@ -62,14 +74,14 @@ processor reads everything since the stored history id (Gmail) or sync token (Ca
    ```
 
    Calendar works the same way: `[sources.gcal]` and `[destinations."script:gcal_delta"]` become `[bobbins.gcal]` with
-   `secrets.channel_token`, `secrets.cred`, the settings below, `outputs` and `state_dir =
+   `bobbin = "google.calendar"`, `secrets.channel_token`, `secrets.cred`, the settings below, `outputs` and `state_dir =
    "/var/lib/hookspool/scripts/gcal"`. A hand-wired `[sources.<name>]` for another service becomes `[bobbins.<name>]` the
-   same way: its secrets move across as they are, its `action` becomes the `"*"` output, and window or expectation
+   same way, with `bobbin = "<vendor>.<product>"` (`hookspool bobbin list` has the names): its secrets move across as they are, its `action` becomes the `"*"` output, and window or expectation
    overrides (`span`, `quiet_s`, `expect_every_s`, ...) stay instance keys.
 2. Keep the state: point `state_dir` at the directory the script used (its `GMAIL_DELTA_DATA` or `GCAL_DELTA_DATA`,
    else the old destination's `state_dir`). The state files keep their names (`gmail_push_state.json`,
    `gmail_push_state_agent.json`, `gcal_push_state.json`), so the history ids and the sync token carry over and the first
-   pass reads only what is new. Without `state_dir` the instance starts in `<home>/services/<instance>/` and its first
+   pass reads only what is new. Without `state_dir` the instance starts in `<home>/bobbins/<instance>/` and its first
    push only records where Gmail or Calendar is now. The directory must be private (mode 0700, owned by the service
    user): the processor keeps OAuth access tokens there.
 3. Move the variables to settings. Take each value from the old `env_file` and put it under `settings`, or under

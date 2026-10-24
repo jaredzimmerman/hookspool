@@ -1,4 +1,4 @@
-"""Trello source (T6). The bridge is ported as CONFIG, not code: ``hookspool/bobbins/trello`` on the
+"""Trello source (T6). The bridge is ported as CONFIG, not code: ``hookspool/bobbins/atlassian/trello`` on the
 ``template`` plugin (T5b), because base64 HMAC-SHA1 over body + callback URL and an unauthenticated HEAD
 handshake are both template features. This file holds Trello's own acceptance: the shared kit on that
 config, the captures, the HEAD handshake, key/dedup, and parity of the signature check with

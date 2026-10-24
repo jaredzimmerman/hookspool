@@ -255,24 +255,25 @@ and `check`:
 | form | does |
 |---|---|
 | `bobbin list` | the bobbins found (built in, then each `[spool] bobbin_path` directory): name, version, where it comes from, summary, and the `[bobbins.<instance>]` tables that use it |
-| `bobbin show <bobbin>` | one bobbin: its secrets, settings (type, required, default), outputs, span, whether the sender retries, the reverse-proxy note |
+| `bobbin show <vendor>.<product>` | one bobbin: its provider and the provider's pages, its secrets, settings (type, required, default), outputs, span, whether the sender retries, the reverse-proxy note |
 | `bobbin expand [<instance>]` | the ordinary tables one instance (or every instance) expands to, as TOML. Secret references stay references and `HOOKSPOOL_SECRET_REFS` is shown by secret name only: no secret value is ever read or printed. Exit 2 with every problem when the bobbins do not expand |
-| `bobbin new <name>` | a new bobbin directory: a copy of the `webhook` bobbin with its settings frozen into a fixed `[source] template` (`--set` chooses them), an accepted and a rejected capture signed for the scheme, README, SETUP.md and AGENTS.md. It passes `bobbin check` once its TODO placeholders are filled in |
+| `bobbin new <vendor>.<product>` | a new bobbin directory, `<dir>/<vendor>/<product>/` (`--dir`, default the current directory; a new vendor directory in a Python package gets an empty `__init__.py`): a copy of the `hookspool.webhook` bobbin with its settings frozen into a fixed `[source] template` (`--set` chooses them), a `[provider]` table, an accepted and a rejected capture signed for the scheme, README, SETUP.md and AGENTS.md with their frontmatter. It passes `bobbin check` once its TODO placeholders are filled in |
 | `bobbin check <dir>` | run the conformance kit on one bobbin directory and print its scorecard: each check, pass / fail / skip, and every problem as `file:line` with how to fix it. Exit 0 when every required check passes, 1 when one fails, 2 when `<dir>` is not a bobbin. It reads no config and no real secret. CI runs this same command on every changed bobbin ([Reviewing a bobbin](../bobbins/review.md)) |
 
-`name` is the bobbin for `show`, the instance for `expand`, the new bobbin's name for `new` and the bobbin
-directory for `check`.
+`name` is the bobbin (`<vendor>.<product>`) for `show`, the instance for `expand`, the new bobbin's `<vendor>.<product>`
+name for `new` and the bobbin directory for `check`.
 
 | option | meaning |
 |---|---|
-| `--dir D` | `new`: the parent directory (default: the current directory) |
+| `--dir D` | `new`: the parent directory; the bobbin goes in `D/<vendor>/<product>/` (default: the current directory) |
 | `--set NAME=VALUE` | `new`: freeze a webhook setting (`scheme`, `header`, `prefix`, `key`, `dedup`, ...) into the template; the value is TOML (`--set 'key=["id"]'`) or a bare string, an empty value removes the key, and a key that takes only a string keeps the text as written (`--set prefix=1` is the string `1`); repeatable. `callback_url` (hmac-sha1-base64-url) is used for the captures and the kit instance but stays a required setting of the new bobbin, not part of its template. A value the template refuses stops `new` with the template's message |
 | `--code` | `new`: a `source.py` instead of the template |
 | `--processor` | `new`: include a `processor.py` and a `[processor]` table |
 | `--markdown` | `list`: print the catalogue table of `docs/bobbins/README.md` (name, linked to its README, and the manifest's summary), generated from the manifests |
 | `--report text\|md\|json` | `check`: the scorecard as aligned text (default), GitHub Markdown, or JSON (schema `hookspool.bobbin-check/1`) |
-| `--strict` | `check`: advisory checks (`scope`) fail the run too |
+| `--strict` | `check`: advisory checks (`provider-links`, `scope`) fail the run too |
 | `--base REF` | `check`: the git ref the change is compared with; the advisory `scope` check lists files changed outside the bobbin |
+| `--online` | `check`: let the advisory `provider-links` check fetch each `[provider]` URL (`HEAD`, then `GET`; 10 s; 2xx/3xx is fine). Off by default, so a local run sends nothing; CI passes it |
 
 ### hookspool source
 

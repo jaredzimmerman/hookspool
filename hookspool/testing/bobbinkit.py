@@ -6,9 +6,16 @@ command on every changed bobbin, so there is no check that only CI knows about.
 
 The checks, in order (required unless marked advisory):
 
-``manifest``    ``bobbin.toml`` is valid (14.3.2), its name is its directory, and it covers one
-                service: it reads no other bobbin's signature header and calls no other bobbin's
-                API host (unless both share a ``hookspool.providers`` module)
+``name``        the name is ``<vendor>.<product>`` (one dot, each part ``[a-z][a-z0-9-]{0,39}``), the
+                directory is ``<vendor>/<product>/``, ``hookspool.`` only for a bobbin shipped in
+                ``hookspool/bobbins/``, and no ``spool.bobbin_path`` bobbin shadows a built-in
+``manifest``    ``bobbin.toml`` is valid (14.3.2) and it covers one service: it reads no other
+                bobbin's signature header and calls no other bobbin's API host (unless both share a
+                ``hookspool.providers`` module)
+``provider``    ``[provider]`` names the vendor and product and links the provider's developer pages
+                (``homepage``, ``webhook_docs``; ``signature_docs`` when a secret is declared; ``api_docs``
+                when the processor calls the provider's API), https only, never a placeholder or an
+                example host; README.md, SETUP.md and AGENTS.md open with the same frontmatter
 ``files``       ``bobbin.toml``, ``README.md``, ``SETUP.md``, ``AGENTS.md`` and ``captures/*.http``
 ``todos``       no ``TODO`` placeholder is left
 ``core-only``   the 14.3.7 ban on every module (imports, calls, ``os.*``, ``sys.path``, another bobbin)
@@ -22,6 +29,7 @@ The checks, in order (required unless marked advisory):
                 context: stub HTTP, the network blocked, outputs within the declared ones, the
                 journal replayed on a second run, nothing but emits on stdout, 75 and 65 exits
 ``tests``       the bobbin's own tests pass with the network blocked
+``provider-links`` (advisory, ``--online`` only; CI passes it) every ``[provider]`` URL answers 2xx/3xx
 ``scope``       (advisory) whether the change touches anything outside the bobbin
 
 Test values and stub answers for a bobbin live in ``captures/kit.toml`` (optional)::
@@ -59,6 +67,8 @@ import sys
 import tempfile
 import time
 import tomllib
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
 
@@ -77,6 +87,9 @@ HTTP_STUB_KEYS = {"method", "url", "status", "json"}
 T0 = 1_800_000_000.0
 EXPECTS = ("queued", "ignored", "challenge", "unverified")
 REQUIRED_FILES = ("bobbin.toml", "README.md", "SETUP.md", "AGENTS.md")
+FRONTMATTER_DOCS = ("README.md", "SETUP.md", "AGENTS.md")
+FRONTMATTER_KEYS = ("bobbin", "provider", "webhook_docs")
+LINK_TIMEOUT_S = 10.0
 TEXT_EXT = (".toml", ".md", ".py", ".http", ".txt", ".json")
 PROCESSOR_TIMEOUT_S = 120.0
 TESTS_TIMEOUT_S = 900.0
@@ -226,23 +239,35 @@ def render_text(doc: dict) -> str:
 class Bobbin:
     """One bobbin directory and what the checks share: the manifest, the kit file, a work dir."""
 
-    def __init__(self, path: str, *, base: str | None = None, repo_root: str | None = None):
+    def __init__(self, path: str, *, base: str | None = None, repo_root: str | None = None, online: bool = False):
         self.dir = os.path.abspath(path)
         self.real = os.path.realpath(self.dir)
         self.dirname = os.path.basename(os.path.normpath(self.dir))
-        self.builtin = os.path.dirname(self.real) == os.path.realpath(BL.BUILTIN_DIR)
+        self.vendor_dir = os.path.dirname(self.real)            # <root>/<vendor>; the bobbin is <vendor>/<product>
+        self.path_rel = BL.default_rel(self.real)
+        self.builtin = os.path.dirname(self.vendor_dir) == os.path.realpath(BL.BUILTIN_DIR)
         self.base = base
+        self.fetch_links = online                 # the provider-links row fetches only when asked
         self.repo_root = repo_root if repo_root is not None else find_repo_root(self.real)
         self.work = tempfile.mkdtemp(prefix="hookspool-bobbinkit-")
-        self.pkg = BL.load_package(self.dir, BL.BUILTIN if self.builtin else os.path.dirname(self.dir),
-                                   dict(C.DEFAULTS["spans"]))
+        self.pkg = BL.load_package(self.dir, BL.BUILTIN if self.builtin else os.path.dirname(self.vendor_dir),
+                                   dict(C.DEFAULTS["spans"]), self.path_rel)
         self.name = self.pkg.name
+        # the kit's instance of the bobbin: named after the product (/hooks/<product>), as the docs' examples are
+        self.inst = re.sub(r"[^a-z0-9_-]", "-", BL.split_name(self.name)[1] if BL.NAME_RE.match(self.name)
+                           else self.dirname.lower()) or "bobbin"
+        if not BL.INSTANCE_RE.match(self.inst):
+            self.inst = "bobbin"
         self.kit, self.kit_errors = _read_kit(os.path.join(self.dir, KIT_FILE))
         self._view: str | None = None
         self._captures: list[tuple[str, RawRequest | None, str]] | None = None
 
     def close(self) -> None:
         shutil.rmtree(self.work, ignore_errors=True)
+
+    def rel_dir(self) -> str:
+        """The bobbin's directory for a message: ``<vendor>/<product>`` below its root."""
+        return self.path_rel
 
     def rel(self, path: str) -> str:
         """``path`` for a finding: relative to the repository when there is one, else to the bobbin."""
@@ -302,8 +327,9 @@ class Bobbin:
             return None
         if self._view is None:
             self._view = os.path.join(self.work, "view")
-            os.makedirs(self._view)
-            os.symlink(self.real, os.path.join(self._view, self.dirname))
+            vendor = os.path.join(self._view, os.path.basename(self.vendor_dir))
+            os.makedirs(vendor)
+            os.symlink(self.real, os.path.join(vendor, self.dirname))
         return self._view
 
     def test_secrets(self) -> dict[str, str]:
@@ -337,9 +363,9 @@ class Bobbin:
         return {k: ("hermes:kit" if k == BL.ALL_OUTPUTS else f"hermes:kit-{k}") for k in self.pkg.outputs}
 
     def expand(self, instance: dict, *, extra: dict | None = None) -> tuple[dict | None, list[str]]:
-        """``load_config``'s expansion of ``[bobbins.<name>] = instance`` (plus ``extra`` tables)."""
+        """``load_config``'s expansion of ``[bobbins.<inst>] = instance`` with ``bobbin = <name>`` (plus ``extra``)."""
         doc = copy.deepcopy(extra or {})
-        doc.setdefault("bobbins", {})[self.name] = instance
+        doc.setdefault("bobbins", {})[self.inst] = {"bobbin": self.name, **instance}
         return self.expand_doc(doc)
 
     def expand_doc(self, doc: dict) -> tuple[dict | None, list[str]]:
@@ -456,16 +482,40 @@ def _toml_line(text: str, path: str) -> int:
 Result = tuple[str, str, list[Finding]]
 
 
+def _own_row(e: str) -> str:
+    """Which row reports a manifest problem: ``name`` and ``provider`` have their own."""
+    if e.startswith("name:"):
+        return "name"
+    if e.startswith(("provider:", "provider.")):
+        return "provider"
+    return "manifest"
+
+
+def check_name(b: Bobbin) -> Result:
+    """``<vendor>.<product>``, one dot, in ``<vendor>/<product>/``; ``hookspool.`` is the built-ins' own; a bobbin
+    outside the repository never takes a built-in's name."""
+    text = b.read("bobbin.toml")
+    if text is None:
+        return "fail", "bobbin.toml is missing or unreadable", [Finding(b.rel(b.file("bobbin.toml")), 0, "missing")]
+    rel = b.rel(b.file("bobbin.toml"))
+    line = _toml_line(text, "name")
+    found = [Finding(rel, line, e) for e in b.pkg.errors if _own_row(e) == "name"]
+    name = b.pkg.manifest.get("name") if isinstance(b.pkg.manifest, dict) else None
+    if not found and isinstance(name, str) and BL.NAME_RE.match(name):
+        if not b.builtin and os.path.isfile(os.path.join(BL.BUILTIN_DIR, BL.name_path(name), BL.MANIFEST)):
+            found.append(Finding(rel, line, f"name: {name!r} is a built-in bobbin; a bobbin of your own needs its own"
+                                            " name (a deployment never replaces a built-in)"))
+    if found:
+        return "fail", f"{len(found)} problem(s) with the name", found
+    return "pass", f"{name} in {b.rel_dir()}/", []
+
+
 def check_manifest(b: Bobbin) -> Result:
     text = b.read("bobbin.toml")
     if text is None:
         return "fail", "bobbin.toml is missing or unreadable", [Finding(b.rel(b.file("bobbin.toml")), 0, "missing")]
     rel = b.rel(b.file("bobbin.toml"))
-    found = [Finding(rel, _toml_line(text, e.split(":")[0]), e) for e in b.pkg.errors]
-    if not found and b.pkg.name != b.dirname:
-        found.append(Finding(rel, 1, f"name: {b.pkg.name!r} must equal the directory name {b.dirname!r}"))
-    if not b.builtin and os.path.isfile(os.path.join(BL.BUILTIN_DIR, b.pkg.name, BL.MANIFEST)):
-        found.append(Finding(rel, 1, f"name: a built-in bobbin {b.pkg.name!r} exists; a new bobbin needs its own name"))
+    found = [Finding(rel, _toml_line(text, e.split(":")[0]), e) for e in b.pkg.errors if _own_row(e) == "manifest"]
     found += _one_service(b)
     if found:
         return "fail", f"{len(found)} problem(s)", found
@@ -530,7 +580,8 @@ def _identity(pkg_dir: str, name: str, manifest: dict) -> _Identity:
             for v in node:
                 yield from manifest_strings(v, key)
 
-    for value in manifest_strings(manifest):
+    # [provider] holds documentation links (the provider row checks them): they are not calls to those hosts
+    for value in manifest_strings({k: v for k, v in manifest.items() if k != "provider"}):
         line = next((i for i, ln in enumerate(manifest_lines, 1) if value in ln), 0)
         note_host(value, manifest_path, line)
     for base, dirs, files in os.walk(pkg_dir):
@@ -575,16 +626,16 @@ def _identity(pkg_dir: str, name: str, manifest: dict) -> _Identity:
 
 def _other_bobbins(b: Bobbin) -> list[tuple[str, str, dict]]:
     out = []
-    roots = [BL.BUILTIN_DIR] + ([os.path.dirname(b.real)] if not b.builtin else [])
+    roots = [BL.BUILTIN_DIR] + ([os.path.dirname(b.vendor_dir)] if not b.builtin else [])
     seen = {b.real}
     for root in roots:
         try:
-            names = sorted(os.listdir(root))
+            entries = sorted(os.listdir(root))
         except OSError:
             continue
-        for n in names:
-            d = os.path.realpath(os.path.join(root, n))
-            if d in seen or not os.path.isfile(os.path.join(d, BL.MANIFEST)):
+        for n in BL._package_rels(root, entries):
+            d = os.path.realpath(os.path.join(root, *n.split("/")))
+            if d in seen:
                 continue
             seen.add(d)
             try:
@@ -617,6 +668,219 @@ def _one_service(b: Bobbin) -> list[Finding]:
     return found
 
 
+# ---- provider: the manifest's [provider] and the docs' frontmatter -------------------------------------------
+_PLACEHOLDER = re.compile(r"(?i)\bTODO\b|<[^>]*>|\.\.\.|\{[^}]*\}")
+_EXAMPLE_HOST = re.compile(r"(?i)(^|\.)(example\.(com|org|net)|[a-z0-9-]+\.(test|example|invalid|localhost)|"
+                           r"example|test|invalid|localhost)$")
+
+
+def _is_ip(host: str) -> bool:
+    import ipaddress
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    return True
+
+
+def url_problem(url: Any) -> str | None:
+    """Why ``url`` is not a provider developer page: https only, a real public host (no example, test or
+    localhost name, no IP literal), never a placeholder. None when it is fine."""
+    if not isinstance(url, str) or not url.strip():
+        return "must be an https URL"
+    if _PLACEHOLDER.search(url):
+        return f"{url!r} is a placeholder; link the provider's own page"
+    if any(c.isspace() for c in url):
+        return f"{url!r} contains white space"
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(url)
+        host = (u.hostname or "").rstrip(".")
+    except ValueError:
+        return f"{url!r} is not a URL"
+    if u.scheme != "https":
+        return f"{url!r} must be https"
+    if not host or "." not in host:
+        return f"{url!r} has no public host name"
+    if _is_ip(host):
+        return f"{url!r} is an IP address; link the provider's documentation by its host name"
+    if _EXAMPLE_HOST.search(host):
+        return f"{url!r} is an example or local host; link the provider's own page"
+    if u.username or u.password:
+        return f"{url!r} carries credentials"
+    return None
+
+
+def parse_frontmatter(text: str | None) -> tuple[dict[str, str] | None, int, str]:
+    """The ``---`` YAML frontmatter a doc opens with, as ``key: value`` strings (quotes stripped): (keys, the
+    closing line, an error). ``None`` keys when there is no frontmatter or it is malformed."""
+    if text is None:
+        return None, 0, "missing"
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None, 1, "does not open with --- frontmatter"
+    out: dict[str, str] = {}
+    for i, ln in enumerate(lines[1:], 2):
+        if ln.strip() == "---":
+            return out, i, ""
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):(?:\s+(.*?))?\s*$", ln)
+        if not m:
+            return None, i, f"line {i} is not `key: value`"
+        v = m.group(2) or ""
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        if m.group(1) in out:
+            return None, i, f"{m.group(1)} is given twice"
+        out[m.group(1)] = v
+    return None, len(lines), "the frontmatter has no closing ---"
+
+
+def processor_calls_api(b: Bobbin) -> bool:
+    """True when the processor reaches the provider's API: it uses ``ctx.http`` / ``ctx.oauth`` or a
+    ``hookspool.providers`` helper (which is written on them)."""
+    if b.pkg.processor is None:
+        return False
+    try:
+        with open(b.file("processor.py"), encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in ("http", "oauth"):
+            return True
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("hookspool.providers"):
+            return True
+        if isinstance(node, ast.Import) and any(a.name.startswith("hookspool.providers") for a in node.names):
+            return True
+    return False
+
+
+def provider_urls(b: Bobbin) -> list[tuple[str, str]]:
+    """(key, url) for every URL in ``[provider]``, in the manifest's key order."""
+    return [(k, v) for k, v in b.pkg.provider.items() if k in BL.PROVIDER_URL_KEYS and isinstance(v, str) and v]
+
+
+def check_provider(b: Bobbin) -> Result:
+    text = b.read("bobbin.toml")
+    if text is None:
+        return "fail", "bobbin.toml is missing or unreadable", [Finding(b.rel(b.file("bobbin.toml")), 0, "missing")]
+    rel = b.rel(b.file("bobbin.toml"))
+    found = [Finding(rel, _toml_line(text, e.split(":")[0]), e) for e in b.pkg.errors if _own_row(e) == "provider"]
+    raw = b.pkg.manifest.get("provider") if isinstance(b.pkg.manifest, dict) else None
+    if raw is None:
+        return "fail", "no [provider] table", [Finding(rel, 1, "[provider]: required: vendor, product, homepage and"
+                                                               " webhook_docs (the provider's developer page for these"
+                                                               " webhooks)")]
+    prov = b.pkg.provider
+    fronts = {d: parse_frontmatter(b.read(d)) for d in FRONTMATTER_DOCS}
+    # a scaffold's placeholders: one problem, not one per field and per document
+    todo = [k for k, v in prov.items() if isinstance(v, str) and re.search(r"\bTODO\b", v)]
+    todo += [d for d, (fm, _l, _e) in fronts.items() if fm and any(re.search(r"\bTODO\b", v) for v in fm.values())]
+    if todo:
+        return "fail", "the provider is not filled in", found + [Finding(
+            rel, _toml_line(text, "provider"), "fill in [provider] (vendor, product and the provider's developer pages)"
+            " and the same values in the frontmatter of README.md, SETUP.md and AGENTS.md: TODO placeholders in "
+            + ", ".join(todo))]
+    for k in ("vendor", "product"):
+        v = prov.get(k)
+        if not isinstance(v, str) or not v.strip():
+            found.append(Finding(rel, _toml_line(text, f"provider.{k}"), f"provider.{k}: required (the {k}'s name as"
+                                 " it writes it)"))
+        elif _PLACEHOLDER.search(v):
+            found.append(Finding(rel, _toml_line(text, f"provider.{k}"), f"provider.{k}: {v!r} is a placeholder"))
+    need = ["homepage", "webhook_docs"]
+    if b.pkg.secrets:
+        need.append("signature_docs")              # the source verifies a signature or a token with a secret
+    if processor_calls_api(b):
+        need.append("api_docs")
+    why = {"signature_docs": " (the bobbin declares a secret, so the source verifies a signature or token: link the"
+                             " page that describes it)",
+           "api_docs": " (the processor calls the provider's API: link its reference)",
+           "webhook_docs": " (the provider's developer page for the webhooks or push this bobbin receives)"}
+    for k in BL.PROVIDER_URL_KEYS:
+        v = prov.get(k)
+        if v is None or v == "":
+            if k in need:
+                found.append(Finding(rel, _toml_line(text, "provider"), f"provider.{k}: required{why.get(k, '')}"))
+            continue
+        problem = url_problem(v)
+        if problem:
+            found.append(Finding(rel, _toml_line(text, f"provider.{k}"), f"provider.{k}: {problem}"))
+    want = {"bobbin": b.name, "provider": f"{prov.get('vendor', '')} {prov.get('product', '')}".strip(),
+            "webhook_docs": str(prov.get("webhook_docs", ""))}
+    for d, (fm, line, err) in fronts.items():
+        drel = b.rel(b.file(d))
+        if fm is None:
+            if err != "missing":                     # a missing doc is the files row's
+                found.append(Finding(drel, line, f"frontmatter: {err}; open the file with ---, " +
+                                     ", ".join(f"{k}: {want[k]}" for k in FRONTMATTER_KEYS) + ", ---"))
+            continue
+        for k in FRONTMATTER_KEYS:
+            if k not in fm:
+                found.append(Finding(drel, 1, f"frontmatter: {k}: missing (want {want[k]!r})"))
+            elif fm[k] != want[k]:
+                found.append(Finding(drel, 1, f"frontmatter: {k}: {fm[k]!r} does not match bobbin.toml ({want[k]!r})"))
+        extra = sorted(set(fm) - set(FRONTMATTER_KEYS))
+        if extra and d != "AGENTS.md":
+            found.append(Finding(drel, 1, f"frontmatter: unknown key(s) {', '.join(extra)} (only AGENTS.md may add"
+                                          " agents.md keys)"))
+    if found:
+        return "fail", f"{len(found)} problem(s) with the provider", found
+    links = ", ".join(k for k, _v in provider_urls(b))
+    return "pass", f"{want['provider']}: {links}; frontmatter matches in {', '.join(FRONTMATTER_DOCS)}", []
+
+
+# the provider-links row fetches ``LINK_REWRITE(url)`` when it is set: the tests point it at a local stub server
+LINK_REWRITE: Callable[[str], str] | None = None
+
+
+class _Redirects(urllib.request.HTTPRedirectHandler):
+    max_redirections = 10
+
+
+def fetch_status(url: str, timeout: float = LINK_TIMEOUT_S) -> tuple[int | None, str]:
+    """HEAD, then GET when HEAD is refused or fails; redirects followed. (the final status, an error)."""
+    target = LINK_REWRITE(url) if LINK_REWRITE else url
+    opener = urllib.request.build_opener(_Redirects)
+    last = ""
+    for method in ("HEAD", "GET"):
+        req = urllib.request.Request(target, method=method, headers={"User-Agent": "hookspool-bobbin-check",
+                                                                     "Accept": "text/html,*/*"})
+        try:
+            with opener.open(req, timeout=timeout) as r:
+                return r.status, ""
+        except urllib.error.HTTPError as e:
+            if 200 <= e.code < 400:
+                return e.code, ""
+            last = f"HTTP {e.code}"
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            last = e.__class__.__name__ + (f": {getattr(e, 'reason', '')}" if getattr(e, "reason", "") else "")
+    return None, last[:120]
+
+
+def check_provider_links(b: Bobbin) -> Result:
+    if not b.fetch_links:
+        return "skip", "offline (CI fetches the provider pages; --online does it here)", []
+    urls = provider_urls(b)
+    bad = [(k, u) for k, u in urls if url_problem(u)]
+    urls = [(k, u) for k, u in urls if (k, u) not in bad]
+    if not urls:
+        return "skip", "no provider URL to fetch (see provider)", []
+    found = []
+    rel = b.rel(b.file("bobbin.toml"))
+    text = b.read("bobbin.toml") or ""
+    for k, u in urls:
+        status, err = fetch_status(u)
+        if status is None or not 200 <= status < 400:
+            found.append(Finding(rel, _toml_line(text, f"provider.{k}"), f"provider.{k}: {u} answered "
+                                 + (f"HTTP {status}" if status is not None else err or "nothing")))
+    if found:
+        return "fail", f"{len(found)} of {len(urls)} provider page(s) did not answer 2xx/3xx", found
+    return "pass", f"{len(urls)} provider page(s) answer 2xx/3xx", []
+
+
 def check_files(b: Bobbin) -> Result:
     missing = [f for f in REQUIRED_FILES if not os.path.isfile(b.file(f))]
     if not any(c[0].endswith(".http") for c in b.captures()):
@@ -644,8 +908,9 @@ def check_todos(b: Bobbin) -> Result:
 class _BanWalker(ast.NodeVisitor):
     """The 14.3.7 rules on one module."""
 
-    def __init__(self, rel: str):
+    def __init__(self, rel: str, siblings: frozenset[str] = frozenset()):
         self.rel = rel
+        self.siblings = siblings                   # the other products' directories of the same vendor
         self.found: list[Finding] = []
         self.alias: dict[str, str] = {}            # local name -> "os" | "os.path" | "time" | "sys" | "builtins"
         self.imported: set[str] = set()            # every local name an import binds (a module may re-export os)
@@ -660,6 +925,9 @@ class _BanWalker(ast.NodeVisitor):
             self.hit(node, f"imports {mod}: {BANNED_MODULES[top]}")
         if BL.names_a_bobbin(mod):
             self.hit(node, f"imports {mod}: a bobbin never imports another bobbin, or itself by package path")
+        elif top in self.siblings and top not in sys.stdlib_module_names:
+            self.hit(node, f"imports {mod}: {top}/ is another bobbin of the same vendor; a bobbin never imports"
+                           " another (code they share goes to core, e.g. hookspool/providers/)")
 
     def visit_Import(self, node: ast.Import) -> None:
         for a in node.names:
@@ -759,8 +1027,9 @@ def _os_hint(attr: str) -> str:
     return "only os.path is allowed (state is ctx.load_state / ctx.save_state)"
 
 
-def ban_findings(path: str, rel: str) -> list[Finding]:
-    """The 14.3.7 findings for one module (a syntax error is one finding)."""
+def ban_findings(path: str, rel: str, siblings: frozenset[str] = frozenset()) -> list[Finding]:
+    """The 14.3.7 findings for one module (a syntax error is one finding). ``siblings`` are the module names of
+    the other bobbins under the same vendor directory."""
     try:
         with open(path, encoding="utf-8") as f:
             tree = ast.parse(f.read(), path)
@@ -768,14 +1037,51 @@ def ban_findings(path: str, rel: str) -> list[Finding]:
         return [Finding(rel, e.lineno or 0, f"does not parse: {e.msg}")]
     except (OSError, UnicodeDecodeError) as e:
         return [Finding(rel, 0, f"cannot be read ({e.__class__.__name__})")]
-    w = _BanWalker(rel)
+    w = _BanWalker(rel, siblings)
     w.visit(tree)
     return sorted(w.found, key=lambda f: (f.line, f.message))
 
 
+def _siblings(b: Bobbin) -> frozenset[str]:
+    try:
+        names = os.listdir(b.vendor_dir)
+    except OSError:
+        return frozenset()
+    return frozenset(BL.module_part(n) for n in names if n != b.dirname and os.path.isdir(os.path.join(b.vendor_dir, n))
+                     and not n.startswith((".", "_")))
+
+
+def vendor_dir_findings(b: Bobbin) -> list[Finding]:
+    """A vendor directory holds its bobbins and, for a Python package, an empty ``__init__.py``: no code the
+    vendor's bobbins would share (that goes to core, ``hookspool/providers/<vendor>.py``)."""
+    found = []
+    try:
+        names = sorted(os.listdir(b.vendor_dir))
+    except OSError:
+        return []
+    for n in names:
+        p = os.path.join(b.vendor_dir, n)
+        if not os.path.isfile(p) or not n.endswith(".py"):
+            continue
+        if n != "__init__.py":
+            found.append(Finding(b.rel(p), 0, "code in the vendor directory: it holds only the vendor's bobbins (and an"
+                                              " empty __init__.py); shared code goes to core (hookspool/providers/)"))
+            continue
+        try:
+            with open(p, encoding="utf-8") as f:
+                body = f.read()
+        except (OSError, UnicodeDecodeError):
+            body = "?"
+        if body.strip():
+            found.append(Finding(b.rel(p), 1, "the vendor's __init__.py must be empty (no code shared between its"
+                                              " bobbins; that goes to core, hookspool/providers/)"))
+    return found
+
+
 def check_core_only(b: Bobbin) -> Result:
     files = b.py_files()
-    found = [f for p in files for f in ban_findings(p, b.rel(p))]
+    siblings = _siblings(b)
+    found = [f for p in files for f in ban_findings(p, b.rel(p), siblings)] + vendor_dir_findings(b)
     if found:
         return "fail", f"{len(found)} use(s) of something core provides", found
     return "pass", f"{len(files)} module(s) call core only" if files else "no Python modules (template only)", []
@@ -822,7 +1128,8 @@ def check_docs(b: Bobbin) -> Result:
             inst = _instances_of(parsed, b.name)
             others = [i for i, s in (parsed.get("bobbins") or {}).items() if i not in inst]
             if not inst:
-                found.append(Finding(rel, line, f"the config table has no instance of bobbin {b.name!r}"))
+                found.append(Finding(rel, line, f"the config table has no instance of bobbin {b.name!r} (the"
+                                                f' [bobbins.<instance>] table names it: bobbin = "{b.name}")'))
                 continue
             if others:
                 found.append(Finding(rel, line, f"the config table also enables {', '.join(others)}; show only this"
@@ -895,7 +1202,7 @@ def check_captures(b: Bobbin) -> Result:
                 text = f.read()
         except (OSError, UnicodeDecodeError):
             text = ""
-        scan_rel = f"bobbins/{b.name}/captures/{os.path.basename(p)}"
+        scan_rel = f"bobbins/{b.path_rel}/captures/{os.path.basename(p)}"
         for line, kind, ex in S.secret_findings(text, scan_rel):
             found.append(Finding(rel, line, f"{kind}: {ex} (captures hold test secrets only)"))
         for line, kind, ex in S.personal_findings(text):
@@ -941,13 +1248,13 @@ class _KitSource:
 
 
 def _private(b: Bobbin, module: str) -> str:
-    return f"{BL.KIT_MODULE_PREFIX}{b.name.replace('-', '_')}.{module}"
+    return f"{BL.KIT_MODULE_PREFIX}{b.name.replace('-', '_')}.{module}"     # _hookspool_bobbinkit.<vendor>.<product>.<m>
 
 
 def _load_module(b: Bobbin, module: str):
     """A module of the bobbin: by name for a built-in, by file path (private name) otherwise."""
     if b.builtin:
-        return importlib.import_module(f"{BL.BUILTIN_MODULE}.{b.dirname}.{module}")
+        return importlib.import_module(f"{BL.BUILTIN_MODULE}.{os.path.basename(b.vendor_dir)}.{b.dirname}.{module}")
     path = os.path.join(b.real, module + ".py")
     spec = importlib.util.spec_from_file_location(_private(b, module), path)
     if spec is None or spec.loader is None:
@@ -993,13 +1300,13 @@ def _source_kit_base(b: Bobbin) -> tuple[_KitSource | None, str]:
     if cfg is None:
         return None, "the kit instance does not expand: " + "; ".join(errs)[:300] + \
             " (set required settings in captures/kit.toml [settings])"
-    src = copy.deepcopy(cfg["sources"][b.name])
+    src = copy.deepcopy(cfg["sources"][b.inst])
     src.pop("secrets", None)
-    src["action"] = f"hermes:{b.name}"
+    src["action"] = f"hermes:{b.inst}"
     try:
         if "template" in b.pkg.source:
             from ..sources import template as T
-            module = T.bind(b.name, src)
+            module = T.bind(b.inst, src)
             body_signed = src.get("scheme") not in ("shared-secret-header", "url-token")
         else:
             mod = b.pkg.source["module"]
@@ -1015,9 +1322,9 @@ def _source_kit_base(b: Bobbin) -> tuple[_KitSource | None, str]:
 
 
 def _at_path(b: Bobbin, raw: RawRequest) -> RawRequest:
-    """The capture sent to ``/hooks/<name>`` (the kit's instance), keeping its query string."""
+    """The capture sent to ``/hooks/<inst>`` (the kit's instance), keeping its query string."""
     path, q, query = raw.target.partition("?")
-    want = f"/hooks/{b.name}"
+    want = f"/hooks/{b.inst}"
     if path == want:
         return raw
     return RawRequest(raw.method, want + (q + query if q else ""), list(raw.headers), raw.body, dict(raw.meta))
@@ -1032,7 +1339,7 @@ def _unsigned(raw: RawRequest, auth: tuple[str, ...]) -> RawRequest:
 
 def _env(b: Bobbin, ks: _KitSource, sample: RawRequest, signer, work: str, clock: SK.FakeClock,
          handshake=None, unauth=None, timestamped=False) -> tuple[SK.Kit, Callable[[], SK.Env]]:
-    kit = SK.Kit(name=b.name, module=ks.module, secrets=b.test_secrets(), sample=sample, sign=signer,
+    kit = SK.Kit(name=b.inst, module=ks.module, secrets=b.test_secrets(), sample=sample, sign=signer,
                  source_cfg=copy.deepcopy(ks.source_cfg), handshake=handshake, unauth_handshake=unauth,
                  timestamped=timestamped, tolerance_s=float(b.kit.get("tolerance_s", 300.0)),
                  body_signed=ks.body_signed)
@@ -1056,7 +1363,7 @@ def _source_test(b: Bobbin, ks: _KitSource, raw: RawRequest, now: float | None =
     try:
         with block_network(), _stub_http(b):
             from .. import intake as I
-            out = I.source_test(env.cfg, b.name, raw, now=t, loader=env._load)
+            out = I.source_test(env.cfg, b.inst, raw, now=t, loader=env._load)
         return str(out.get("result"))
     except Exception as e:  # noqa: BLE001 - a crash is a result too
         return f"an error ({e.__class__.__name__})"
@@ -1083,7 +1390,7 @@ class _ReplaySigner:
 
 def check_source_kit(b: Bobbin) -> Result:
     if b.pkg.errors:
-        return "skip", "the manifest is invalid (see manifest)", []
+        return "skip", "the manifest is invalid (see name and manifest)", []
     caps = [(p, _at_path(b, raw)) for p, raw, _e in b.captures() if raw is not None]
     accepted = [(p, r) for p, r in caps if r.meta.get("expect") == "queued"]
     if not accepted:
@@ -1171,7 +1478,7 @@ def _stage(b: Bobbin, ks: _KitSource, raw: RawRequest) -> tuple[dict, str, str] 
     _kit, make = _env(b, ks, _unsigned(raw, ks.auth_headers), lambda r, s, a: r, work, clock)
     env = make()
     try:
-        src = load_source(b.name, C.source_cfg(env.cfg, b.name), env._load)
+        src = load_source(b.inst, C.source_cfg(env.cfg, b.inst), env._load)
         req = Request(raw.method, raw.target, raw.headers, raw.body, now=t, config=src.public_config(),
                       remote_addr="capture")
         with _stub_http(b):
@@ -1187,7 +1494,7 @@ def _stage(b: Bobbin, ks: _KitSource, raw: RawRequest) -> tuple[dict, str, str] 
 
 
 def _proc_env(b: Bobbin, cfg: dict, i: int, state_dir: str | None) -> dict:
-    dest = cfg["destinations"][f"script:{b.name}"]
+    dest = cfg["destinations"][f"script:{b.inst}"]
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": b.work, "LANG": "C.UTF-8"}
     env.update({k: v for k, v in (dest.get("env") or {}).items() if isinstance(v, str)})
     env["HOOKSPOOL_BOBBIN_DIR"] = b.real
@@ -1202,7 +1509,7 @@ def _run_processor(b: Bobbin, env: dict, doc: dict, mode: str, via_http: bool, n
     work = tempfile.mkdtemp(dir=b.work)
     spec_path, report_path = os.path.join(work, "spec.json"), os.path.join(work, "report.json")
     with open(spec_path, "w", encoding="utf-8") as f:
-        json.dump({"instance": b.name, "mode": mode, "fault_via_http": via_http, "now": now,
+        json.dump({"instance": b.inst, "mode": mode, "fault_via_http": via_http, "now": now,
                    "http": b.kit.get("http") or [], "report": report_path}, f)
     code = ("import sys; sys.path.insert(0, " + repr(ROOT_PARENT) + "); "
             "from hookspool.testing import _procrun; sys.exit(_procrun.main(sys.argv[1:]))")
@@ -1245,7 +1552,7 @@ def check_processor(b: Bobbin) -> Result:
     if b.pkg.processor is None:
         return "skip", "no processor", []
     if b.pkg.errors:
-        return "skip", "the manifest is invalid (see manifest)", []
+        return "skip", "the manifest is invalid (see name and manifest)", []
     ks, err = _source_kit_base(b)
     if ks is None:
         return "fail", err, [Finding(b.rel(b.file("bobbin.toml")), 0, err)]
@@ -1267,9 +1574,9 @@ def check_processor(b: Bobbin) -> Result:
             continue
         payload, key, et = staged
         now = _capture_now(raw)
-        doc = {"source": b.name, "route": b.name, "key": key, "batch_id": i, "delivery_id": f"hs_kit_{i}",
+        doc = {"source": b.inst, "route": b.inst, "key": key, "batch_id": i, "delivery_id": f"hs_kit_{i}",
                "attempt": 1, "count": 1, "first_at": now, "last_at": now, "event_type": et,
-               "event_types": {et: 1} if et else {}, "summary": f"1 {b.name} event(s) for {key}",
+               "event_types": {et: 1} if et else {}, "summary": f"1 {b.inst} event(s) for {key}",
                "content_hash": "", "events": [payload], "event_meta": [{"event_type": et}]}
         sdir = os.path.join(b.work, f"state-{i}") if state else None
         env = _proc_env(b, cfg, i, sdir)
@@ -1330,13 +1637,18 @@ def _tests_env(b: Bobbin) -> dict:
     return env
 
 
+def test_file(name: str) -> str:
+    """A built-in bobbin's own test file: ``tests/bobbins/test_<vendor>_<product>.py`` (``-`` and ``.`` are ``_``)."""
+    return f"tests/bobbins/test_{re.sub(r'[.-]', '_', name)}.py"
+
+
 def own_tests(b: Bobbin) -> list[str]:
     out = []
     d = b.file("tests")
     if os.path.isdir(d) and any(f.startswith("test_") and f.endswith(".py") for f in os.listdir(d)):
         out.append(d)
     if b.repo_root:
-        f = os.path.join(b.repo_root, "tests", "bobbins", f"test_{b.name.replace('-', '_')}.py")
+        f = os.path.join(b.repo_root, *test_file(b.name).split("/"))
         if os.path.isfile(f) and b.builtin:
             out.append(f)
     return out
@@ -1345,7 +1657,7 @@ def own_tests(b: Bobbin) -> list[str]:
 def check_tests(b: Bobbin) -> Result:
     paths = own_tests(b)
     if not paths:
-        where = f"{b.rel(b.file('tests'))}/" + (f" or tests/bobbins/test_{b.name.replace('-', '_')}.py" if b.builtin else "")
+        where = f"{b.rel(b.file('tests'))}/" + (f" or {test_file(b.name)}" if b.builtin else "")
         return "skip", f"no tests of its own ({where})", []
     cwd = b.repo_root or b.dir
     args = ["-q", "-p", "no:cacheprovider", "--no-header", "-p", "hookspool.testing.netblock", *paths]
@@ -1387,12 +1699,14 @@ def changed_files(root: str, base: str) -> list[str]:
     return sorted(names)
 
 
-def outside_bobbin(files: list[str], mine: str, own_test: str) -> list[str]:
+def outside_bobbin(files: list[str], mine: str, own_test: str, vendor_init: str | None = None) -> list[str]:
     """The changed files that make a change ``touches-core``: everything not under the bobbin's directory ``mine``
-    (``hookspool/bobbins/<name>/``) and not its own test file. README.md and CHANGELOG.md count too: the catalogue
-    is generated (``hookspool bobbin list --markdown``) and the changelog line is the maintainer's, so a bobbin's pull
-    request needs neither. ``.github/scripts/bobbin_label.py`` applies the same rule to GitHub's file list."""
-    return [f for f in files if not f.startswith(mine) and f != own_test]
+    (``hookspool/bobbins/<vendor>/<product>/``), not its own test file and not its vendor's ``__init__.py`` (empty:
+    the ``core-only`` row checks that), which a new vendor's first bobbin adds. README.md and CHANGELOG.md count
+    too: the catalogue is generated (``hookspool bobbin list --markdown``) and the changelog line is the
+    maintainer's, so a bobbin's pull request needs neither. ``.github/scripts/bobbin_label.py`` applies the same
+    rule to GitHub's file list."""
+    return [f for f in files if not f.startswith(mine) and f != own_test and f != vendor_init]
 
 
 def check_scope(b: Bobbin) -> Result:
@@ -1405,8 +1719,10 @@ def check_scope(b: Bobbin) -> Result:
     except RuntimeError as e:
         return "skip", f"git: {e}", []
     mine = os.path.relpath(b.real, os.path.realpath(b.repo_root)).replace(os.sep, "/") + "/"
-    own_test = f"tests/bobbins/test_{b.name.replace('-', '_')}.py"
-    outside = outside_bobbin(files, mine, own_test)
+    own_test = test_file(b.name)
+    vendor_init = os.path.relpath(os.path.join(b.vendor_dir, "__init__.py"),
+                                  os.path.realpath(b.repo_root)).replace(os.sep, "/")
+    outside = outside_bobbin(files, mine, own_test, vendor_init)
     if outside:
         return "fail", f"touches core: {len(outside)} file(s) outside {mine}", [Finding(f, 0, "changed outside the"
                                                                                        " bobbin") for f in outside[:50]]
@@ -1414,8 +1730,15 @@ def check_scope(b: Bobbin) -> Result:
 
 
 CHECKS: list[tuple[str, bool, str, Callable[[Bobbin], Result]]] = [
+    ("name", True, "name the bobbin <vendor>.<product> (the company that runs the service, then the product or API"
+                   " whose webhooks it receives) and put it in <vendor>/<product>/ (14.3.1); hookspool. is reserved"
+                   " for the bobbins shipped with hookspool", check_name),
     ("manifest", True, "fix bobbin.toml as listed (14.3.2); one bobbin covers one service, and code two bobbins share"
                        " moves to core", check_manifest),
+    ("provider", True, "give bobbin.toml a [provider] table (vendor, product, homepage, webhook_docs, signature_docs"
+                       " when a secret is declared, api_docs when the processor calls the API; https pages of the"
+                       " provider itself) and open README.md, SETUP.md and AGENTS.md with the same frontmatter"
+                       " (docs/bobbins/writing-a-bobbin.md, Provider and frontmatter)", check_provider),
     ("files", True, "add bobbin.toml, README.md, SETUP.md, AGENTS.md and captures/*.http (14.3.1)", check_files),
     ("todos", True, "fill in the TODOs", check_todos),
     ("core-only", True, "call core instead (14.3.7): hookspool.verify, ctx.http, ctx.load_state / ctx.save_state,"
@@ -1432,6 +1755,8 @@ CHECKS: list[tuple[str, bool, str, Callable[[Bobbin], Result]]] = [
     ("processor", True, "return items of declared outputs only, go through ctx (no network, no stdout) and let"
                         " failures raise; stub API answers go in captures/kit.toml [[http]]", check_processor),
     ("tests", True, "make the bobbin's own tests pass without the network (a local stub server is fine)", check_tests),
+    ("provider-links", False, "fix or replace the provider URLs that do not answer (a moved page: link where it moved"
+                              " to)", check_provider_links),
     ("scope", False, "a change outside the bobbin directory is reviewed as a core change; split it into its own PR"
                      " when it can stand alone", check_scope),
 ]
@@ -1439,11 +1764,12 @@ CHECK_NAMES = [c[0] for c in CHECKS]
 
 
 def check_bobbin(path: str, *, base: str | None = None, strict: bool = False, repo_root: str | None = None,
-                 only: list[str] | None = None) -> Scorecard:
-    """Every check on the bobbin at ``path`` (``only`` limits it to the named checks)."""
+                 only: list[str] | None = None, online: bool = False) -> Scorecard:
+    """Every check on the bobbin at ``path`` (``only`` limits it to the named checks; ``online`` lets the advisory
+    ``provider-links`` row fetch the provider's pages)."""
     if not __debug__:
         raise RuntimeError("the bobbin kit needs assertions: run it without -O")
-    b = Bobbin(path, base=base, repo_root=repo_root)
+    b = Bobbin(path, base=base, repo_root=repo_root, online=online)
     try:
         with _quiet():
             return _run_checks(b, only, strict)
@@ -1464,7 +1790,8 @@ def _run_checks(b: Bobbin, only: list[str] | None, strict: bool) -> Scorecard:
     return Scorecard(b.name, b.rel(b.dir) if b.repo_root else b.dir, checks, strict)
 
 
-def main(path: str, *, report: str = "text", strict: bool = False, base: str | None = None, out=None) -> int:
+def main(path: str, *, report: str = "text", strict: bool = False, base: str | None = None, out=None,
+         online: bool = False) -> int:
     """``hookspool bobbin check <dir>``: print the scorecard; 0 when every required check passes."""
     out = out or sys.stdout
     if not os.path.isdir(path) or not os.path.isfile(os.path.join(path, BL.MANIFEST)):
@@ -1472,7 +1799,7 @@ def main(path: str, *, report: str = "text", strict: bool = False, base: str | N
         return 2
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):            # nothing a bobbin prints may corrupt the report
-        card = check_bobbin(path, base=base, strict=strict)
+        card = check_bobbin(path, base=base, strict=strict, online=online)
     doc = card.as_dict()
     if report == "json":
         out.write(json.dumps(doc, indent=1, sort_keys=True) + "\n")

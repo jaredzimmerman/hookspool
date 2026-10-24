@@ -14,9 +14,10 @@ treats the artifact as untrusted data:
 * the label is computed here, from GitHub's own list of the pull request's files
   (``GET /repos/{repo}/pulls/{pr}/files``, every page), never from the artifact: the scorecards were made by
   the pull request's code, which could say anything about its own scope. The rule is the kit's ``scope``
-  check: ``bobbin-only`` when every file is inside one ``hookspool/bobbins/<name>/`` or is that bobbin's
-  ``tests/bobbins/test_<name>.py``, else ``touches-core``. The scorecards' scope is only a cross-check: when
-  it disagrees, the label is ``touches-core`` and the comment says why;
+  check: ``bobbin-only`` when every file is inside one ``hookspool/bobbins/<vendor>/<product>/``, is that bobbin's
+  ``tests/bobbins/test_<vendor>_<product>.py`` or is its vendor's ``hookspool/bobbins/<vendor>/__init__.py`` (which a
+  new vendor's first bobbin adds; the kit checks it is empty), else ``touches-core``. The scorecards' scope is only a
+  cross-check: when it disagrees, the label is ``touches-core`` and the comment says why;
 * the labels are only ``bobbin-only`` and ``touches-core``, one replacing the other;
 * one comment, found by its hidden marker, is created or updated, never a second one.
 
@@ -39,7 +40,7 @@ from typing import Any, Callable
 SCHEMA = "hookspool.bobbin-check/1"
 MARKER = "<!-- hookspool-bobbin-scorecard -->"
 LABELS = ("bobbin-only", "touches-core")
-NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
+NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}\.[a-z][a-z0-9-]{0,39}$")     # <vendor>.<product>
 CHECK_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 RESULTS = ("pass", "fail", "skip")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -49,8 +50,10 @@ MAX_BOBBINS = 20
 MAX_CHECKS = 20
 FILES_PER_PAGE = 100
 MAX_FILE_PAGES = 30                           # GitHub lists at most 3000 files of a pull request
-BOBBIN_FILE_RE = re.compile(r"^hookspool/bobbins/([a-z][a-z0-9-]{0,39})/.")
-BOBBIN_TEST_RE = re.compile(r"^tests/bobbins/test_([a-z][a-z0-9_]{0,39})\.py$")
+PART = r"[a-z][a-z0-9_-]{0,39}"                 # a name part as a directory (``-`` may be written ``_``)
+BOBBIN_FILE_RE = re.compile(rf"^hookspool/bobbins/({PART})/({PART})/.")
+VENDOR_INIT_RE = re.compile(rf"^hookspool/bobbins/({PART})/__init__\.py$")
+BOBBIN_TEST_RE = re.compile(r"^tests/bobbins/test_([a-z][a-z0-9_]{0,80})\.py$")
 
 Api = Callable[[str, str, Any], Any]          # (method, path, json body or None) -> parsed JSON
 
@@ -126,20 +129,39 @@ def decide_label(cards: list[dict]) -> str | None:
     return "touches-core" if "touches-core" in scopes else "bobbin-only"
 
 
+def _key(*parts: str) -> str:
+    return "_".join(parts).replace("-", "_")
+
+
 def scope_of_files(files: list[str] | None) -> str:
-    """``bobbin-only`` when every path is inside one built-in bobbin directory, ``hookspool/bobbins/<name>/``, or is
-    that bobbin's own test file, ``tests/bobbins/test_<name>.py`` (``-`` in the name is ``_`` there); anything else,
-    an empty list or a list GitHub cut short (``None``) is ``touches-core``. The same rule as the kit's ``scope``
-    check, applied to GitHub's list instead of the checkout's."""
+    """``bobbin-only`` when every path is inside one built-in bobbin directory, ``hookspool/bobbins/<vendor>/<product>/``,
+    is that bobbin's own test file, ``tests/bobbins/test_<vendor>_<product>.py`` (``-`` is ``_`` there), or is that
+    vendor's ``hookspool/bobbins/<vendor>/__init__.py``; anything else, an empty list or a list GitHub cut short
+    (``None``) is ``touches-core``. The same rule as the kit's ``scope`` check, applied to GitHub's list instead of
+    the checkout's."""
     if not files:
         return "touches-core"
-    names = set()
+    names, vendors = set(), set()
     for f in files:
-        m = BOBBIN_FILE_RE.match(f) or BOBBIN_TEST_RE.match(f)
-        if not m:
-            return "touches-core"
-        names.add(m.group(1).replace("-", "_"))
-    return "bobbin-only" if len(names) == 1 else "touches-core"
+        m = BOBBIN_FILE_RE.match(f)
+        if m:
+            names.add(_key(m.group(1), m.group(2)))
+            vendors.add(_key(m.group(1)))
+            continue
+        m = BOBBIN_TEST_RE.match(f)
+        if m:
+            names.add(m.group(1))
+            continue
+        m = VENDOR_INIT_RE.match(f)
+        if m and m.group(1) != "__pycache__":
+            vendors.add(_key(m.group(1)))
+            continue
+        return "touches-core"
+    if len(names) != 1:
+        return "touches-core"
+    name = next(iter(names))
+    # the vendor init belongs to the bobbin only when the bobbin is that vendor's
+    return "bobbin-only" if all(name.startswith(v + "_") for v in vendors) else "touches-core"
 
 
 def pr_files(api: Api, repo: str, pr: int) -> list[str] | None:
@@ -193,7 +215,7 @@ def comment_body(cards: list[dict], label: str | None, missing: list[str] = (), 
             detail = k["detail"] + (f". How to fix: {k['fix']}" if k["result"] == "fail" and k["fix"] else "")
             lines.append(f"| {k['name']}{'' if k['required'] else ' (advisory)'} | {res} | {detail} |")
         lines.append("")
-    lines.append("A green scorecard, `bobbin-only`, and the three boxes in the pull request ticked is the expected"
+    lines.append("A green scorecard, `bobbin-only`, and the two boxes in the pull request ticked is the expected"
                  " merge (docs/bobbins/review.md).")
     return "\n".join(lines) + "\n"
 

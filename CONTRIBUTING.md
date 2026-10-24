@@ -5,11 +5,12 @@ hookspool is built so that this is small, safe to review and mechanical to test.
 
 ## Adding or changing a bobbin
 
-A bobbin lives in `hookspool/bobbins/<name>/` and is checked by one command, which CI runs too:
+A bobbin is named `<vendor>.<product>` (`google.gmail`, `atlassian.trello`), lives in `hookspool/bobbins/<vendor>/<product>/`
+and is checked by one command, which CI runs too:
 
 ```sh
-hookspool bobbin new <name> --set scheme=hmac-sha256-hex --set header=X-Signature --set key=id   # a scaffold
-hookspool bobbin check hookspool/bobbins/<name> --base origin/main                                # the scorecard
+hookspool bobbin new <vendor>.<product> --dir hookspool/bobbins --set scheme=hmac-sha256-hex --set header=X-Signature --set key=id
+hookspool bobbin check hookspool/bobbins/<vendor>/<product> --base origin/main     # the scorecard
 ```
 
 * [Writing a bobbin](docs/bobbins/writing-a-bobbin.md) covers the layout, the config-template route (no Python, preferred)
@@ -68,7 +69,7 @@ secrets only, no network. It must stay that way. A test that sleeps for real tim
 
 ```sh
 python -m pytest -q tests/test_docs.py        # docs against the code
-hookspool source test <instance> --request hookspool/bobbins/<name>/captures/event.http
+hookspool source test <instance> --request hookspool/bobbins/<vendor>/<product>/captures/event.http
 ```
 
 ## Pull requests

@@ -12,12 +12,13 @@ import pytest
 
 from hookspool import bobbin_loader as PK
 from hookspool import config as C
-from hookspool.bobbins.gcal import processor as gcal_proc
-from hookspool.bobbins.gmail import processor as gmail_proc
+from hookspool.bobbins.google.calendar import processor as gcal_proc
+from hookspool.bobbins.google.gmail import processor as gmail_proc
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BOBBINS = os.path.join(ROOT, "hookspool", "bobbins")
-NAMES = ["gmail", "gcal"]
+NAMES = ["google.gmail", "google.calendar"]
+INSTANCE = {"google.gmail": "gmail", "google.calendar": "calendar"}     # the docs' instance names
 DOCS = ["README.md", "SETUP.md", "AGENTS.md"]
 
 
@@ -32,22 +33,22 @@ def test_the_manifest_is_valid_and_complete(name):
     pkg = package(name)
     assert pkg.errors == [] and pkg.builtin and pkg.processor is not None and pkg.processor.get("state") is True
     for f in [*DOCS, "bobbin.toml", "source.py", "processor.py", "__init__.py"]:
-        assert os.path.isfile(os.path.join(BOBBINS, name, f)), f
-    assert [f for f in os.listdir(os.path.join(BOBBINS, name, "captures")) if f.endswith(".http")]
+        assert os.path.isfile(os.path.join(BOBBINS, *name.split("."), f)), f
+    assert [f for f in os.listdir(os.path.join(BOBBINS, *name.split("."), "captures")) if f.endswith(".http")]
 
 
 def test_the_outputs_the_code_can_produce_are_the_declared_outputs():
-    assert set(gmail_proc.OUTPUTS) == set(package("gmail").outputs)
-    assert set(gcal_proc.OUTPUTS) == set(package("gcal").outputs)
+    assert set(gmail_proc.OUTPUTS) == set(package("google.gmail").outputs)
+    assert set(gcal_proc.OUTPUTS) == set(package("google.calendar").outputs)
 
 
 def test_the_credentials_are_processor_secrets_and_the_agents_is_optional():
-    g, c = package("gmail").secrets, package("gcal").secrets
+    g, c = package("google.gmail").secrets, package("google.calendar").secrets
     assert "processor" not in g["push_token"] and g["cred_owner"]["processor"] is True
     assert g["cred_agent"]["processor"] is True and g["cred_agent"]["required"] is False
     assert c["cred"]["processor"] is True and "processor" not in c["channel_token"]
-    assert package("gmail").settings["hooks"]["type"] == "path" and package("gcal").settings["hooks"]["type"] == "path"
-    assert package("gmail").settings["owner"]["required"] is True
+    assert package("google.gmail").settings["hooks"]["type"] == "path" and package("google.calendar").settings["hooks"]["type"] == "path"
+    assert package("google.gmail").settings["owner"]["required"] is True
 
 
 def secret_files(tmp_path, *names):
@@ -70,7 +71,7 @@ def test_a_gmail_instance_expands_to_a_source_and_a_processor_destination(tmp_pa
     s = secret_files(tmp_path, "tok", "own", "ast")
     cfg = load(tmp_path, f'''
 [bobbins.mail]
-bobbin = "gmail"
+bobbin = "google.gmail"
 secrets.push_token = {{ file = "{s['tok']}" }}
 secrets.cred_owner = {{ file = "{s['own']}" }}
 secrets.cred_agent = {{ file = "{s['ast']}" }}
@@ -81,9 +82,9 @@ expect = true
 subscriptions_path = "{tmp_path / 'subs.json'}"
 ''')
     src, dst = cfg["sources"]["mail"], cfg["destinations"]["script:mail"]
-    assert src["module"] == "hookspool.bobbins.gmail.source" and src["action"] == "script:mail"
+    assert src["module"] == "hookspool.bobbins.google.gmail.source" and src["action"] == "script:mail"
     assert src["span"] == "mail" and src["expect_every_s"] == 345600
-    assert dst["processor"] == "mail" and dst["max_inflight"] == 1 and dst["state_dir"].endswith("services/mail")
+    assert dst["processor"] == "mail" and dst["max_inflight"] == 1 and dst["state_dir"].endswith("bobbins/mail")
     env = dst["env"]
     assert json.loads(env["HOOKSPOOL_SECRET_REFS"]) == {"cred_owner": {"file": s["own"]}, "cred_agent": {"file": s["ast"]}}
     settings = json.loads(env["HOOKSPOOL_SETTINGS"])
@@ -97,6 +98,7 @@ def test_a_gmail_instance_without_an_assistant_needs_no_assistant_credential(tmp
     s = secret_files(tmp_path, "tok", "own")
     cfg = load(tmp_path, f'''
 [bobbins.gmail]
+bobbin = "google.gmail"
 secrets.push_token = {{ file = "{s['tok']}" }}
 secrets.cred_owner = {{ file = "{s['own']}" }}
 settings = {{ owner = "owner@example.test" }}
@@ -109,6 +111,7 @@ def test_a_gcal_instance_expands_and_check_accepts_a_script_destination_for_chan
     s = secret_files(tmp_path, "tok", "cred")
     cfg = load(tmp_path, f'''
 [bobbins.gcal]
+bobbin = "google.calendar"
 secrets.channel_token = {{ file = "{s['tok']}" }}
 secrets.cred = {{ file = "{s['cred']}" }}
 settings = {{ tz = "America/New_York", own = ["a@example.test"] }}
@@ -126,6 +129,7 @@ def test_a_missing_required_secret_or_setting_is_refused(tmp_path):
     s = secret_files(tmp_path, "tok", "own")
     body = f'''
 [bobbins.gmail]
+bobbin = "google.gmail"
 secrets.push_token = {{ file = "{s['tok']}" }}
 settings = {{ owner = "owner@example.test" }}
 outputs = {{ scheduling = "hermes:a" }}
@@ -143,6 +147,7 @@ def test_check_refuses_an_env_reference_for_a_credential(tmp_path):
     s = secret_files(tmp_path, "tok")
     cfg = load(tmp_path, f'''
 [bobbins.gmail]
+bobbin = "google.gmail"
 secrets.push_token = {{ file = "{s['tok']}" }}
 secrets.cred_owner = {{ env = "GOOGLE_CRED" }}
 settings = {{ owner = "owner@example.test" }}
@@ -154,7 +159,7 @@ outputs = {{ scheduling = "hermes:a" }}
 
 # ---- the documents (14.3.8) -------------------------------------------------------------------------------------
 def read(name, doc):
-    with open(os.path.join(BOBBINS, name, doc), encoding="utf-8") as f:
+    with open(os.path.join(BOBBINS, *name.split("."), doc), encoding="utf-8") as f:
         return f.read()
 
 
@@ -187,12 +192,12 @@ PLACEHOLDERS = {"SECRETS_DIR", "CRED_OWNER_FILE", "CRED_AGENT_FILE", "CRED_FILE"
 @pytest.mark.parametrize("doc", ["SETUP.md", "AGENTS.md"])
 def test_the_configuration_shown_in_the_document_expands(name, doc, tmp_path):
     text = read(name, doc)
-    blocks = [b for b in re.findall(r"```toml\n(.*?)```", text, re.S) if f"[bobbins.{name}]" in b]
+    blocks = [b for b in re.findall(r"```toml\n(.*?)```", text, re.S) if f"[bobbins.{INSTANCE[name]}]" in b]
     assert len(blocks) == 1
     block = blocks[0]
     secrets_dir = tmp_path / "secrets"
     secrets_dir.mkdir()
-    for fn in ("gmail_push_token", "gcal_channel_token", "owner.json", "assistant.json"):
+    for fn in ("gmail_push_token", "calendar_channel_token", "owner.json", "assistant.json"):
         p = secrets_dir / fn
         p.write_text("x")
         os.chmod(p, 0o600)
@@ -203,8 +208,8 @@ def test_the_configuration_shown_in_the_document_expands(name, doc, tmp_path):
     for k, v in subs.items():
         block = block.replace(f"<{k}>", v)
     block = block.replace("/etc/hookspool/secrets", str(secrets_dir)).replace("/etc/hookspool/google", str(secrets_dir))
-    block = block.replace("/var/lib/briefs", str(tmp_path / "briefs")).replace("/etc/hookspool/gcal_hooks.py", "")
+    block = block.replace("/var/lib/briefs", str(tmp_path / "briefs")).replace("/etc/hookspool/calendar_hooks.py", "")
     assert not re.search(r"<[A-Z_]+>", block), block
     extra = '\n[destinations."script:calendar-refresh"]\nargv = ["/bin/true"]\n' if "calendar-refresh" in block else ""
     cfg = load(tmp_path, block + extra + f'\n[hermes]\nsubscriptions_path = "{tmp_path / "subs.json"}"\n')
-    assert name in cfg["sources"] and f"script:{name}" in cfg["destinations"]
+    assert INSTANCE[name] in cfg["sources"] and f"script:{INSTANCE[name]}" in cfg["destinations"]

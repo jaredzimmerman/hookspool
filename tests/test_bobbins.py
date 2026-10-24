@@ -76,7 +76,7 @@ description = "all"
 """
 
 
-def manifest_errors(m: str, dirname: str = "pkg") -> list[str]:
+def manifest_errors(m: str, dirname: str = "acme/pkg") -> list[str]:
     return PK.validate_manifest(tomllib.loads(m), dirname, C.DEFAULTS["spans"])
 
 
@@ -111,7 +111,7 @@ def digest_body(secrets, extra: str = "", **over) -> str:
     owner = over.get("owner", '"someone@example.com"')
     return f"""
 [bobbins.mail]
-bobbin = "digest"
+bobbin = "acme.digest"
 secrets.token = {{ file = "{secrets['tok']}" }}
 secrets.cred = {{ file = "{secrets['cred']}" }}
 settings = {{ owner = {owner} }}
@@ -124,6 +124,7 @@ expect = true
 def relay_body(secrets, extra: str = "") -> str:
     return f"""
 [bobbins.relay]
+bobbin = "acme.relay"
 secrets.secret = {{ file = "{secrets['sig']}" }}
 outputs = {{ "*" = "script:sink" }}
 {extra}
@@ -134,9 +135,9 @@ argv = ["/bin/true"]
 
 # ---- manifests (14.3.2) ----------------------------------------------------------------------------------
 def test_a_valid_manifest_has_no_errors():
-    assert manifest_errors(MINIMAL.format(name="pkg")) == []
-    with open(os.path.join(FIXTURES, "digest", "bobbin.toml"), "rb") as f:
-        assert PK.validate_manifest(tomllib.load(f), "digest", C.DEFAULTS["spans"]) == []
+    assert manifest_errors(MINIMAL.format(name="acme.pkg")) == []
+    with open(os.path.join(FIXTURES, "acme", "digest", "bobbin.toml"), "rb") as f:
+        assert PK.validate_manifest(tomllib.load(f), "acme/digest", C.DEFAULTS["spans"]) == []
 
 
 @pytest.mark.parametrize("edit,expect", [
@@ -170,31 +171,70 @@ def test_a_valid_manifest_has_no_errors():
      'several outputs and no processor must declare "*"'),
 ])
 def test_every_manifest_error_rule(edit, expect):
-    errs = manifest_errors(edit(MINIMAL.format(name="pkg")))
+    errs = manifest_errors(edit(MINIMAL.format(name="acme.pkg")))
     assert has(errs, expect), errs
 
 
 def test_manifest_name_must_match_its_directory_and_the_name_pattern():
-    assert has(manifest_errors(MINIMAL.format(name="pkg"), "other"), "does not match its directory")
-    assert has(manifest_errors(MINIMAL.format(name="Pkg"), "Pkg"), "must match")
-    assert has(manifest_errors(MINIMAL.format(name="a_b"), "a_b"), "must match")
-    # a name with '-' may live in a directory with '_' (its module name)
-    assert manifest_errors(MINIMAL.format(name="a-b"), "a_b") == []
+    assert has(manifest_errors(MINIMAL.format(name="acme.pkg"), "acme/other"), "must live in acme/pkg/")
+    assert has(manifest_errors(MINIMAL.format(name="acme.pkg"), "other/pkg"), "must live in acme/pkg/")
+    assert has(manifest_errors(MINIMAL.format(name="acme.Pkg"), "acme/Pkg"), "must be <vendor>.<product>")
+    assert has(manifest_errors(MINIMAL.format(name="acme.a_b"), "acme/a_b"), "must be <vendor>.<product>")
+    # a name with '-' may live in directories with '_' (their module names)
+    assert manifest_errors(MINIMAL.format(name="acme.a-b"), "acme/a_b") == []
+    assert manifest_errors(MINIMAL.format(name="my-co.a-b"), "my_co/a-b") == []
+
+
+@pytest.mark.parametrize("name,want", [
+    ("pkg", "has no vendor"), ("acme.pkg.extra", "has 2 dots"), (".pkg", "must be <vendor>.<product>"),
+    ("acme.", "must be <vendor>.<product>"), ("Acme.pkg", "must be <vendor>.<product>"),
+    ("a" * 41 + ".pkg", "must be <vendor>.<product>"), ("acme.9pkg", "must be <vendor>.<product>"),
+])
+def test_a_name_is_vendor_dot_product(name, want):
+    assert has(manifest_errors(MINIMAL.format(name=name), "acme/pkg"), "name:", want)
+    assert PK.name_problem(name) is not None and PK.name_problem("acme.pkg") is None
+
+
+def test_a_flat_bobbin_directory_is_reported_by_its_name(tmp_path, no_builtins):
+    root = tmp_path / "r"
+    make_pkg(root, "flat", MINIMAL.format(name="flat"))
+    pkgs, errs = PK.discover({"spool": {"bobbin_path": [str(root)]}})
+    assert has(errs, "bobbin flat", "has no vendor")
+
+
+def test_the_hookspool_namespace_is_for_built_ins_only(tmp_path, no_builtins):
+    root = tmp_path / "r"
+    make_pkg(root, "hookspool/thing", MINIMAL.format(name="hookspool.thing"))
+    _, errs = PK.discover({"spool": {"bobbin_path": [str(root)]}})
+    assert has(errs, "hookspool. namespace is reserved")
+    make_pkg(no_builtins, "hookspool/thing", MINIMAL.format(name="hookspool.thing"))
+    pkgs, errs = PK.discover({})
+    assert errs == [] and pkgs["hookspool.thing"].builtin
+
+
+def test_an_instance_names_its_bobbin(tmp_path, pkgroot, no_builtins, secrets):
+    body = relay_body(secrets).replace('bobbin = "acme.relay"\n', "")
+    assert has(expand_errors(tmp_path, pkgroot, body), "bobbins.relay.bobbin: required", 'did you mean bobbin = "acme.relay"')
+    nested = f'[bobbins.acme.relay]\nsecrets.secret = {{ file = "{secrets["sig"]}" }}\n'
+    assert has(expand_errors(tmp_path, pkgroot, nested), "is not an instance", "write [bobbins.relay]",
+               'bobbin = "acme.relay"')
+    body = relay_body(secrets).replace('bobbin = "acme.relay"', 'bobbin = "relay"')
+    assert has(expand_errors(tmp_path, pkgroot, body), "unknown bobbin 'relay'", "has no vendor")
 
 
 def test_a_required_setting_needs_no_default_and_a_missing_local_module_is_an_error(tmp_path):
-    m = MINIMAL.format(name="pkg").replace('template = { scheme = "url-token", key = "id" }', 'module = "source"')
+    m = MINIMAL.format(name="acme.pkg").replace('template = { scheme = "url-token", key = "id" }', 'module = "source"')
     m += '\n[settings.who]\ntype = "string"\nrequired = true\n'
     assert manifest_errors(m) == []
     root = tmp_path / "r"
-    make_pkg(root, "pkg", m)
-    pkg = PK.load_package(str(root / "pkg"), str(root), C.DEFAULTS["spans"])
+    make_pkg(root, "acme/pkg", m)
+    pkg = PK.load_package(str(root / "acme" / "pkg"), str(root), C.DEFAULTS["spans"])
     assert has(pkg.errors, "source.py is not in the bobbin")
 
 
 def test_a_template_bobbin_refuses_a_setting_it_would_drop():
     # no processor: a setting must map to a template key, or it would be dropped at expansion
-    m = MINIMAL.format(name="pkg") + '\n[settings.who]\ntype = "string"\nrequired = true\n'
+    m = MINIMAL.format(name="acme.pkg") + '\n[settings.who]\ntype = "string"\nrequired = true\n'
     assert has(manifest_errors(m), "settings.who", "maps to no template key", "the value would be dropped")
     # a processor reads its settings, so the same declaration is fine there
     m_proc = m + '\n[processor]\nmodule = "processor"\n'
@@ -202,7 +242,7 @@ def test_a_template_bobbin_refuses_a_setting_it_would_drop():
 
 
 def test_a_setting_that_maps_to_a_template_key_has_that_keys_type_and_is_not_set_twice(tmp_path):
-    base = MINIMAL.format(name="pkg")
+    base = MINIMAL.format(name="acme.pkg")
     m = base + '\n[settings.callback_url]\ntype = "int"\nrequired = true\n'
     assert has(manifest_errors(m), "settings.callback_url.type", "must be 'string'")
     m = base.replace('key = "id" }', 'key = "id", callback_url = "https://x.example.test/a" }')
@@ -214,40 +254,40 @@ def test_a_setting_that_maps_to_a_template_key_has_that_keys_type_and_is_not_set
 
 # ---- discovery: names, shadowing, '-'/'_' ----------------------------------------------------------------
 def test_discovery_finds_builtins_then_path_packages(pkgroot, no_builtins):
-    make_pkg(no_builtins, "core", MINIMAL.format(name="core"))
+    make_pkg(no_builtins, "acme/core", MINIMAL.format(name="acme.core"))
     pkgs, errs = PK.discover({"spool": {"bobbin_path": [str(pkgroot)]}})
     assert errs == []
-    assert list(pkgs) == ["core", "digest", "fanout", "relay"]
-    assert pkgs["core"].origin == PK.BUILTIN and pkgs["relay"].origin == str(pkgroot)
+    assert list(pkgs) == ["acme.core", "acme.digest", "acme.fanout", "acme.relay"]
+    assert pkgs["acme.core"].origin == PK.BUILTIN and pkgs["acme.relay"].origin == str(pkgroot)
 
 
 def test_a_path_package_may_not_shadow_a_builtin(pkgroot, no_builtins, tmp_path, secrets):
-    make_pkg(no_builtins, "relay", MINIMAL.format(name="relay"))
+    make_pkg(no_builtins, "acme/relay", MINIMAL.format(name="acme.relay"))
     pkgs, errs = PK.discover({"spool": {"bobbin_path": [str(pkgroot)]}})
-    assert has(errs, "shadows the built-in bobbin 'relay'")
-    assert pkgs["relay"].origin == PK.BUILTIN
+    assert has(errs, "shadows the built-in bobbin 'acme.relay'")
+    assert pkgs["acme.relay"].origin == PK.BUILTIN
     assert has(expand_errors(tmp_path, pkgroot, relay_body(secrets)), "shadows the built-in")
 
 
 def test_names_that_differ_only_by_dash_and_underscore_are_refused(tmp_path, no_builtins):
     root = tmp_path / "r"
-    make_pkg(root, "a-b", MINIMAL.format(name="a-b"))
-    make_pkg(root, "a_b", MINIMAL.format(name="a-b"))
+    make_pkg(root, "acme/a-b", MINIMAL.format(name="acme.a-b"))
+    make_pkg(root, "acme/a_b", MINIMAL.format(name="acme.a-b"))
     _, errs = PK.discover({"spool": {"bobbin_path": [str(root)]}})
     assert has(errs, "differ only by '-'/'_'")
     root2 = tmp_path / "r2"
-    make_pkg(root2, "x-y", MINIMAL.format(name="x-y"))
-    make_pkg(root2, "x_y", MINIMAL.format(name="x_y"))       # an invalid name, and the same module name
+    make_pkg(root2, "acme/x-y", MINIMAL.format(name="acme.x-y"))
+    make_pkg(root2, "acme/x_y", MINIMAL.format(name="acme.x_y"))       # an invalid name, and the same module name
     _, errs = PK.discover({"spool": {"bobbin_path": [str(root2)]}})
     assert has(errs, "only by '-'/'_'")
 
 
 def test_the_same_name_in_two_path_directories_is_refused(tmp_path, no_builtins):
     a, b = tmp_path / "a", tmp_path / "b"
-    make_pkg(a, "dup", MINIMAL.format(name="dup"))
-    make_pkg(b, "dup", MINIMAL.format(name="dup"))
+    make_pkg(a, "acme/dup", MINIMAL.format(name="acme.dup"))
+    make_pkg(b, "acme/dup", MINIMAL.format(name="acme.dup"))
     pkgs, errs = PK.discover({"spool": {"bobbin_path": [str(a), str(b)]}})
-    assert has(errs, "already provided by") and pkgs["dup"].origin == str(a)
+    assert has(errs, "already provided by") and pkgs["acme.dup"].origin == str(a)
 
 
 def test_spool_bobbin_path_errors(tmp_path, no_builtins):
@@ -266,15 +306,15 @@ def test_processor_instance_expands_to_a_source_and_a_processor_destination(tmp_
                                                                              secrets):
     cfg = load(tmp_path, pkgroot, digest_body(secrets))
     src = cfg["sources"]["mail"]
-    assert src["module"] == "_hookspool_bobbins.digest.source"
+    assert src["module"] == "_hookspool_bobbins.acme.digest.source"
     assert src["action"] == "script:mail" and src["span"] == "mail" and src["expect_every_s"] == 86400
     assert src["secrets"] == {"token": {"file": secrets["tok"]}, "cred": {"file": secrets["cred"]}}
     d = cfg["destinations"]["script:mail"]
     assert d["processor"] == "mail" and "argv" not in d and d["max_inflight"] == 1 and d["timeout_s"] == 120
-    assert d["state_dir"] == str(tmp_path / "home" / "services" / "mail")
+    assert d["state_dir"] == str(tmp_path / "home" / "bobbins" / "mail")
     env = d["env"]
-    assert env["HOOKSPOOL_BOBBIN"] == "digest" and env["HOOKSPOOL_BOBBIN_INSTANCE"] == "mail"
-    assert env["HOOKSPOOL_BOBBIN_DIR"] == str(pkgroot / "digest")
+    assert env["HOOKSPOOL_BOBBIN"] == "acme.digest" and env["HOOKSPOOL_BOBBIN_INSTANCE"] == "mail"
+    assert env["HOOKSPOOL_BOBBIN_DIR"] == str(pkgroot / "acme" / "digest")
     assert json.loads(env["HOOKSPOOL_DELTA_ROUTES"]) == {"summary": "hermes:mail-summary", "alert": "hermes:mail-alert"}
     assert json.loads(env["HOOKSPOOL_SECRET_REFS"]) == {"cred": {"file": secrets["cred"]}}
     assert cfg["routes"] == []
@@ -282,7 +322,7 @@ def test_processor_instance_expands_to_a_source_and_a_processor_destination(tmp_
 
 
 def test_an_optional_secret_may_be_left_out_and_is_then_not_passed_to_the_processor(tmp_path, pkgroot, no_builtins, secrets):
-    m = (pkgroot / "digest" / "bobbin.toml")
+    m = (pkgroot / "acme" / "digest" / "bobbin.toml")
     m.write_text(m.read_text().replace('[secrets.cred]\n', '[secrets.cred]\nrequired = false\n'))
     body = digest_body(secrets).replace(f'secrets.cred = {{ file = "{secrets["cred"]}" }}\n', "")
     cfg = load(tmp_path, pkgroot, body)
@@ -311,7 +351,7 @@ def test_settings_are_typed_with_defaults_applied(tmp_path, pkgroot, no_builtins
     ('{ owner = "o", verbose = 1 }', "settings.verbose: must be true or false"),
     ('{ owner = "o", labels = "x" }', "settings.labels: must be a list"),
     ('{ owner = "o", hooks = "rel/hooks.py" }', "settings.hooks: must be an absolute path"),
-    ('{ owner = "o", color = "red" }', "settings.color: bobbin 'digest' has no such setting"),
+    ('{ owner = "o", color = "red" }', "settings.color: bobbin 'acme.digest' has no such setting"),
 ])
 def test_setting_errors(tmp_path, pkgroot, no_builtins, secrets, settings, want):
     body = digest_body(secrets).replace('settings = { owner = "someone@example.com" }', f"settings = {settings}")
@@ -319,10 +359,10 @@ def test_setting_errors(tmp_path, pkgroot, no_builtins, secrets, settings, want)
 
 
 @pytest.mark.parametrize("edit,want", [
-    (lambda b: b.replace('bobbin = "digest"', 'bobbin = "nope"'), "unknown bobbin 'nope'"),
+    (lambda b: b.replace('bobbin = "acme.digest"', 'bobbin = "nope"'), "unknown bobbin 'nope'"),
     (lambda b: b + "colour = 1\n", "bobbins.mail.colour: unknown key"),
     (lambda b: b.replace("secrets.cred", "secrets.other"), "secrets.cred: required"),
-    (lambda b: b.replace("secrets.cred", "secrets.other"), "secrets.other: bobbin 'digest' has no such secret"),
+    (lambda b: b.replace("secrets.cred", "secrets.other"), "secrets.other: bobbin 'acme.digest' has no such secret"),
     (lambda b: b.replace('summary = "hermes:mail-summary"', 'digest = "hermes:x"'), "outputs.digest: bobbin"),
     (lambda b: b.replace('summary = "hermes:mail-summary"', "summary = 3"), "outputs.summary: must be a destination"),
     (lambda b: b.replace("expect = true", "expect = 1"), "expect: must be true or false"),
@@ -346,7 +386,7 @@ def test_instance_overrides_and_processor_only_keys(tmp_path, pkgroot, no_builti
 def test_expect_without_a_recommendation_is_an_error(tmp_path, pkgroot, no_builtins, secrets):
     body = f"""
 [bobbins.fan]
-bobbin = "fanout"
+bobbin = "acme.fanout"
 secrets.secret = {{ file = "{secrets['sig']}" }}
 outputs = {{ "*" = "hermes:all" }}
 expect = true
@@ -360,7 +400,7 @@ expect = true
 def test_a_single_output_is_the_source_action(tmp_path, pkgroot, no_builtins, secrets):
     cfg = load(tmp_path, pkgroot, relay_body(secrets))
     assert cfg["sources"]["relay"]["action"] == "script:sink" and cfg["routes"] == []
-    assert cfg["sources"]["relay"]["module"] == "_hookspool_bobbins.relay.source"
+    assert cfg["sources"]["relay"]["module"] == "_hookspool_bobbins.acme.relay.source"
     errs = expand_errors(tmp_path, pkgroot, relay_body(secrets).replace('outputs = { "*" = "script:sink" }', ""))
     assert has(errs, "relay.outputs.*: required")
 
@@ -369,7 +409,7 @@ def test_several_outputs_become_routes_before_the_files_own_and_star_is_the_acti
                                                                                    no_builtins, secrets):
     body = f"""
 [bobbins.ci]
-bobbin = "fanout"
+bobbin = "acme.fanout"
 secrets.secret = {{ file = "{secrets['sig']}" }}
 outputs = {{ build = "hermes:ci-build", "*" = "hermes:ci-other" }}
 
@@ -399,7 +439,7 @@ def test_collisions_with_explicit_tables_are_errors(tmp_path, pkgroot, no_builti
     assert has(errs, 'destinations."script:mail": also defined by [bobbins.mail]')
     body = f"""
 [bobbins.ci]
-bobbin = "fanout"
+bobbin = "acme.fanout"
 secrets.secret = {{ file = "{secrets['sig']}" }}
 outputs = {{ build = "hermes:a", "*" = "hermes:b" }}
 [[routes]]
@@ -457,12 +497,12 @@ def test_check_refuses_env_references_for_processor_secrets(tmp_path, pkgroot, n
 
 
 def test_check_validates_every_discovered_manifest(tmp_path, pkgroot, no_builtins, secrets):
-    make_pkg(pkgroot, "broken", "bogus = 1\n" + MINIMAL.format(name="broken"))
-    os.chmod(pkgroot / "broken", 0o755)
+    make_pkg(pkgroot, "acme/broken", "bogus = 1\n" + MINIMAL.format(name="acme.broken"))
+    os.chmod(pkgroot / "acme" / "broken", 0o755)
     rep = checked(tmp_path, pkgroot, relay_body(secrets))
-    assert has(rep.errors, "bobbin broken: bogus: unknown key")
-    body = relay_body(secrets) + '\n[bobbins.b]\nbobbin = "broken"\nsecrets.secret = { file = "/x" }\n'
-    assert has(expand_errors(tmp_path, pkgroot, body), "bobbin 'broken' is invalid")
+    assert has(rep.errors, "bobbin acme.broken: bogus: unknown key")
+    body = relay_body(secrets) + '\n[bobbins.b]\nbobbin = "acme.broken"\nsecrets.secret = { file = "/x" }\n'
+    assert has(expand_errors(tmp_path, pkgroot, body), "bobbin 'acme.broken' is invalid")
 
 
 def test_user_config_cannot_set_processor_or_hookspool_env(tmp_path, pkgroot, no_builtins, secrets):
@@ -492,12 +532,12 @@ secrets.secret = { file = "%s" }
 
 # ---- code loaded by path: ownership (14.3.6) -------------------------------------------------------------
 def test_group_writable_package_code_is_refused(tmp_path, pkgroot, no_builtins, secrets):
-    os.chmod(pkgroot / "relay" / "source.py", 0o664)
+    os.chmod(pkgroot / "acme" / "relay" / "source.py", 0o664)
     rep = checked(tmp_path, pkgroot, relay_body(secrets))
     assert has(rep.errors, "bobbins.relay: bobbin code", "group- or other-writable")
     with pytest.raises(ImportError, match="group- or other-writable"):
-        C.default_plugin_loader("relay", "_hookspool_bobbins.relay.source")
-    os.chmod(pkgroot / "relay" / "source.py", 0o644)
+        C.default_plugin_loader("relay", "_hookspool_bobbins.acme.relay.source")
+    os.chmod(pkgroot / "acme" / "relay" / "source.py", 0o644)
     os.chmod(pkgroot, 0o777)
     rep = checked(tmp_path, pkgroot, relay_body(secrets))
     assert has(rep.errors, "spool.bobbin_path:", "group- or other-writable")
@@ -512,7 +552,7 @@ def test_package_code_owned_by_another_user_is_refused(tmp_path, pkgroot, no_bui
     rep = checked(tmp_path, pkgroot, relay_body(secrets))
     assert has(rep.errors, "not root or the user hookspool runs as")
     with pytest.raises(ImportError, match="not root or the user"):
-        C.default_plugin_loader("relay", "_hookspool_bobbins.relay.source")
+        C.default_plugin_loader("relay", "_hookspool_bobbins.acme.relay.source")
 
 
 def test_a_hooks_module_must_pass_the_ownership_rules(tmp_path, pkgroot, no_builtins, secrets):
@@ -531,22 +571,22 @@ def test_a_hooks_module_must_pass_the_ownership_rules(tmp_path, pkgroot, no_buil
 def test_path_package_source_loads_by_file_path_not_sys_path(tmp_path, pkgroot, no_builtins, secrets):
     load(tmp_path, pkgroot, relay_body(secrets))
     before = list(sys.path)
-    m = C.default_plugin_loader("relay", "_hookspool_bobbins.relay.source")
-    assert m.name == "relay" and m.__file__ == str(pkgroot / "relay" / "source.py")
+    m = C.default_plugin_loader("relay", "_hookspool_bobbins.acme.relay.source")
+    assert m.name == "relay" and m.__file__ == str(pkgroot / "acme" / "relay" / "source.py")
     assert sys.path == before and str(pkgroot) not in sys.path
-    assert C.default_plugin_loader("relay", "_hookspool_bobbins.relay.source") is m      # unchanged file: cached
-    src = pkgroot / "relay" / "source.py"
+    assert C.default_plugin_loader("relay", "_hookspool_bobbins.acme.relay.source") is m      # unchanged file: cached
+    src = pkgroot / "acme" / "relay" / "source.py"
     src.write_text(src.read_text().replace('name = "relay"', 'name = "relay2"'))
     os.utime(src, ns=(10**18, 10**18))
-    assert C.default_plugin_loader("relay", "_hookspool_bobbins.relay.source").name == "relay2"
+    assert C.default_plugin_loader("relay", "_hookspool_bobbins.acme.relay.source").name == "relay2"
     with pytest.raises(ImportError, match="no bobbin"):
         C.default_plugin_loader("x", "_hookspool_bobbins.unknown.source")
 
 
 # ---- service expand: golden output, no secrets ----------------------------------------------------------
-GOLDEN = """# [bobbins.mail]: bobbin digest ({root})
+GOLDEN = """# [bobbins.mail]: bobbin acme.digest ({root})
 [sources.mail]
-module = "_hookspool_bobbins.digest.source"
+module = "_hookspool_bobbins.acme.digest.source"
 span = "mail"
 expect_every_s = 86400
 secrets = {{ token = {{ file = "{tok}" }}, cred = {{ file = "{cred}" }} }}
@@ -556,17 +596,17 @@ action = "script:mail"
 processor = "mail"
 max_inflight = 1
 timeout_s = 120
-state_dir = "{home}/services/mail"
+state_dir = "{home}/bobbins/mail"
 
 [destinations."script:mail".env]
-HOOKSPOOL_BOBBIN = "digest"
+HOOKSPOOL_BOBBIN = "acme.digest"
 HOOKSPOOL_BOBBIN_INSTANCE = "mail"
-HOOKSPOOL_BOBBIN_DIR = "{root}/digest"
+HOOKSPOOL_BOBBIN_DIR = "{root}/acme/digest"
 HOOKSPOOL_SETTINGS = "{{\\"hooks\\":\\"\\",\\"labels\\":[\\"inbox\\"],\\"limit\\":25,\\"owner\\":\\"someone@example.com\\",\\"verbose\\":false}}"
 HOOKSPOOL_DELTA_ROUTES = "{{\\"alert\\":\\"hermes:mail-alert\\",\\"summary\\":\\"hermes:mail-summary\\"}}"
 HOOKSPOOL_SECRET_REFS = "<references of: cred>"
 
-# [bobbins.ci]: bobbin fanout ({root})
+# [bobbins.ci]: bobbin acme.fanout ({root})
 [sources.ci]
 module = "hookspool.sources.template"
 scheme = "hmac-sha256-hex"
@@ -589,7 +629,7 @@ destination = "hermes:ci-build"
 
 CI = """
 [bobbins.ci]
-bobbin = "fanout"
+bobbin = "acme.fanout"
 secrets.secret = {{ file = "{sig}" }}
 outputs = {{ build = "hermes:ci-build", "*" = "hermes:ci-other" }}
 """
@@ -629,7 +669,7 @@ def test_bobbin_expand_never_prints_a_secret_value(tmp_path, pkgroot, no_builtin
     assert SENTINEL not in out and SENTINEL not in err
     assert secrets["tok"] in out and str(envf) not in out.split("HOOKSPOOL_SECRET_REFS")[1]
     assert "<references of: cred>" in out
-    rc, out, err = run_cli(["--config", str(p), "--json", "bobbin", "show", "digest"], capsys)
+    rc, out, err = run_cli(["--config", str(p), "--json", "bobbin", "show", "acme.digest"], capsys)
     assert rc == 0 and SENTINEL not in out + err
 
 
@@ -651,17 +691,17 @@ def test_bobbin_list_and_show(tmp_path, pkgroot, no_builtins, secrets, capsys):
     rc, out, _ = run_cli(["--config", str(p), "bobbin", "list"], capsys)
     assert rc == 0
     lines = out.splitlines()
-    assert [ln.split()[0] for ln in lines] == ["digest", "fanout", "relay"]
+    assert [ln.split()[0] for ln in lines] == ["acme.digest", "acme.fanout", "acme.relay"]
     assert "[instances: mail]" in lines[0] and str(pkgroot) in lines[0]
     rc, out, _ = run_cli(["--config", str(p), "--json", "bobbin", "list"], capsys)
     rows = json.loads(out)
-    assert rows[0]["name"] == "digest" and rows[0]["version"] == "3" and rows[0]["instances"] == ["mail"]
-    rc, out, _ = run_cli(["--config", str(p), "bobbin", "show", "digest"], capsys)
+    assert rows[0]["name"] == "acme.digest" and rows[0]["version"] == "3" and rows[0]["instances"] == ["mail"]
+    rc, out, _ = run_cli(["--config", str(p), "bobbin", "show", "acme.digest"], capsys)
     assert rc == 0
-    for frag in ("digest 3", "span: mail", "sender_retries: True", "cred (processor)", "owner: string required",
+    for frag in ("acme.digest 3", "span: mail", "sender_retries: True", "cred (processor)", "owner: string required",
                  "limit: int default=25", "hooks: path", "summary: a summary of new items", "state=True"):
         assert frag in out, (frag, out)
-    rc, out, _ = run_cli(["--config", str(p), "bobbin", "show", "relay"], capsys)
+    rc, out, _ = run_cli(["--config", str(p), "bobbin", "show", "acme.relay"], capsys)
     assert "proxy: nothing special" in out and "expect_every_s: 3600" in out
     assert run_cli(["--config", str(p), "bobbin", "show", "nope"], capsys)[0] == 1
 
@@ -671,32 +711,46 @@ def test_bobbin_new_scaffolds_a_package_that_loads_and_checks(tmp_path, no_built
     root = tmp_path / "mine"
     root.mkdir(mode=0o755)
     os.chmod(tmp_path, 0o755)
-    rc, out, err = run_cli(["bobbin", "new", "acme-hooks", "--dir", str(root), *flags], capsys)
+    rc, out, err = run_cli(["bobbin", "new", "acme.hooks", "--dir", str(root), *flags], capsys)
     assert rc == 0, err
-    d = root / "acme-hooks"
+    d = root / "acme" / "hooks"                      # <dir>/<vendor>/<product>/; no __init__.py outside a package
+    assert not (root / "acme" / "__init__.py").exists()
     assert (d / "bobbin.toml").is_file() and (d / "README.md").is_file() and (d / "captures" / "example.http").is_file()
     assert (d / "source.py").exists() is ("--code" in flags)
     assert (d / "processor.py").exists() is ("--processor" in flags)
     pkg = PK.load_package(str(d), str(root), C.DEFAULTS["spans"])
     assert pkg.errors == []
     outputs = '{ changed = "hermes:acme" }' if "--processor" in flags else '{ "*" = "hermes:acme" }'
-    body = f'[bobbins.acme]\nbobbin = "acme-hooks"\nsecrets.secret = {{ file = "{secrets["sig"]}" }}\noutputs = {outputs}\n'
+    body = f'[bobbins.acme]\nbobbin = "acme.hooks"\nsecrets.secret = {{ file = "{secrets["sig"]}" }}\noutputs = {outputs}\n'
     cfg = load(tmp_path, root, body)
     subs = tmp_path / "subs.json"
     write_subs(subs, ["acme"])
     cfg["hermes"]["subscriptions_path"] = str(subs)
     rep = C.check(cfg)
     assert rep.errors == [], rep.errors
-    assert run_cli(["bobbin", "new", "acme-hooks", "--dir", str(root)], capsys)[0] == 1
+    assert run_cli(["bobbin", "new", "acme.hooks", "--dir", str(root)], capsys)[0] == 1
     assert run_cli(["bobbin", "new", "Bad_Name", "--dir", str(root)], capsys)[0] == 2
+    assert run_cli(["bobbin", "new", "acme-hooks", "--dir", str(root)], capsys)[0] == 2        # no vendor
+    assert run_cli(["bobbin", "new", "hookspool.thing", "--dir", str(root)], capsys)[0] == 2   # reserved
+
+
+def test_bobbin_new_in_a_package_directory_writes_the_vendor_init(tmp_path):
+    root = tmp_path / "bobbins"
+    root.mkdir()
+    (root / "__init__.py").write_text("")
+    d = PK.scaffold("my-co.new-thing", str(root))
+    assert d == str(root / "my_co" / "new_thing")
+    assert (root / "my_co" / "__init__.py").read_text() == ""
+    PK.scaffold("my-co.other", str(root))                      # a second product of the vendor: the init is kept
+    assert sorted(os.listdir(root / "my_co")) == ["__init__.py", "new_thing", "other"]
 
 
 def test_scaffolded_capture_verifies_against_the_scaffolded_source(tmp_path, no_builtins):
     from hookspool import plugin as P
-    d = PK.scaffold("acme", str(tmp_path), code=True)
+    d = PK.scaffold("acme.events", str(tmp_path), code=True)
     os.chmod(tmp_path, 0o755)
-    PK.register_path_module("_hookspool_bobbins.acme.source", os.path.join(d, "source.py"), d)
-    src = P.load_source("acme", {"module": "_hookspool_bobbins.acme.source",
+    PK.register_path_module("_hookspool_bobbins.acme.events.source", os.path.join(d, "source.py"), d)
+    src = P.load_source("events", {"module": "_hookspool_bobbins.acme.events.source",
                                  "secrets": {"secret": {"file": "/unused"}}}, C.default_plugin_loader)
     with open(os.path.join(d, "captures", "example.http"), "rb") as f:
         raw = P.parse_capture(f.read())
@@ -735,7 +789,7 @@ def test_intake_reload_applies_an_expanded_config(tmp_path, pkgroot, no_builtins
     rows = st.list(None, source="relay")
     assert rows and rows[0]["destination"] == "script:sink" and rows[0]["key"] == "k1"
     # an invalid bobbin edit keeps the running config
-    (pkgroot / "relay" / "bobbin.toml").write_text("name = \"relay\"\nbogus = 1\n")
+    (pkgroot / "acme" / "relay" / "bobbin.toml").write_text("name = \"acme.relay\"\nbogus = 1\n")
     _bump(p, 3)
     assert intake.maybe_reload(force=True) is False
     assert "relay" in intake.cfg["sources"]
@@ -821,7 +875,7 @@ def test_intake_reload_keeps_the_cli_home_and_so_the_processor_state_dir(tmp_pat
     body = digest_body(secrets) + f'[hermes]\nsubscriptions_path = "{subs}"\n'
     p.write_text(_homeless_config(tmp_path, pkgroot, body))
     cfg = C.load_config(str(p), cli_home=cli_home)
-    want = os.path.join(cli_home, "services", "mail")
+    want = os.path.join(cli_home, "bobbins", "mail")
     assert cfg["destinations"]["script:mail"]["state_dir"] == want
     intake = I.Intake(cfg, make_store(cfg), config_path=str(p), cli_home=cli_home)
     p.write_text(_homeless_config(tmp_path, pkgroot, body + "\n# edited\n"))
@@ -842,7 +896,7 @@ def test_dispatcher_reload_keeps_the_cli_home_and_so_the_processor_state_dir(rig
     p.write_text(_homeless_config(tmp_path, pkgroot, body))
     _bump(p, 1)
     r.d.tick()
-    want = os.path.join(cli_home, "services", "mail")
+    want = os.path.join(cli_home, "bobbins", "mail")
     assert r.d.config["destinations"]["script:mail"]["state_dir"] == want
     p.write_text(_homeless_config(tmp_path, pkgroot, body + "\n# edited\n"))
     _bump(p, 2)
@@ -864,26 +918,26 @@ def test_check_refuses_argv_and_processor_on_an_expanded_table(tmp_path, pkgroot
     ("secrets.secret = { file = \"{sig}\" }", 'outputs = ["script:sink"]', "bobbins.relay.outputs: must be a table"),
 ])
 def test_secrets_and_outputs_must_be_tables(tmp_path, pkgroot, no_builtins, secrets, secrets_line, outputs_line, want):
-    text = (f"\n[bobbins.relay]\n{secrets_line.replace('{sig}', secrets['sig'])}\n{outputs_line}\n"
+    text = (f"\n[bobbins.relay]\nbobbin = \"acme.relay\"\n{secrets_line.replace('{sig}', secrets['sig'])}\n{outputs_line}\n"
             '[destinations."script:sink"]\nargv = ["/bin/true"]\n')
     assert has(expand_errors(tmp_path, pkgroot, text), want)
 
 
 def test_bobbin_list_marks_an_invalid_package_and_warns(tmp_path, pkgroot, no_builtins, secrets, capsys):
-    make_pkg(pkgroot, "broken", "bogus = 1\n" + MINIMAL.format(name="broken"))
+    make_pkg(pkgroot, "acme/broken", "bogus = 1\n" + MINIMAL.format(name="acme.broken"))
     p = tmp_path / "config.toml"
     p.write_text(cfg_text(tmp_path, pkgroot, ""))
     rc, out, err = run_cli(["--config", str(p), "bobbin", "list"], capsys)
     assert rc == 0
-    line = next(ln for ln in out.splitlines() if ln.startswith("broken"))
+    line = next(ln for ln in out.splitlines() if ln.startswith("acme.broken"))
     assert line.endswith("(invalid)")
-    assert not any(ln.endswith("(invalid)") for ln in out.splitlines() if not ln.startswith("broken"))
-    assert "warning: bobbin broken: bogus: unknown key" in err
+    assert not any(ln.endswith("(invalid)") for ln in out.splitlines() if not ln.startswith("acme.broken"))
+    assert "warning: bobbin acme.broken: bogus: unknown key" in err
     rc, out, _ = run_cli(["--config", str(p), "--json", "bobbin", "list"], capsys)
-    assert {r["name"]: r["valid"] for r in json.loads(out)}["broken"] is False
+    assert {r["name"]: r["valid"] for r in json.loads(out)}["acme.broken"] is False
 
 
-MULTI_CODE = MINIMAL.format(name="multi").replace('template = { scheme = "url-token", key = "id" }',
+MULTI_CODE = MINIMAL.format(name="acme.multi").replace('template = { scheme = "url-token", key = "id" }',
                                                    'module = "source"').replace(
     '[outputs."*"]\ndescription = "all"', '[outputs.a]\n[outputs.b]\n[outputs."*"]\ndescription = "all"')
 SOURCE_PY = (
@@ -894,6 +948,7 @@ SOURCE_PY = (
     "def event_type(payload, req):\n    return str(payload.get('type'))\n")
 MULTI_BODY = """
 [bobbins.multi]
+bobbin = "acme.multi"
 secrets.secret = {{ file = "{sig}" }}
 outputs = {{ a = "script:sink", "*" = "script:sink" }}
 [destinations."script:sink"]
@@ -902,14 +957,14 @@ argv = ["/bin/true"]
 
 
 def test_check_warns_when_a_multi_output_code_source_has_no_attrs(tmp_path, pkgroot, no_builtins, secrets):
-    assert manifest_errors(MULTI_CODE, "multi") == []
-    make_pkg(pkgroot, "multi", MULTI_CODE, {"source.py": SOURCE_PY})
+    assert manifest_errors(MULTI_CODE, "acme/multi") == []
+    make_pkg(pkgroot, "acme/multi", MULTI_CODE, {"source.py": SOURCE_PY})
     body = MULTI_BODY.format(sig=secrets["sig"])
     rep = C.check(load(tmp_path, pkgroot, body), check_secrets=False)
     assert rep.errors == [], rep.errors
     assert has(rep.warnings, "bobbins.multi", "does not expose event_type in attrs"), rep.warnings
     # with attrs exposing event_type there is no warning
-    (pkgroot / "multi" / "source.py").write_text(
+    (pkgroot / "acme" / "multi" / "source.py").write_text(
         SOURCE_PY + "\n\ndef attrs(payload, req):\n    return {'event_type': str(payload.get('type'))}\n")
     rep = C.check(load(tmp_path, pkgroot, body), check_secrets=False)
     assert not has(rep.warnings, "event_type in attrs"), rep.warnings
@@ -921,12 +976,12 @@ def test_check_warns_when_a_multi_output_code_source_has_no_attrs(tmp_path, pkgr
 def test_check_warns_when_a_multi_output_template_has_no_event_type_attr(tmp_path, pkgroot, no_builtins, secrets):
     body = f"""
 [bobbins.ci]
-bobbin = "fanout"
+bobbin = "acme.fanout"
 secrets.secret = {{ file = "{secrets['sig']}" }}
 outputs = {{ build = "hermes:ci-build", "*" = "hermes:ci-other" }}
 """
     assert not has(C.check(load(tmp_path, pkgroot, body), check_secrets=False).warnings, "event_type in attrs")
-    toml = (pkgroot / "fanout" / "bobbin.toml")
+    toml = (pkgroot / "acme" / "fanout" / "bobbin.toml")
     toml.write_text(toml.read_text().replace(', attrs = { event_type = "kind" }', ""))
     rep = C.check(load(tmp_path, pkgroot, body), check_secrets=False)
     assert has(rep.warnings, "bobbins.ci", "does not expose event_type in attrs"), rep.warnings
@@ -935,7 +990,7 @@ outputs = {{ build = "hermes:ci-build", "*" = "hermes:ci-other" }}
 # ---- the retired names are refused, not silently accepted (14.3.5 rename) --------------------------------
 
 RETIRED_CONFIG = [
-    ('[services.mail]\nbobbin = "digest"\n', "services"),
+    ('[services.mail]\nbobbin = "acme.digest"\n', "services"),
     ('[packages]\npath = ["/somewhere"]\n', "packages"),
 ]
 
@@ -947,7 +1002,7 @@ def test_retired_config_tables_are_refused(tmp_path, pkgroot, no_builtins, body,
 
 
 def test_retired_instance_key_package_is_refused(tmp_path, pkgroot, no_builtins, secrets):
-    body = digest_body(secrets).replace('bobbin = "digest"', 'package = "digest"')
+    body = digest_body(secrets).replace('bobbin = "acme.digest"', 'package = "digest"')
     errs = expand_errors(tmp_path, pkgroot, body)
     assert has(errs, "bobbins.mail.package", "unknown key")
 

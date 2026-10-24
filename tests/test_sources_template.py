@@ -4,10 +4,10 @@
 * each verification scheme against signatures computed here with ``hmac``/``hashlib`` directly
 * selector semantics (key, dedup, event_type, attrs, ignore), handshake, quarantine on an unreadable key
 * the shared conformance kit (``tests/sourcekit.py``) over EVERY template bobbin (``hookspool/bobbins/
-  <name>/bobbin.toml`` with ``[source.template]``), the captures in the bobbin's ``captures/`` through
-  ``hookspool source test``, and the CLI
+  <vendor>/<product>/bobbin.toml`` with ``[source.template]``), the captures in the bobbin's ``captures/``
+  through ``hookspool source test``, and the CLI; test ids carry the bobbin's name (``[unsigned-github.repo]``)
 
-Adding a template source is: a bobbin (``hookspool/bobbins/<name>/bobbin.toml`` with ``[source.template]``
+Adding a template source is: a bobbin (``hookspool/bobbins/<vendor>/<product>/bobbin.toml`` with ``[source.template]``
 and ``secrets.secret``) plus ``captures/event.http`` (a request signed with ``TEMPLATE_SECRET``, expect
 queued); optional ``*.http`` captures for ping, tampered, HEAD. Regenerate signed captures with
 ``python tests/test_sources_template.py --write <name>``.
@@ -80,17 +80,20 @@ def _post(body: bytes | dict, headers: dict | None = None, target: str = "/hooks
 
 # ---- examples -> kits -------------------------------------------------------------------------------------
 def _name(path: str) -> str:
-    return os.path.basename(os.path.dirname(path))
+    """The bobbin's name, ``<vendor>.<product>``, from its manifest's path."""
+    d = os.path.dirname(path)
+    return f"{os.path.basename(os.path.dirname(d))}.{os.path.basename(d)}"
 
 
 def load_example(path: str) -> tuple[str, dict]:
+    """(the sample instance's source name, its expanded [sources.<name>] table)."""
     name = _name(path)
     assert path == sourcekit.bobbin_manifest(name), f"{path}: expected the bobbin manifest"
     with open(path, "rb") as f:
         assert "secret" in tomllib.load(f).get("secrets", {}), f"{path}: declares secrets.secret"
     cfg = sourcekit.bobbin_source_cfg(name)
     assert cfg.get("module") == MODULE, f"{path}: module must be {MODULE}"
-    return name, cfg
+    return sourcekit.SOURCE_OF[name], cfg
 
 
 def example_kit(path: str) -> Kit:
@@ -114,7 +117,7 @@ def example_kit(path: str) -> Kit:
 
 
 def test_there_are_examples():
-    assert {_name(p) for p in EXAMPLES} == {"github", "kaneo", "trello"}
+    assert {_name(p) for p in EXAMPLES} == {"github.repo", "kaneo.projects", "atlassian.trello"}
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=[_name(p) for p in EXAMPLES])
@@ -131,7 +134,7 @@ CAPTURE_FILES = [(_name(p), c) for p in EXAMPLES
 def test_captures(name, cap, tmp_path, clock):
     kit = example_kit(sourcekit.bobbin_manifest(name))
     out = sourcekit.run_capture(cap, kit, tmp_path, clock)
-    assert out["source"] == name
+    assert out["source"] == sourcekit.SOURCE_OF[name]
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=[_name(p) for p in EXAMPLES])
@@ -165,7 +168,7 @@ def test_source_test_cli_with_the_default_loader(name, cap, tmp_path, capsys):
     """`hookspool source test` imports the plugin by module path and binds it to the table."""
     with open(cap, "rb") as f:
         raw = parse_capture(f.read())
-    rc = main(["--config", _cli_config(tmp_path, name), "source", "test", name, "--request", cap])
+    rc = main(["--config", _cli_config(tmp_path, name), "source", "test", sourcekit.SOURCE_OF[name], "--request", cap])
     out = capsys.readouterr().out
     doc = json.loads(out)
     assert doc["result"] == raw.meta["expect"]

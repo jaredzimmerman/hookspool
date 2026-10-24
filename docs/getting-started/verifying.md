@@ -16,7 +16,7 @@ start. A warning is not a failure; read it anyway.
 
 ```sh
 hookspool bobbin expand <instance>     # the tables it becomes; secrets stay references
-hookspool bobbin show <bobbin>         # what it expects: secrets, settings, outputs
+hookspool bobbin show <vendor>.<product>   # what it expects: provider pages, secrets, settings, outputs
 ```
 
 ## A sender's request, offline
@@ -44,7 +44,7 @@ end to end with real signed requests.
 ## A bobbin you wrote or changed
 
 ```sh
-hookspool bobbin check hookspool/bobbins/<name>
+hookspool bobbin check hookspool/bobbins/<vendor>/<product>
 ```
 
 It prints a scorecard, and every problem as `file:line` with how to fix it. The same command runs in CI.

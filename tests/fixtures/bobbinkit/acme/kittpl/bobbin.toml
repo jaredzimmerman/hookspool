@@ -1,0 +1,23 @@
+name = "acme.kittpl"
+version = "2"
+summary = "Kit fixture: a template source with several outputs"
+
+[provider]
+vendor = "Acme"
+product = "Kittpl"
+homepage = "https://github.com"
+webhook_docs = "https://docs.github.com/en/webhooks"
+signature_docs = "https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries"
+
+[source]
+template = { scheme = "hmac-sha256-hex", header = "X-Kittpl-Signature", prefix = "sha256=", key = "repo", event_type = "kind", attrs = { event_type = "kind" } }
+span = "burst"
+sender_retries = true
+
+[secrets.secret]
+description = "the signing secret"
+
+[outputs.build]
+description = "a build finished"
+[outputs."*"]
+description = "everything else"

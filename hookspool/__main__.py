@@ -92,10 +92,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--now", type=float, help="unix seconds to verify at (default: the capture's '# now:' or now)")
     p = sub.add_parser("bobbin", help="bobbins: list | show <bobbin> | expand [<instance>] | new <name> | check <dir>")
     p.add_argument("subcmd", choices=("list", "show", "expand", "new", "check"))
-    p.add_argument("name", nargs="?", help="the bobbin (show), the instance (expand), the new bobbin's name (new) or"
-                                           " the bobbin directory (check)")
-    p.add_argument("--dir", default=".", help="new: the parent directory (default: the current directory)")
-    p.add_argument("--code", action="store_true", help="new: a source.py bobbin instead of a copy of the webhook bobbin")
+    p.add_argument("name", nargs="?", help="the bobbin, <vendor>.<product> (show), the instance (expand), the new"
+                                           " bobbin's <vendor>.<product> name (new) or the bobbin directory (check)")
+    p.add_argument("--dir", default=".", help="new: the parent directory; the bobbin goes in <dir>/<vendor>/<product>/"
+                                              " (default: the current directory)")
+    p.add_argument("--code", action="store_true", help="new: a source.py bobbin instead of a copy of the hookspool.webhook bobbin")
     p.add_argument("--template", action="store_true", help=argparse.SUPPRESS)       # the default now; kept for old scripts
     p.add_argument("--set", dest="set_", action="append", default=[], metavar="NAME=VALUE",
                    help="new: freeze a webhook setting (scheme, header, prefix, key, ...) into the template;"
@@ -107,6 +108,8 @@ def _parser() -> argparse.ArgumentParser:
                    help="check: the scorecard format (default text)")
     p.add_argument("--strict", action="store_true", help="check: advisory checks fail too")
     p.add_argument("--base", help="check: the git ref the change is compared with (for the scope check)")
+    p.add_argument("--online", dest="fetch_links", action="store_true",
+                   help="check: also fetch the [provider] pages (the advisory provider-links row; CI passes it)")
     sub.add_parser("check", help="validate config, secrets, plugins and the spool")
     sub.add_parser("reload", help="check, then touch the config so both processes reload")
     p = sub.add_parser("migrate", help="apply pending schema migrations")
@@ -134,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
             _err("bobbin check: give the bobbin directory")
             return EXIT_NOTHING
         from .testing import bobbinkit       # needs no config: it checks one directory
-        return bobbinkit.main(a.name, report=a.report, strict=a.strict, base=a.base)
+        return bobbinkit.main(a.name, report=a.report, strict=a.strict, base=a.base, online=a.fetch_links)
     try:
         cfg_path = _config.config_path(a.config, a.home)
         cfg = _config.load_config(cfg_path, cli_home=a.home, expand=a.cmd != "bobbin")
@@ -256,8 +259,8 @@ def _bobbin(a, cfg: dict) -> int:
         except ValueError as e:
             _err(str(e))
             return EXIT_CONFIG
-        except FileExistsError:
-            _err(f"{os.path.join(os.path.abspath(a.dir), a.name)} already exists")
+        except FileExistsError as e:
+            _err(f"{e.args[0] if e.args else os.path.abspath(a.dir)} already exists")
             return EXIT_NOTHING
         print(f"created {d}")
         return EXIT_OK
@@ -282,8 +285,8 @@ def _bobbin(a, cfg: dict) -> int:
     services = cfg.get("bobbins") if isinstance(cfg.get("bobbins"), dict) else {}
     users: dict[str, list[str]] = {}
     for inst, spec in services.items():
-        pname = spec.get("bobbin", inst) if isinstance(spec, dict) else inst
-        users.setdefault(str(pname), []).append(inst)
+        if isinstance(spec, dict) and "bobbin" in spec:
+            users.setdefault(str(spec["bobbin"]), []).append(inst)
     if a.subcmd == "list" and a.markdown:
         sys.stdout.write(bobbin_loader.catalogue_markdown(pkgs.values()))
         return EXIT_OK if pkgs else EXIT_NOTHING
@@ -301,6 +304,7 @@ def _bobbin(a, cfg: dict) -> int:
         return EXIT_NOTHING
     src = p.source
     info = {"name": p.name, "version": p.version, "origin": p.origin, "dir": p.dir, "summary": p.summary,
+            "provider": {k: v for k, v in p.provider.items() if isinstance(v, str)},
             "source": "template" if "template" in src else src.get("module"),
             "span": src.get("span"), "sender_retries": src.get("sender_retries"),
             "expect_every_s": src.get("expect_every_s"), "proxy": src.get("proxy"),
@@ -314,6 +318,10 @@ def _bobbin(a, cfg: dict) -> int:
     lines = [f"{p.name} {p.version} ({p.origin}: {p.dir})", f"  {p.summary}",
              f"  source: {info['source']}  span: {info['span'] or '-'}  sender_retries: {info['sender_retries']}"
              f"  expect_every_s: {info['expect_every_s'] or '-'}"]
+    prov = info["provider"]
+    if prov:
+        lines.append(f"  provider: {prov.get('vendor', '-')} {prov.get('product', '-')}")
+        lines += [f"    {k}: {prov[k]}" for k in bobbin_loader.PROVIDER_URL_KEYS if prov.get(k)]
     if info["proxy"]:
         lines.append(f"  proxy: {info['proxy']}")
     if p.processor is not None:

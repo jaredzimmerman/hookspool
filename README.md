@@ -60,7 +60,8 @@ arriving as one delivery. Other first steps are in [docs/getting-started/](docs/
 
 A bobbin is the plugin for one outside service. It knows how that service proves a request is genuine, what to group its
 events on, and sometimes how to ask it what changed. You turn one on with a few lines of config. Built in today: GitHub,
-Gmail, Google Calendar, Google Drive, Plaid, Trello, Zoom and Kaneo, plus `webhook` for any service that signs a JSON POST.
+Gmail, Google Calendar, Google Drive, Plaid, Trello, Zoom and Kaneo, plus `hookspool.webhook` for any service that signs a
+JSON POST. Each is named `<vendor>.<product>` (`google.gmail`, `atlassian.trello`).
 
 [The catalogue](docs/bobbins/README.md) lists them with a line each, and `hookspool bobbin list` prints the same from the
 installed copy. Setup steps and how to write a new one are in [docs/bobbins/](docs/bobbins/README.md).

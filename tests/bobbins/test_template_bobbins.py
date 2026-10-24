@@ -28,10 +28,11 @@ from hookspool import config as C  # noqa: E402
 from hookspool import intake as I  # noqa: E402
 from hookspool.plugin import parse_capture  # noqa: E402
 
-NAMES = ("github", "kaneo", "trello")
+NAMES = ("github.repo", "kaneo.projects", "atlassian.trello")
 TEST_SECRET = "test-template-secret-" + SENTINEL       # what every template bobbin's captures are signed with
-SAMPLE_INSTANCE = {"github": "github-ci", "kaneo": "kaneo", "trello": "trello"}
-SAMPLE_CALLBACK = sourcekit.SAMPLE_SETTINGS["trello"]["callback_url"]
+SAMPLE_INSTANCE = {"github.repo": "github-ci", "kaneo.projects": "kaneo", "atlassian.trello": "trello"}
+TRELLO = "atlassian.trello"
+SAMPLE_CALLBACK = sourcekit.SAMPLE_SETTINGS[TRELLO]["callback_url"]
 FENCE = re.compile(r"```toml\n(.*?)```", re.S)
 PLACEHOLDER = re.compile(r"<([^<>\s]+)>")
 ANGLE_CASE = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -80,11 +81,11 @@ def config_file(tmp_path, instances: dict[str, dict]) -> str:
 
 
 def event_capture(name: str) -> str:
-    return os.path.join(sourcekit.BOBBINS, name, "captures", "event.http")
+    return os.path.join(sourcekit.bobbin_dir(name), "captures", "event.http")
 
 
 def doc(name: str, which: str) -> str:
-    with open(os.path.join(sourcekit.BOBBINS, name, which), encoding="utf-8") as f:
+    with open(os.path.join(sourcekit.bobbin_dir(name), which), encoding="utf-8") as f:
         return f.read()
 
 
@@ -118,7 +119,7 @@ def test_manifest_loads_with_no_errors(name):
 
 @pytest.mark.parametrize("name", NAMES)
 def test_the_bobbin_has_its_required_documents_and_captures(name):
-    d = os.path.join(sourcekit.BOBBINS, name)
+    d = sourcekit.bobbin_dir(name)
     for doc_name in ("README.md", "SETUP.md", "AGENTS.md"):
         assert os.path.isfile(os.path.join(d, doc_name)), doc_name
     agents = doc(name, "AGENTS.md")
@@ -129,18 +130,18 @@ def test_the_bobbin_has_its_required_documents_and_captures(name):
 def test_the_setup_documents_are_packaged():
     with open(os.path.join(sourcekit.ROOT, "pyproject.toml"), "rb") as f:
         globs = tomllib.load(f)["tool"]["setuptools"]["package-data"]["hookspool"]
-    for want in ("bobbins/*/bobbin.toml", "bobbins/*/README.md", "bobbins/*/SETUP.md", "bobbins/*/AGENTS.md",
-                 "bobbins/*/captures/*.http"):
+    for want in ("bobbins/*/*/bobbin.toml", "bobbins/*/*/README.md", "bobbins/*/*/SETUP.md", "bobbins/*/*/AGENTS.md",
+                 "bobbins/*/*/captures/*.http"):
         assert want in globs, want
 
 
 def test_the_example_files_are_pointers_to_the_bobbins():
     for name in NAMES:
-        path = os.path.join(sourcekit.ROOT, "examples", "sources", f"{name}.toml")
+        path = os.path.join(sourcekit.ROOT, "examples", "sources", f"{sourcekit.SOURCE_OF[name]}.toml")
         with open(path) as f:
             body = [line for line in f if line.strip() and not line.lstrip().startswith("#")]
         assert body == [], f"{path} must hold comments only"
-        assert f"hookspool/bobbins/{name}" in open(path).read()
+        assert f"hookspool/bobbins/{name.replace('.', '/')}" in open(path).read()
 
 
 def test_the_capture_set_covers_the_outcomes():
@@ -150,16 +151,16 @@ def test_the_capture_set_covers_the_outcomes():
             with open(c, "rb") as f:
                 out[os.path.basename(c)] = parse_capture(f.read()).meta["expect"]
         return out
-    assert expects("trello") == {"event.http": "queued", "head.http": "challenge", "tampered.http": "unverified"}
-    assert expects("github")["event.http"] == "queued"
-    assert expects("github")["ping.http"] == "ignored"
-    assert "unverified" in expects("github").values()
-    assert expects("kaneo") == {"event.http": "queued", "tampered.http": "unverified"}
+    assert expects(TRELLO) == {"event.http": "queued", "head.http": "challenge", "tampered.http": "unverified"}
+    assert expects("github.repo")["event.http"] == "queued"
+    assert expects("github.repo")["ping.http"] == "ignored"
+    assert "unverified" in expects("github.repo").values()
+    assert expects("kaneo.projects") == {"event.http": "queued", "tampered.http": "unverified"}
 
 
 def test_trello_retries_are_declared_as_the_sender_does_them():
-    assert manifest("trello")["source"]["sender_retries"] is True
-    assert manifest("github")["source"]["sender_retries"] is False
+    assert manifest(TRELLO)["source"]["sender_retries"] is True
+    assert manifest("github.repo")["source"]["sender_retries"] is False
 
 
 # ---- a sample instance expands, and checks clean through the real config path ----------------------------
@@ -174,7 +175,7 @@ def test_sample_instance_expands_to_a_template_source(name, secret_file):
 
 
 def test_the_trello_callback_url_reaches_the_source_through_load_config_and_check(tmp_path, secret_file):
-    path = config_file(tmp_path, {"trello": _spec("trello", "trello", secret_file)})
+    path = config_file(tmp_path, {"trello": _spec(TRELLO, "trello", secret_file)})
     cfg = C.load_config(path)
     assert cfg["sources"]["trello"]["callback_url"] == SAMPLE_CALLBACK
     rep = C.check(cfg)
@@ -183,8 +184,8 @@ def test_the_trello_callback_url_reaches_the_source_through_load_config_and_chec
 
 def test_github_instances_share_the_bobbin_with_their_own_secrets(tmp_path, secret_file):
     other = write_secret(tmp_path / "prs", TEST_SECRET + "-prs")
-    out = expanded({"github-ci": _spec("github", "github-ci", secret_file),
-                    "github-prs": _spec("github", "github-prs", other)})
+    out = expanded({"github-ci": _spec("github.repo", "github-ci", secret_file),
+                    "github-prs": _spec("github.repo", "github-prs", other)})
     assert out["sources"]["github-ci"]["secrets"]["secret"]["file"] == secret_file
     assert out["sources"]["github-prs"]["secrets"]["secret"]["file"] == other
     assert out["sources"]["github-ci"]["scheme"] == out["sources"]["github-prs"]["scheme"] == "hmac-sha256-hex"
@@ -221,7 +222,7 @@ def test_an_unknown_setting_or_a_setting_of_the_wrong_type_is_an_expansion_error
     with pytest.raises(PK.BobbinError) as ei:
         expanded({inst: spec})
     assert any(f"bobbins.{inst}.settings.nope: bobbin {name!r} has no such setting" in e for e in ei.value.errors)
-    if name == "trello":
+    if name == TRELLO:
         spec["settings"] = {"callback_url": 5}
         with pytest.raises(PK.BobbinError) as ei:
             expanded({inst: spec})
@@ -229,18 +230,18 @@ def test_an_unknown_setting_or_a_setting_of_the_wrong_type_is_an_expansion_error
 
 
 def test_trello_without_a_callback_url_is_an_expansion_error(secret_file):
-    spec = _spec("trello", "trello", secret_file)
+    spec = _spec(TRELLO, "trello", secret_file)
     del spec["settings"]
     with pytest.raises(PK.BobbinError) as ei:
         expanded({"trello": spec})
-    assert any("bobbins.trello.settings.callback_url: required by bobbin 'trello'" in e for e in ei.value.errors)
+    assert any("bobbins.trello.settings.callback_url: required by bobbin 'atlassian.trello'" in e for e in ei.value.errors)
 
 
 def test_trello_with_a_mismatched_callback_url_refuses_the_signed_delivery(secret_file):
-    spec = _spec("trello", "trello", secret_file)
+    spec = _spec(TRELLO, "trello", secret_file)
     spec["settings"] = {"callback_url": "https://hooks.example.test/hooks/other"}
     cfg = expanded({"trello": spec})
-    with open(event_capture("trello"), "rb") as f:
+    with open(event_capture(TRELLO), "rb") as f:
         raw = parse_capture(f.read())
     out = I.source_test(cfg, "trello", raw)
     assert out["result"] == "unverified", out

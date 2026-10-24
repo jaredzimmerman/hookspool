@@ -1,8 +1,9 @@
 """Bobbins (ARCHITECTURE §14.3): discovery, manifests, and expansion into ordinary tables.
 
 A bobbin is one directory with a ``bobbin.toml`` manifest, an optional ``source.py``
-and ``processor.py``, captures and a README. Built-in bobbins live under ``hookspool/bobbins/``;
-``[spool].path`` adds directories searched after them. A ``[bobbins.<instance>]`` table
+and ``processor.py``, captures and a README. Its name is ``<vendor>.<product>`` (``google.gmail``) and its
+directory is ``<vendor>/<product>/``: built-in bobbins live under ``hookspool/bobbins/``, and
+``[spool].bobbin_path`` adds directories searched after them. A ``[bobbins.<instance>]`` table
 enables a bobbin; ``expand`` turns every instance into a ``[sources.<instance>]`` table, a
 ``[destinations."script:<instance>"]`` table when the bobbin has a processor, and ``[[routes]]``
 for a multi-output bobbin without one. ``load_config`` calls ``expand``, so the rest of
@@ -26,7 +27,10 @@ from typing import Any
 
 from . import config as _config
 
-NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
+PART_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")          # each part of a bobbin name
+NAME_RE = re.compile(r"^([a-z][a-z0-9-]{0,39})\.([a-z][a-z0-9-]{0,39})$")   # <vendor>.<product> (14.3.1)
+NAME_RULE = "<vendor>.<product>, each part matching ^[a-z][a-z0-9-]{0,39}$ (e.g. acme.invoices)"
+RESERVED_VENDOR = "hookspool"                    # the namespace of the generic bobbins shipped with core
 INSTANCE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 EVENT_TYPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 ENV_NAME_RE = _config.ENV_NAME_RE
@@ -42,7 +46,9 @@ TEMPLATE_MODULE = "hookspool.sources.template"
 PROCESSOR_MODULE = "hookspool.processor"
 DEFAULT_PROCESSOR_TIMEOUT_S = 300
 
-MANIFEST_KEYS = {"name", "version", "summary", "source", "secrets", "settings", "processor", "outputs"}
+MANIFEST_KEYS = {"name", "version", "summary", "provider", "source", "secrets", "settings", "processor", "outputs"}
+PROVIDER_KEYS = {"vendor", "product", "homepage", "webhook_docs", "signature_docs", "api_docs"}
+PROVIDER_URL_KEYS = ("homepage", "webhook_docs", "signature_docs", "api_docs")
 SOURCE_KEYS = {"module", "template", "span", "sender_retries", "expect_every_s", "proxy", "config"}
 SECRET_KEYS = {"description", "processor", "required"}
 SETTING_KEYS = {"description", "type", "required", "default"}
@@ -79,6 +85,56 @@ class BobbinError(_config.ConfigError):
         self.errors = list(errors)
 
 
+# ---- names -----------------------------------------------------------------------------------------------
+def name_problem(name: Any) -> str | None:
+    """Why ``name`` is not a bobbin name (``<vendor>.<product>``, 14.3.1), or None."""
+    if not isinstance(name, str) or not name:
+        return f"{name!r} must be {NAME_RULE}"
+    if NAME_RE.match(name):
+        return None
+    dots = name.count(".")
+    if dots == 0:
+        return f"{name!r} has no vendor: a bobbin name is {NAME_RULE}"
+    if dots > 1:
+        return f"{name!r} has {dots} dots: a bobbin name has exactly one ({NAME_RULE})"
+    return f"{name!r} must be {NAME_RULE}"
+
+
+def split_name(name: str) -> tuple[str, str]:
+    """(vendor, product) of a valid bobbin name."""
+    vendor, _, product = name.partition(".")
+    return vendor, product
+
+
+def name_path(name: str) -> str:
+    """The directory of a bobbin below its root: ``<vendor>/<product>`` (``google/gmail``)."""
+    return os.path.join(*split_name(name))
+
+
+def module_part(part: str) -> str:
+    return part.replace("-", "_")
+
+
+def dir_matches(name: str, rel: str) -> bool:
+    """True when ``rel`` (a bobbin directory relative to its root, ``/``-separated) is ``<vendor>/<product>`` of
+    ``name``; each part may be written with ``_`` for ``-`` (a built-in's directories are Python packages)."""
+    parts = rel.replace(os.sep, "/").split("/")
+    if not NAME_RE.match(name) or len(parts) != 2:
+        return False
+    return all(d in (p, module_part(p)) for d, p in zip(parts, split_name(name)))
+
+
+def instance_hint(inst: str, pkgs) -> str:
+    """`` (did you mean bobbin = "google.gmail"?)`` for an instance whose name is a bobbin's product part (or a
+    vendor with one bobbin), else ``""``."""
+    names = [n for n in pkgs if NAME_RE.match(n)]
+    hits = [n for n in names if split_name(n)[1] == inst]
+    if not hits:
+        by_vendor = [n for n in names if split_name(n)[0] == inst]
+        hits = by_vendor if len(by_vendor) == 1 else []
+    return f' (did you mean bobbin = "{hits[0]}"?)' if len(hits) == 1 else ""
+
+
 # ---- manifests -------------------------------------------------------------------------------------------
 @dataclass
 class Package:
@@ -87,6 +143,7 @@ class Package:
     origin: str                                   # "built-in" or the spool.bobbin_path directory
     manifest: dict = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    rel: str = ""                                 # the directory below its root: <vendor>/<product>
 
     @property
     def builtin(self) -> bool:
@@ -95,6 +152,11 @@ class Package:
     @property
     def module_name(self) -> str:
         return self.name.replace("-", "_")
+
+    @property
+    def provider(self) -> dict:
+        p = self.manifest.get("provider")
+        return p if isinstance(p, dict) else {}
 
     @property
     def version(self) -> str:
@@ -136,7 +198,8 @@ class Package:
         """The import name of a module of this bobbin: ``hookspool.bobbins.<pkg>.<mod>`` for a
         built-in, a private name loaded by file path for a bobbin under ``spool.bobbin_path``."""
         if self.builtin:
-            return f"{BUILTIN_MODULE}.{os.path.basename(self.dir)}.{module}"
+            vendor_dir, product_dir = os.path.split(self.dir)
+            return f"{BUILTIN_MODULE}.{os.path.basename(vendor_dir)}.{product_dir}.{module}"
         return f"{PATH_MODULE_PREFIX}{self.module_name}.{module}"
 
     def code_files(self) -> list[str]:
@@ -178,8 +241,9 @@ def _type_hint(t: str) -> str:
             "path": "an absolute path (or \"\" for none)"}.get(t, t)
 
 
-def validate_manifest(m: Any, dirname: str, spans: dict) -> list[str]:
-    """Every problem with one manifest (ARCHITECTURE §14.3.2), as messages without a prefix."""
+def validate_manifest(m: Any, rel: str, spans: dict) -> list[str]:
+    """Every problem with one manifest (ARCHITECTURE §14.3.2), as messages without a prefix. ``rel`` is the
+    bobbin's directory below its root (``google/gmail``)."""
     errs: list[str] = []
     if not isinstance(m, dict):
         return ["must be a table"]
@@ -195,15 +259,24 @@ def validate_manifest(m: Any, dirname: str, spans: dict) -> list[str]:
 
     unknown("", m, MANIFEST_KEYS)
     name = m.get("name")
-    if not isinstance(name, str) or not NAME_RE.match(name):
-        errs.append(f"name: {name!r} must match {NAME_RE.pattern}")
-    elif dirname not in (name, name.replace("-", "_")):
-        errs.append(f"name: {name!r} does not match its directory {dirname!r}")
+    problem = name_problem(name)
+    rel = rel.replace(os.sep, "/")
+    if problem:
+        errs.append(f"name: {problem}")
+    elif not dir_matches(name, rel):
+        errs.append(f"name: {name!r} must live in {'/'.join(split_name(name))}/ (<vendor>/<product>), not {rel}/")
     for k in ("version", "summary"):
         if k in m and not isinstance(m[k], str):
             errs.append(f"{k}: must be a string")
     if "version" not in m:
         errs.append("version: required")
+    # [provider] is checked in full by the conformance kit (`hookspool bobbin check`, the provider row); a
+    # deployment's config load only needs its shape
+    prov = m.get("provider")
+    if prov is not None and unknown("provider", prov, PROVIDER_KEYS):
+        for k, v in prov.items():
+            if k in PROVIDER_KEYS and not isinstance(v, str):
+                errs.append(f"provider.{k}: must be a string")
 
     src = m.get("source")
     if src is None:
@@ -345,9 +418,17 @@ def _validate_files(pkg: Package) -> list[str]:
     return errs
 
 
-def load_package(pkg_dir: str, origin: str, spans: dict) -> Package:
-    dirname = os.path.basename(os.path.normpath(pkg_dir))
-    pkg = Package(dirname, os.path.abspath(pkg_dir), origin)
+def default_rel(pkg_dir: str) -> str:
+    """A bobbin directory's last two components, ``<vendor>/<product>``: where it sits below its root."""
+    d = os.path.normpath(os.path.abspath(pkg_dir))
+    return f"{os.path.basename(os.path.dirname(d))}/{os.path.basename(d)}"
+
+
+def load_package(pkg_dir: str, origin: str, spans: dict, rel: str | None = None) -> Package:
+    """One bobbin directory. ``rel`` is the directory below its root (default: its last two components);
+    a bobbin found directly under a root (the flat layout before namespaced names) has a one-part ``rel``."""
+    rel = (rel if rel is not None else default_rel(pkg_dir)).replace(os.sep, "/")
+    pkg = Package(rel.replace("/", "."), os.path.abspath(pkg_dir), origin, rel=rel)
     path = os.path.join(pkg_dir, MANIFEST)
     try:
         m = tomllib.loads(_config.read_regular_text(path))
@@ -358,9 +439,12 @@ def load_package(pkg_dir: str, origin: str, spans: dict) -> Package:
         pkg.errors.append(f"{MANIFEST} is not valid TOML: {e}")
         return pkg
     pkg.manifest = m
-    pkg.errors.extend(validate_manifest(m, dirname, spans))
+    pkg.errors.extend(validate_manifest(m, rel, spans))
     if isinstance(m.get("name"), str) and NAME_RE.match(m["name"]):
         pkg.name = m["name"]
+        if not pkg.builtin and split_name(pkg.name)[0] == RESERVED_VENDOR:
+            pkg.errors.append(f"name: {pkg.name!r}: the {RESERVED_VENDOR}. namespace is reserved for the bobbins"
+                              " shipped with hookspool; name the vendor that runs the service")
     if not pkg.errors:
         pkg.errors.extend(_validate_files(pkg))
     return pkg
@@ -425,11 +509,9 @@ def discover_tagged(cfg: dict) -> tuple[dict[str, Package], list[tuple[frozenset
         except OSError as e:
             errs.append((None, f"spool.bobbin_path: cannot list {root} ({e.__class__.__name__})"))
             continue
-        for d in entries:
-            pkg_dir = os.path.join(root, d)
-            if not os.path.isfile(os.path.join(pkg_dir, MANIFEST)):
-                continue
-            pkg = load_package(pkg_dir, origin, spans)
+        for rel in _package_rels(root, entries):
+            pkg_dir = os.path.join(root, *rel.split("/"))
+            pkg = load_package(pkg_dir, origin, spans, rel)
             mod = pkg.name.replace("-", "_")
             where = f"bobbin {pkg.name} ({pkg.dir})"
             prev = by_module.get(mod)
@@ -439,7 +521,7 @@ def discover_tagged(cfg: dict) -> tuple[dict[str, Package], list[tuple[frozenset
                     errs.append((frozenset({pkg.name}), f"{where}: shadows the built-in bobbin {pkg.name!r}; a"
                                  " deployment never replaces a built-in (use settings, a hooks module, or another"
                                  " name)"))
-                elif os.path.basename(first.dir) != d and first.origin == origin:
+                elif first.rel != pkg.rel and first.origin == origin:
                     errs.append((frozenset({pkg.name}), f"{where}: {first.dir} has the same name; directory names"
                                  " that differ only by '-'/'_' are refused"))
                 else:
@@ -454,6 +536,26 @@ def discover_tagged(cfg: dict) -> tuple[dict[str, Package], list[tuple[frozenset
             found[pkg.name] = pkg
             by_module[mod] = pkg
     return found, errs
+
+
+def _package_rels(root: str, entries: list[str]) -> list[str]:
+    """The bobbin directories below one root, ``<vendor>/<product>`` (``/``-separated, sorted). A manifest directly
+    under the root (the flat layout of unnamespaced names) is listed too, so its name is reported, not ignored."""
+    out = []
+    for v in entries:
+        vdir = os.path.join(root, v)
+        if v.startswith((".", "_")) or not os.path.isdir(vdir):
+            continue
+        if os.path.isfile(os.path.join(vdir, MANIFEST)):
+            out.append(v)
+            continue
+        try:
+            products = sorted(os.listdir(vdir))
+        except OSError:
+            continue
+        out += [f"{v}/{p}" for p in products
+                if not p.startswith((".", "_")) and os.path.isfile(os.path.join(vdir, p, MANIFEST))]
+    return out
 
 
 def discover(cfg: dict) -> tuple[dict[str, Package], list[str]]:
@@ -471,7 +573,7 @@ def catalogue_row(pkg: Package) -> str:
     built-in one, and the manifest's summary."""
     name = f"`{pkg.name}`"
     if pkg.origin == BUILTIN:
-        name = f"[{name}](../../hookspool/bobbins/{pkg.name}/README.md)"
+        name = f"[{name}](../../hookspool/bobbins/{pkg.rel or name_path(pkg.name)}/README.md)"
     summary = " ".join(str(pkg.summary or "").split()).replace("|", "\\|")
     return f"| {name} | {summary} |"
 
@@ -638,9 +740,21 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
     for k in spec:
         if k not in INSTANCE_KEYS:
             errs.append(f"{where}.{k}: unknown key")
-    pname = spec.get("bobbin", inst)
+    if "bobbin" not in spec:
+        nested = [k for k, v in spec.items() if isinstance(v, dict) and f"{inst}.{k}" in pkgs]
+        if nested:
+            errs.append(f"{where}.{nested[0]}: an instance name is a plain identifier (the URL /hooks/<instance>), so"
+                        f" [bobbins.{inst}.{nested[0]}] is not an instance; write [bobbins.{nested[0]}] with"
+                        f' bobbin = "{inst}.{nested[0]}"')
+        else:
+            errs.append(f"{where}.bobbin: required: the bobbin's {NAME_RULE}" + instance_hint(inst, pkgs)
+                        + "; see `hookspool bobbin list`")
+        return None
+    pname = spec["bobbin"]
     if not isinstance(pname, str) or pname not in pkgs:
-        errs.append(f"{where}.bobbin: unknown bobbin {pname!r} (see `hookspool bobbin list`)")
+        problem = name_problem(pname)
+        errs.append(f"{where}.bobbin: unknown bobbin {pname!r}" + (f": {problem}" if problem else "")
+                    + " (see `hookspool bobbin list`)")
         return None
     pkg = pkgs[pname]
     if pkg.errors:
@@ -705,7 +819,7 @@ def _expand_one(cfg: dict, inst: str, spec: Any, pkgs: dict[str, Package], home:
                 "timeout_s": spec.get("timeout_s", proc.get("timeout_s", DEFAULT_PROCESSOR_TIMEOUT_S))}
         if proc.get("state") is True:
             sd = spec.get("state_dir")
-            dest["state_dir"] = sd if sd is not None else os.path.join(home, "services", inst)
+            dest["state_dir"] = sd if sd is not None else os.path.join(home, "bobbins", inst)
         elif "state_dir" in spec:
             errs.append(f"{where}.state_dir: bobbin {pname!r} keeps no state")
         dest["env"] = {
@@ -771,7 +885,7 @@ def expand(cfg: dict, *, cli_home: str | None = None) -> dict:
     pkgs, tagged = discover_tagged(cfg)
     # loading fails only on problems that concern a bobbin in use (or the search path itself);
     # `check` reports the rest, so a broken unused bobbin never stops a running deployment
-    used = {str(s.get("bobbin", i)) if isinstance(s, dict) else str(i) for i, s in services.items()}
+    used = {str(s.get("bobbin")) for s in services.values() if isinstance(s, dict) and "bobbin" in s}
     errs.extend(m for names, m in tagged if names is None or names & used)
     home = _config.home_dir(cfg, cli_home)
     sources = out.get("sources") if isinstance(out.get("sources"), dict) else {}
@@ -979,8 +1093,10 @@ def render(cfg: dict, instance: str | None = None) -> str:
 
 # ---- scaffold (bobbin new) ------------------------------------------------------------------------------
 SCAFFOLD_SECRET = "test-secret-bobbin"            # the bobbin kit's default test secret
-WEBHOOK_BOBBIN = "webhook"                        # the built-in bobbin `bobbin new` copies (14.3.2a)
-_WEBHOOK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bobbins", WEBHOOK_BOBBIN)
+WEBHOOK_BOBBIN = "hookspool.webhook"              # the built-in bobbin `bobbin new` copies (14.3.2a)
+_WEBHOOK_DIR = os.path.join(BUILTIN_DIR, name_path(WEBHOOK_BOBBIN))
+# what `bobbin new` writes where only the author knows the answer; the kit's `provider` row reports them as one problem
+PROVIDER_TODO = "TODO"
 _SCAFFOLD_BODY = '{"id":"evt_1","type":"example","note":"made-up test payload"}'
 # example settings per scheme; the scaffold freezes them (with --set values over them) into [source] template
 _SCHEME_EXAMPLES: dict[str, dict[str, Any]] = {
@@ -1055,25 +1171,48 @@ def _scaffold_requests(name: str, frozen: dict[str, Any]) -> tuple[str, str]:
     return request(SCAFFOLD_SECRET), request("wrong-test-secret")
 
 
+def doc_frontmatter(name: str, provider: str, webhook_docs: str) -> str:
+    """The YAML frontmatter README.md, SETUP.md and AGENTS.md start with (the kit's provider row compares it with
+    the manifest's ``[provider]``)."""
+    return f"---\nbobbin: {name}\nprovider: {provider}\nwebhook_docs: {webhook_docs}\n---\n\n"
+
+
 def scaffold(name: str, parent: str, *, code: bool = False, processor: bool = False,
              settings: dict[str, Any] | None = None) -> str:
-    """Write a new bobbin directory ``<parent>/<name>`` and return its path: a copy of the ``webhook`` bobbin with
-    its settings frozen into a fixed ``[source] template`` (``settings`` over the example values), or, with
-    ``code``, a ``source.py`` bobbin. Refuses an invalid name, an invalid setting or an existing directory
-    (``ValueError`` / ``FileExistsError``)."""
-    if not NAME_RE.match(name):
-        raise ValueError(f"bobbin name {name!r} must match {NAME_RE.pattern}")
+    """Write a new bobbin directory ``<parent>/<vendor>/<product>`` and return its path: a copy of the ``webhook``
+    bobbin with its settings frozen into a fixed ``[source] template`` (``settings`` over the example values), or,
+    with ``code``, a ``source.py`` bobbin. The example instance is named after the product. Refuses an invalid name,
+    the reserved ``hookspool.`` namespace, an invalid setting or an existing directory (``ValueError`` /
+    ``FileExistsError``)."""
+    problem = name_problem(name)
+    if problem:
+        raise ValueError(f"bobbin name {problem}")
+    vendor, product = split_name(name)
+    if vendor == RESERVED_VENDOR:
+        raise ValueError(f"bobbin name {name!r}: the {RESERVED_VENDOR}. namespace is reserved for the bobbins shipped"
+                         " with hookspool; name the vendor that runs the service")
     if code and settings:
         raise ValueError("--set freezes template settings; a code bobbin has none")
-    frozen = freeze_settings(name, None if code else settings)
+    inst = product                                  # the example instance: /hooks/<product>
+    frozen = freeze_settings(inst, None if code else settings)
     wm = webhook_manifest()
     wsrc = wm.get("source", {})
     wsecrets = wm.get("secrets", {})
     wouts = wm.get("outputs", {})
-    d = os.path.join(os.path.abspath(parent), name)
-    os.makedirs(d)
+    parent = os.path.abspath(parent)
+    # a parent that is a Python package (hookspool/bobbins/ in a checkout) gets importable directory names and an
+    # empty vendor __init__.py; anywhere else the directories are the name's parts as written
+    package = os.path.isfile(os.path.join(parent, "__init__.py"))
+    vdir = os.path.join(parent, module_part(vendor) if package else vendor)
+    d = os.path.join(vdir, module_part(product) if package else product)
+    if os.path.exists(d):
+        raise FileExistsError(d)
+    new_vendor = not os.path.isdir(vdir)
     os.makedirs(os.path.join(d, "captures"))
-    good, bad = _scaffold_requests(name, frozen)
+    if package and new_vendor:
+        with open(os.path.join(vdir, "__init__.py"), "x", encoding="utf-8"):
+            pass
+    good, bad = _scaffold_requests(inst, frozen)
     # a value only the deployment knows stays a setting, as a fixed template does for Trello (14.3.2a): the
     # example is used for the captures and the kit instance (captures/kit.toml), never frozen into the template
     callback = frozen.pop("callback_url", None) if not code else None
@@ -1091,7 +1230,16 @@ def scaffold(name: str, parent: str, *, code: bool = False, processor: bool = Fa
     outputs = ('[outputs.changed]\ndescription = "TODO: what the processor produces"\n' if processor else
                "".join(f'[outputs.{_key(k)}]\ndescription = "every accepted event"\n' for k in wouts))
     secret_desc = wsecrets.get("secret", {}).get("description", "the signing secret")
+    provider = ('[provider]\n'
+                'vendor = "TODO: the company that runs the service, as it writes its name"\n'
+                'product = "TODO: the product or API whose webhooks this bobbin receives"\n'
+                'homepage = "TODO: https://... the product\'s home page"\n'
+                'webhook_docs = "TODO: https://... the provider\'s developer page for these webhooks"\n'
+                'signature_docs = "TODO: https://... the page that describes the signature or token"\n'
+                + ('api_docs = "TODO: https://... the API the processor calls (remove if it calls none)"\n'
+                   if processor else ""))
     manifest = (f'name = {_val(name)}\nversion = "1"\nsummary = "TODO: one line on what the outside service sends"\n\n'
+                + provider + "\n"
                 + "\n".join(src_lines) + "\n\n"
                 f'[secrets.secret]\ndescription = "TODO: {secret_desc}"\n\n')
     if callback:
@@ -1100,13 +1248,15 @@ def scaffold(name: str, parent: str, *, code: bool = False, processor: bool = Fa
     if processor:
         manifest += '[processor]\nmodule = "processor"\ntimeout_s = 300\nstate = true\n\n'
     manifest += outputs
-    out_line = (f'outputs = {{ changed = "hermes:{name}-changed" }}' if processor else
-                f'outputs = {{ "*" = "hermes:{name}" }}')
-    table = (f'[bobbins.{name}]\nsecrets.secret = {{ file = "/etc/hookspool/secrets/{name}_secret" }}\n{out_line}\n')
+    out_line = (f'outputs = {{ changed = "hermes:{inst}-changed" }}' if processor else
+                f'outputs = {{ "*" = "hermes:{inst}" }}')
+    table = (f'[bobbins.{inst}]\nbobbin = "{name}"\n'
+             f'secrets.secret = {{ file = "/etc/hookspool/secrets/{inst}_secret" }}\n{out_line}\n')
     if callback:
-        table += f'settings = {{ callback_url = "https://<HOOKS_HOST>/hooks/{name}" }}\n'
-    url_note = (f"Proxy: forward `/hooks/{name}` to the intake and keep the query string (the token is in it)"
-                if frozen["scheme"] == "url-token" else f"Proxy: forward `/hooks/{name}` to the intake")
+        table += f'settings = {{ callback_url = "https://<HOOKS_HOST>/hooks/{inst}" }}\n'
+    url_note = (f"Proxy: forward `/hooks/{inst}` to the intake and keep the query string (the token is in it)"
+                if frozen["scheme"] == "url-token" else f"Proxy: forward `/hooks/{inst}` to the intake")
+    front = doc_frontmatter(name, f"{PROVIDER_TODO} {PROVIDER_TODO}", PROVIDER_TODO)
     callback_note = ("\nSet `callback_url` to the exact URL given to the sender (its signature covers it); a delivery"
                      " signed over another URL is refused.\n" if callback else "")
     files = {MANIFEST: manifest,
@@ -1115,23 +1265,23 @@ def scaffold(name: str, parent: str, *, code: bool = False, processor: bool = Fa
                  + good,
              os.path.join("captures", "bad_signature.http"):
                  "# capture: the same request signed with another secret\n# expect: unverified\n" + bad,
-             "SETUP.md": f"# Set up {name}\n\nTODO: what to create at the provider (the webhook and its signing"
+             "SETUP.md": front + f"# Set up {name}\n\nTODO: what to create at the provider (the webhook and its signing"
                          " secret), with a link to the provider's webhook documentation.\n\n"
                          "## Secrets\n\n"
                          f"- `secret`: TODO the signing secret the provider shows. Save it to"
-                         f" `/etc/hookspool/secrets/{name}_secret`, mode 0600, owned by the hookspool user.\n\n"
+                         f" `/etc/hookspool/secrets/{inst}_secret`, mode 0600, owned by the hookspool user.\n\n"
                          "## Config\n\nAdd to `config.toml`, then run `hookspool check` and `hookspool reload`:\n\n"
                          f"```toml\n{table}```\n\n"
                          f"{url_note} (see `deploy/nginx.example.conf`).\n{callback_note}\n"
                          "## Verify\n\nSend a test delivery from the provider, then"
-                         f" `hookspool list --source {name}` shows a batch.\n\n"
+                         f" `hookspool list --source {inst}` shows a batch.\n\n"
                          "## Roll back\n\nDelete the webhook at the provider, remove the table and run"
                          " `hookspool reload`.\n",
-             "AGENTS.md": f"# Set up {name} (for an agent)\n\nThe same procedure as SETUP.md, as steps.\n\n"
+             "AGENTS.md": front + f"# Set up {name} (for an agent)\n\nThe same procedure as SETUP.md, as steps.\n\n"
                           "## Needs from the human\n\n"
                           "- TODO: an account at the provider that may create webhooks\n"
                           f"- the signing secret `secret`, written by the human to"
-                          f" `/etc/hookspool/secrets/{name}_secret` (never pass its value to the agent)\n\n"
+                          f" `/etc/hookspool/secrets/{inst}_secret` (never pass its value to the agent)\n\n"
                           "## Steps\n\n"
                           "1. **Add the config table.** Goal: hookspool accepts the deliveries. Add to"
                           " `config.toml`, then run `hookspool check` and `hookspool reload`:\n\n"
@@ -1140,13 +1290,13 @@ def scaffold(name: str, parent: str, *, code: bool = False, processor: bool = Fa
                           " reload the running intake does not know the table). If `hookspool check` fails: fix"
                           " what it names, then run both again.\n"
                           "2. **Register the webhook at the provider** (`outward`: ask the human first). Goal: the"
-                          f" provider sends to `https://<HOOKS_HOST>/hooks/{name}`. TODO: the provider's API call"
+                          f" provider sends to `https://<HOOKS_HOST>/hooks/{inst}`. TODO: the provider's API call"
                           " or console page.\n"
                           "   Check: the provider shows the webhook as active. If not: report what it shows.\n"
                           "3. **Verify.** Goal: one delivery arrives. Ask the provider for a test delivery, then run"
-                          f" `hookspool list --source {name}`.\n"
+                          f" `hookspool list --source {inst}`.\n"
                           "   Check: a batch is listed. If not: run `hookspool status` and report it.\n",
-             "README.md": f"# {name}\n\nTODO: what the outside service sends and what this bobbin does with it.\n\n"
+             "README.md": front + f"# {name}\n\nTODO: what the outside service sends and what this bobbin does with it.\n\n"
                           "## Setup at the provider\n\nTODO\n\n## Secrets\n\n- `secret`: TODO\n\n"
                           + ("## Settings\n\n- `callback_url`: TODO the exact URL given to the sender (required)\n\n"
                              if callback else "## Settings\n\nNone yet.\n\n") + "## Outputs\n\nTODO\n\n"
