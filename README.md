@@ -1,5 +1,7 @@
 # hookspool
 
+[![CI](https://github.com/jaredzimmerman/hookspool/actions/workflows/ci.yml/badge.svg)](https://github.com/jaredzimmerman/hookspool/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/hookspool)](https://pypi.org/project/hookspool/) [![Python](https://img.shields.io/pypi/pyversions/hookspool)](https://pypi.org/project/hookspool/) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![Docs](https://github.com/jaredzimmerman/hookspool/actions/workflows/docs.yml/badge.svg)](https://jaredzimmerman.github.io/hookspool/)
+
 **Durable, coalescing intake for inbound webhooks.** hookspool sits between your reverse proxy and whatever consumes the
 events, whether that is an agent gateway, a script or an HTTP endpoint. It writes every event to disk before its sender
 gets a 2xx, holds it until the destination accepts it, and turns a burst of events into one wake-up.

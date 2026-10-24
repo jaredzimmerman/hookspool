@@ -2,6 +2,7 @@
 
 ```
 hookspool [--home DIR] [--config FILE] [--json] <command> [options]
+hookspool --version
 ```
 
 Every command is a subcommand of one program, and every service is the same program with a different command. The CLI
@@ -15,6 +16,7 @@ other way round, fails the suite.
 | `--home DIR` | state directory. Default: `$HOOKSPOOL_HOME`, then `[spool] home` in the config, then `/var/lib/hookspool` |
 | `--config FILE` | the config file. Default: `$HOOKSPOOL_CONFIG`, then `<home>/config.toml` |
 | `--json` | machine-readable output for the commands that print a table or a sentence |
+| `--version` | print `hookspool <version>` and exit |
 
 | variable | meaning |
 |---|---|

@@ -1,5 +1,7 @@
-include LICENSE CHANGELOG.md CONTRIBUTING.md AGENTS.md CLAUDE.md
-recursive-include docs *.md
+include LICENSE CHANGELOG.md CONTRIBUTING.md AGENTS.md CLAUDE.md SECURITY.md CODE_OF_CONDUCT.md
+include mkdocs.yml requirements-dev.txt requirements-docs.txt requirements-release.txt ruff.toml
+recursive-include docs *.md *.svg *.gif *.png
+recursive-include docs-site *.py *.html
 recursive-include deploy *.md *.toml *.conf *.service *.py *.sh
 prune deploy/local
 recursive-include examples *.toml

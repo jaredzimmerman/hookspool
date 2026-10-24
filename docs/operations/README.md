@@ -13,6 +13,7 @@ How to run hookspool on a host, keep it healthy and fix what goes wrong. Nothing
 | [Upgrading](upgrading.md) | moving a running install to a new version |
 | [Day-two commands](day-two.md) | the commands you reach for once it is running |
 | [CLI reference](cli.md) | every command, option, environment variable and exit code |
+| [Releasing](releasing.md) | cutting a release: the version, the tag, the GitHub Release and PyPI, and the one-time setup |
 
 The files these pages talk about (systemd units, an nginx example, a complete config and the GitHub redelivery sweep) are in
 [`deploy/`](../../deploy/README.md).

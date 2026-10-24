@@ -495,7 +495,9 @@ def test_relative_links_and_anchors_resolve(path):
 
 ALLOWED_HOSTS = re.compile(
     r"(^|\.)(example\.com|example\.test|example\.invalid|localhost)$|^127\.0\.0\.1$|"
-    r"^(github\.com|docs\.github\.com|www\.standardwebhooks\.com|hairline\.lucasmarkes\.com)$")
+    r"^(github\.com|docs\.github\.com|www\.standardwebhooks\.com|hairline\.lucasmarkes\.com)$|"
+    # the project's own pages: its PyPI entry, its documentation site and the README's badges
+    r"^(pypi\.org|jaredzimmerman\.github\.io|img\.shields\.io)$")
 
 
 def _provider_hosts() -> set[str]:

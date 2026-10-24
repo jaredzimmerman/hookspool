@@ -26,3 +26,10 @@ displays everywhere a README is read. A Markdown file embeds one like this, so t
 
 `tests/test_docs.py` keeps the set honest: no SVG here has a script, an event attribute or a reference to anything outside
 the file, every banner a Markdown page names exists, and each GIF is under 1 MB.
+
+## Social preview
+
+`docs/assets/social-preview.png` (1280 by 640) is the card a link to the project shows in chat and on social sites. The
+docs site sets it as its `og:image` (`docs-site/overrides/main.html`), and the repository uses it as its GitHub social
+preview, which is uploaded by hand in the settings ([Releasing](../../operations/releasing.md#one-time-setup)). It lives
+next to this folder, not in it, because this folder holds the banners only.

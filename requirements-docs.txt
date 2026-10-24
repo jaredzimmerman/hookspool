@@ -1,0 +1,4 @@
+# The documentation site (mkdocs.yml): .github/workflows/docs.yml installs these.
+# Build it locally with: python -m pip install -r requirements-docs.txt && mkdocs serve
+mkdocs==1.6.1
+mkdocs-material==9.7.7
