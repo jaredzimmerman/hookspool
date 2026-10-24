@@ -1,5 +1,5 @@
-"""Google building blocks shared by the ``google.gmail``, ``google.calendar``, ``google.drive``, ``google.meet`` and
-``google.tasks`` bobbins (ARCHITECTURE 14.3.7).
+"""Google building blocks shared by the ``google.gmail``, ``google.calendar``, ``google.drive``, ``google.meet``,
+``google.tasks`` and ``google.contacts`` bobbins (ARCHITECTURE 14.3.7).
 
 Two halves, so that each bobbin stays a thin description of its own service.
 
@@ -20,12 +20,13 @@ refresh, bearer header, timeouts, retries and the ``Retryable`` / ``Permanent`` 
 (``hookspool/net.py``). What is added here is only what Google's APIs mean: Gmail history paging and message
 parsing, Calendar sync-token listing, event insert and delete, free/busy, the Drive change feed (a start
 page token, then changes from a stored page token), the Tasks API (a user's task lists, and one list's tasks modified
-since a time, completed, hidden and deleted included), and a Meet conference record with its participants and their
-sessions (Meet REST v2). Four answers are not failures and become exceptions the
-caller handles: ``HistoryGone`` (Gmail answered 404 to a stale history id), ``SyncGone`` (Calendar answered 410
-to an expired sync token), ``PageTokenGone`` (Drive answered 404 or 410 to a stored page token) and ``TasklistGone``
-(Tasks answered 404 for a list that was just deleted); the first three mean "start again from a fresh bootstrap",
-the last "leave that list out". Everything else that is not 2xx is raised by the client as ``Retryable`` or ``Permanent``.
+since a time, completed, hidden and deleted included), a Meet conference record with its participants and their
+sessions (Meet REST v2), and the People API's sync-token listing of contact resource names. Four answers are not
+failures and become exceptions the caller handles: ``HistoryGone`` (Gmail answered 404 to a stale history id),
+``SyncGone`` (Calendar or the People API answered 410 to an expired sync token), ``PageTokenGone`` (Drive answered 404
+or 410 to a stored page token) and ``TasklistGone`` (Tasks answered 404 for a list that was just deleted); the first
+three mean "start again from a fresh bootstrap", the last "leave that list out". Everything else that is not 2xx is
+raised by the client as ``Retryable`` or ``Permanent``.
 
 Base URLs are parameters, so a deployment (or a test) can point a processor elsewhere.
 """
@@ -39,7 +40,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import quote, unquote
 
-from ..net import Permanent
+from ..net import Permanent, Retryable
 from ..plugin import BadPayload, Request, verify as v
 
 __all__ = ["PUSH_TOKEN_PARAM", "PUSH_TOKEN_HEADER", "PUSH_AUTH_HEADERS", "verify_push", "push_message",
@@ -50,7 +51,7 @@ __all__ = ["PUSH_TOKEN_PARAM", "PUSH_TOKEN_HEADER", "PUSH_AUTH_HEADERS", "verify
            "freebusy", "drive_start_page_token", "drive_changes", "CHANGE_FIELDS",
            "TASKS_API", "TasklistGone", "tasks_lists", "tasks_changes",
            "MEET_API", "MEET_RECORD_RE", "meet_conference", "meet_participants", "meet_sessions", "meet_participant",
-           "meet_attendance"]
+           "meet_attendance", "PEOPLE_API", "PEOPLE_PAGES", "PEOPLE_MAX_PAGE_SIZE", "people_changes"]
 
 # ---- Pub/Sub push (source side) ----------------------------------------------------------------------
 PUSH_TOKEN_PARAM = "token"
@@ -169,7 +170,7 @@ class HistoryGone(Exception):
 
 
 class SyncGone(Exception):
-    """Calendar no longer accepts the stored sync token (HTTP 410): bootstrap again."""
+    """Calendar or the People API no longer accepts the stored sync token (HTTP 410): bootstrap again."""
 
 
 class PageTokenGone(Exception):
@@ -550,3 +551,58 @@ def meet_attendance(client, record: str, *, base: str = MEET_API,
         out.append(meet_participant(p, sessions))
     out.sort(key=lambda x: (x["first_join"] == "", x["first_join"]))
     return out, {"participants": len(out), "lookups": lookups, "truncated": not complete}
+
+
+# ---- People API (contacts) ------------------------------------------------------------------------------
+PEOPLE_API = "https://people.googleapis.com/v1/"
+PEOPLE_MAX_PAGE_SIZE = 1000              # the API's maximum for connections.list and otherContacts.list
+PEOPLE_PAGES = 100                       # pages read in one pass: 100 000 contacts at the maximum page size
+_PEOPLE_NAME_RE = re.compile(r"^(?:people|otherContacts)/[A-Za-z0-9_.~=-]{1,160}$")
+
+
+def people_changes(client, sync_token: str = "", *, other: bool = False, base: str = PEOPLE_API,
+                   page_size: int = PEOPLE_MAX_PAGE_SIZE, max_pages: int = PEOPLE_PAGES) -> tuple[list[str], list[str], str]:
+    """(resource names that exist or changed, resource names deleted, the ``nextSyncToken``) for the account's
+    contacts (``people.connections.list``) or, with ``other``, its "Other contacts" (``otherContacts.list``).
+
+    With no ``sync_token`` this is a full read and the second list is empty. With one, only what changed since the
+    token comes back, and a deleted contact is a person whose ``metadata.deleted`` is true. The request asks for
+    nothing but ``metadata`` (``personFields`` / ``readMask``) and a ``fields`` mask of the resource name and the
+    deleted flag, so no name, address or number is sent back. Raises ``SyncGone`` when Google rejects the token
+    (HTTP 410, the documented ``EXPIRED_SYNC_TOKEN``; a 400 on a request that carried a token is treated the same
+    way, because the reference names the reason and not the status), ``Retryable`` when the last page has no new
+    token, and ``Permanent`` when ``max_pages`` pages do not reach the end."""
+    field = "otherContacts" if other else "connections"
+    url = base.rstrip("/") + "/" + ("otherContacts" if other else "people/me/connections")
+    params: dict[str, Any] = {"requestSyncToken": "true", "pageSize": int(page_size),
+                              "fields": f"{field}(resourceName,metadata/deleted),nextPageToken,nextSyncToken"}
+    params["readMask" if other else "personFields"] = "metadata"
+    if sync_token:
+        params["syncToken"] = sync_token
+    changed: dict[str, None] = {}
+    deleted: dict[str, None] = {}
+    label = "people.other_contacts" if other else "people.connections"
+    page = ""
+    for _ in range(max_pages):
+        p = dict(params)
+        if page:
+            p["pageToken"] = page
+        d, status = _status_of(lambda: client.get(url, params=p, label=label))
+        if status in (410, 400) and sync_token:
+            raise SyncGone()
+        if status is not None:
+            raise d
+        for person in (d.get(field) or []) if isinstance(d, dict) else []:
+            name = person.get("resourceName") if isinstance(person, dict) else None
+            if not isinstance(name, str) or not _PEOPLE_NAME_RE.match(name):
+                continue
+            gone = isinstance(person.get("metadata"), dict) and person["metadata"].get("deleted") is True
+            (deleted if gone else changed)[name] = None
+            (changed if gone else deleted).pop(name, None)
+        page = str(d.get("nextPageToken") or "") if isinstance(d, dict) else ""
+        if not page:
+            token = str(d.get("nextSyncToken") or "") if isinstance(d, dict) else ""
+            if not token:
+                raise Retryable("people listing ended without a sync token")
+            return list(changed), list(deleted), token
+    raise Permanent("people listing is longer than the page cap")

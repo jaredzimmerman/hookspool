@@ -1,0 +1,16 @@
+{
+  "description": "the first poll reads the list once, keeps its sync token and reports nothing",
+  "now": 1800000000,
+  "items": 0,
+  "http": [
+    {
+      "method": "GET",
+      "url": "https://people.googleapis.com/v1/people/me/connections",
+      "status": 200,
+      "json": {
+        "connections": [{"resourceName": "people/c1000000000000000001"}, {"resourceName": "people/c1000000000000000002"}],
+        "nextSyncToken": "test-sync-token-1"
+      }
+    }
+  ]
+}
