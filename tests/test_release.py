@@ -245,7 +245,7 @@ def test_readme_badge_line_sits_under_the_title():
     assert lines[0] == "# hookspool" and lines[1] == ""
     badges = lines[2]
     for want in ("actions/workflows/ci.yml/badge.svg", "img.shields.io/pypi/v/hookspool",
-                 "img.shields.io/pypi/pyversions/hookspool", "license-MIT", "jaredzimmerman.github.io/hookspool/"):
+                 "img.shields.io/python/required-version-toml", "license-MIT", "jaredzimmerman.github.io/hookspool/"):
         assert want in badges, want
     assert lines[3] == ""
 
