@@ -10,19 +10,19 @@ The changes below will ship as 0.2.0.
 
 ### Added
 
-- The `webhook` bobbin: any web service that sends a signed or tokened JSON POST, configured entirely by settings
+- The `hookspool.webhook` bobbin: any web service that sends a signed or tokened JSON POST, configured entirely by settings
   (`[source] template = "settings"`; five schemes). One rule now maps a bobbin setting named after a template key to that
   key's value, for a fixed template (Trello's `callback_url`) and for `"settings"` alike; settings may be a `table`, and an
-  instance of a `"settings"` bobbin may map any event type next to `"*"`. `hookspool bobbin new <name>` now copies the
-  `webhook` shape and freezes its settings into a fixed template (`--set NAME=VALUE`, `--code` for a `source.py`). An
+  instance of a `"settings"` bobbin may map any event type next to `"*"`. `hookspool bobbin new <vendor>.<product>` now
+  copies the `hookspool.webhook` shape and freezes its settings into a fixed template (`--set NAME=VALUE`, `--code` for a `source.py`). An
   empty setting value is unset; `check` reports an error when outputs are mapped per event type without
   `attrs.event_type`; a scaffolded `hmac-sha1-base64-url` bobbin keeps `callback_url` as a required setting.
-- The `drive` bobbin (`hookspool/bobbins/drive/`): Google Drive push (a watch channel on the change feed) with a processor
+- The `google.drive` bobbin (`hookspool/bobbins/google/drive/`): Google Drive push (a watch channel on the change feed) with a processor
   that reads `changes.list` from a stored page token and reports `file-changed`, `file-created` and `file-shared` items
   (file id, name, MIME type, modified time, actor, link; never contents). It drops the configured accounts' own edits,
   files in the trash and listed MIME types, re-bootstraps quietly when Drive rejects the page token, and replays a retried
   batch from the journal. The Drive change-feed calls live in `hookspool.providers.google` next to the channel helpers the
-  `gcal` bobbin also uses.
+  `google.calendar` bobbin also uses.
 - `hookspool bobbin check <dir>`: the bobbin conformance kit (`hookspool.testing.bobbinkit`) on one directory, printed as a
   scorecard (`--report text|md|json`, `--strict`, `--base`): manifest and one service per bobbin, files, TODOs, the 14.3.7
   core-only rules, SETUP.md / AGENTS.md, captures (including a scan for secrets and personal data), the source kit per
@@ -62,14 +62,14 @@ The changes below will ship as 0.2.0.
 - `hookspool.verify.KeyCache` and `jwks_fetcher`: a shared cache of a sender's verification keys (TTL, negative TTL, one
   fetch per cooldown, stale keys served while the sender is unreachable).
 
-- The `gmail` and `gcal` bobbins (`hookspool/bobbins/`): the Gmail and Calendar push sources with their delta
+- The `google.gmail` and `google.calendar` bobbins (`hookspool/bobbins/google/`): the Gmail and Calendar push sources with their delta
   logic as processors, settings instead of environment variables, one credential secret per Google account, a
   `hooks.classify` hook for private mail hand-offs, a `hooks.travel` hook for travel blocks, and the outputs
   `scheduling`, `agent-mail`, `agent-schedule`, `mailbox-changed` and `conflict`, `brief`, `changed` (the last replaces the
   script that was started on the side). `hookspool/providers/google.py` holds what the Google bobbins share: the push-channel
   check (token, `sync` handshake, header payload) and the Gmail, Calendar and free/busy calls on `ctx.oauth`.
 - A bobbin secret may be marked `required = false`, so an instance can leave it out.
-- The `zoom` and `plaid` bobbins (`hookspool/bobbins/`): the Zoom event subscription and the Plaid webhook sources, moved
+- The `zoom.meetings` and `plaid.items` bobbins (`hookspool/bobbins/zoom/meetings/`, `hookspool/bobbins/plaid/items/`): the Zoom event subscription and the Plaid webhook sources, moved
   from `hookspool/sources/` with their captures (`hookspool.sources.zoom` and `.plaid` still import and are the bobbins' own
   modules). Both now call core only (ARCHITECTURE 14.3.7): Zoom's HMAC and URL validation answer through `hookspool.verify`,
   and Plaid's key fetch and cache are `verify.key_fetcher` and `verify.shared_key_cache`, called through `hookspool/net.py`, with no
@@ -89,6 +89,24 @@ The changes below will ship as 0.2.0.
 
 ### Changed
 
+- Namespaced bobbin names: a bobbin is `<vendor>.<product>` (the company that runs the service, then the product or API
+  whose webhooks it receives), in `hookspool/bobbins/<vendor>/<product>/` (a vendor directory holds only an empty
+  `__init__.py`; shared code stays in core, e.g. `hookspool/providers/google.py`) and imported as
+  `hookspool.bobbins.<vendor>.<product>`. The built-ins are `google.gmail`, `google.calendar`, `google.drive`,
+  `github.repo`, `atlassian.trello`, `kaneo.projects`, `zoom.meetings`, `plaid.items` and `hookspool.webhook`; `hookspool.`
+  is reserved for the generic bobbins shipped with core, and a name without exactly one dot is refused by `hookspool check`
+  and `hookspool bobbin check`. No aliases for the short names. Instances stay plain identifiers (`/hooks/<instance>`) and
+  must name their bobbin (`bobbin = "google.gmail"`); `check` suggests it for an instance named after the product and
+  refuses a dotted `[bobbins.<vendor>.<product>]` header with the form to write. A processor's state defaults to
+  `<home>/bobbins/<instance>`. `hookspool bobbin new <vendor>.<product>` writes the nested directories, a bobbin's own test
+  file is `tests/bobbins/test_<vendor>_<product>.py`, and the labelling job and the kit's `scope` count a new vendor's empty
+  `__init__.py` as part of the bobbin.
+- Every bobbin manifest has a `[provider]` table (`vendor`, `product`, `homepage`, `webhook_docs`, `signature_docs` when
+  it declares a secret, `api_docs` when its processor calls the provider's API; https pages of the provider itself), and
+  its README.md, SETUP.md and AGENTS.md open with frontmatter that repeats it (`bobbin`, `provider`, `webhook_docs`). The
+  scorecard has two new required rows, `name` and `provider`, and an advisory `provider-links` row that fetches each page
+  with `--online` (CI passes it; it never blocks a merge). The pull request template's box for the provider's
+  documentation link is gone: the `provider` row checks it.
 - A `script` exit 65 (a processor's `Permanent`) dead-letters the batch on the first attempt; every other non-zero exit is
   still retried.
 - Spool schema 2 (migration `0002_unwrap.sql` adds the two attempt columns). Stop the dispatcher and run `hookspool migrate`
@@ -121,12 +139,12 @@ The changes below will ship as 0.2.0.
 
 Moving a 0.1 deployment across is in [Upgrading to 0.2](docs/operations/upgrading.md#upgrading-to-02-bobbins).
 
-- `deploy/scripts/gmail_delta.py` and `gcal_delta.py`: they are the `gmail` and `gcal` bobbins. A config that still runs
+- `deploy/scripts/gmail_delta.py` and `gcal_delta.py`: they are the `google.gmail` and `google.calendar` bobbins. A config that still runs
   them loads, but every batch fails at spawn; the upgrade page maps each old variable to its setting.
 - The stand-alone copy mode of `deploy/scripts/hookspool_batch.py` (it re-exports `hookspool.processor`).
 - The default `action` of `hookspool.sources.gmail` and `.gcal`; they still import, and an instance's `outputs` choose
   the destination. Their captures moved to the bobbins' `captures/`.
-- The config templates in `examples/sources/` (now the `github`, `trello` and `kaneo` bobbins; the files are pointers),
+- The config templates in `examples/sources/` (now the `github.repo`, `atlassian.trello` and `kaneo.projects` bobbins; the files are pointers),
   and the contributor path built on them (`tests/captures/<name>/`, `tests/test_sources_template.py --write`). A new
   bobbin starts from `hookspool bobbin new` and is checked by `hookspool bobbin check`.
 

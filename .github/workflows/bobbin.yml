@@ -34,14 +34,15 @@ jobs:
       - name: Install
         run: python -m pip install -r requirements-dev.txt
       - name: Bobbin scorecards
-        # finds the changed bobbins, runs `hookspool bobbin check <dir> --report json` on each, writes the
+        # finds the changed bobbins, runs `hookspool bobbin check <dir> --report json --online` on each (--online:
+        # the advisory provider-links row fetches each bobbin's [provider] pages; it never fails the job), writes the
         # scorecards to the job summary and to $RUNNER_TEMP/bobbin-reports (outside the checkout, so the
         # reports are never untracked files that a later bobbin's scope check would count as a core change),
         # and exits 1 if a required check fails
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: python .github/scripts/plugin_ci.py bobbins --base "$BASE_SHA" --pr "$PR_NUMBER" --report-dir "$RUNNER_TEMP/bobbin-reports"
+        run: python .github/scripts/plugin_ci.py bobbins --online --base "$BASE_SHA" --pr "$PR_NUMBER" --report-dir "$RUNNER_TEMP/bobbin-reports"
       - name: Upload the scorecards
         if: always()
         uses: actions/upload-artifact@v4

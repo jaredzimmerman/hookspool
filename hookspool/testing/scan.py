@@ -28,7 +28,7 @@ SECRET_PATTERNS = {
 PLACEHOLDER_VALUE = re.compile(r"(?i)test|example|placeholder|dummy|sentinel|fake")
 # A capture is a request signed with test keys; one from a JWT-signing sender carries a JWT by design.
 JWT_OK_UNDER = ("tests/captures/",)
-_JWT_OK_RE = re.compile(r"(?:^|/)bobbins/[^/]+/captures/")
+_JWT_OK_RE = re.compile(r"(?:^|/)bobbins/(?:[^/]+/){1,2}captures/")      # bobbins/<vendor>/<product>/captures/
 
 IPV4_RE = re.compile(r"(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![\d.])")
 DOC_NETS = ((192, 0, 2), (198, 51, 100), (203, 0, 113))

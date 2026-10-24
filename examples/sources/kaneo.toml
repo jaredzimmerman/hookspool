@@ -1,2 +1,2 @@
-# Moved: the Kaneo webhook is the built-in bobbin hookspool/bobbins/kaneo (manifest, captures, README,
-# SETUP.md, AGENTS.md). This file stays so old links work. Use `hookspool bobbin show kaneo`.
+# Moved: the Kaneo webhook is the built-in bobbin hookspool/bobbins/kaneo/projects (manifest, captures, README,
+# SETUP.md, AGENTS.md). This file stays so old links work. Use `hookspool bobbin show kaneo.projects`.

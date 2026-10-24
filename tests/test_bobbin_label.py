@@ -24,8 +24,8 @@ SHA = "a" * 40
 REPO = "owner/hookspool"
 
 
-def card(name="acme", ok=True, scope="bobbin-only", detail="fine", **over):
-    doc = {"schema": L.SCHEMA, "bobbin": name, "dir": f"hookspool/bobbins/{name}", "ok": ok, "strict": False,
+def card(name="acme.events", ok=True, scope="bobbin-only", detail="fine", **over):
+    doc = {"schema": L.SCHEMA, "bobbin": name, "dir": f"hookspool/bobbins/{name.replace('.', '/')}", "ok": ok, "strict": False,
            "scope": scope, "summary": f"bobbin check {name}: {'PASS' if ok else 'FAIL'}",
            "checks": [{"name": "manifest", "required": True, "result": "pass", "detail": detail, "fix": "",
                        "findings": []},
@@ -44,8 +44,8 @@ def artifact(tmp_path, cards, pr=7):
     return str(d)
 
 
-ACME_PR = ["hookspool/bobbins/acme/bobbin.toml", "hookspool/bobbins/acme/captures/event.http",
-           "hookspool/bobbins/acme/README.md", "tests/bobbins/test_acme.py"]
+ACME_PR = ["hookspool/bobbins/acme/events/bobbin.toml", "hookspool/bobbins/acme/events/captures/event.http",
+           "hookspool/bobbins/acme/events/README.md", "tests/bobbins/test_acme_events.py"]
 
 
 class FakeApi:
@@ -82,14 +82,14 @@ def test_labels_and_creates_one_comment(tmp_path):
     label_body = next(b for m, p, b in api.calls if p.endswith("/labels"))
     assert label_body == {"labels": ["bobbin-only"]}
     body = next(b for m, p, b in api.calls if p.endswith("/comments") and m == "POST")["body"]
-    assert body.startswith(L.MARKER) and "### `acme`: PASS" in body and "| manifest | pass | fine |" in body
+    assert body.startswith(L.MARKER) and "### `acme.events`: PASS" in body and "| manifest | pass | fine |" in body
 
 
 def test_touches_core_wins_and_an_existing_comment_is_updated(tmp_path):
     mine = {"id": 99, "body": L.MARKER + "\nold", "user": {"type": "Bot"}}
     forged = {"id": 5, "body": L.MARKER, "user": {"type": "User"}}         # a person pasting the marker
-    api = FakeApi(comments=[forged, mine], files=ACME_PR + ["hookspool/bobbins/other/bobbin.toml"])
-    cards = [card("acme"), card("other", scope="touches-core")]
+    api = FakeApi(comments=[forged, mine], files=ACME_PR + ["hookspool/bobbins/other/thing/bobbin.toml"])
+    cards = [card("acme.events"), card("other.thing", scope="touches-core")]
     assert L.main(["--reports", artifact(tmp_path, cards), "--repo", REPO, "--head-sha", SHA], api=api) == 0
     assert ("PATCH", f"/repos/{REPO}/issues/comments/99") in api.writes()
     assert not any(p.endswith("/issues/7/comments") and m == "POST" for m, p in api.writes())
@@ -104,7 +104,8 @@ def test_refuses_when_the_pull_request_head_is_not_the_runs(tmp_path, capsys):
 
 
 @pytest.mark.parametrize("bad", [
-    {"schema": "other"}, {"bobbin": "Bad Name"}, {"bobbin": "a" * 41}, {"scope": "admin"}, {"ok": "yes"},
+    {"schema": "other"}, {"bobbin": "Bad Name"}, {"bobbin": "a" * 41 + ".b"}, {"bobbin": "acme"}, {"bobbin": "a.b.c"},
+    {"scope": "admin"}, {"ok": "yes"},
     {"checks": [{"name": "x; rm", "result": "pass", "required": True}]},
     {"checks": [{"name": "manifest", "result": "maybe", "required": True}]},
 ])
@@ -141,11 +142,11 @@ def test_a_bobbin_without_a_scorecard_is_named_instead_of_no_bobbin(tmp_path):
     api = FakeApi(comments=[mine])
     d = tmp_path / "reports"
     d.mkdir()
-    (d / "meta.json").write_text(json.dumps({"pr": 7, "bobbins": ["acme", "bad name", 3]}))   # the child died: no card
+    (d / "meta.json").write_text(json.dumps({"pr": 7, "bobbins": ["acme.events", "bad name", "acme", 3]}))   # the child died: no card
     assert L.main(["--reports", str(d), "--repo", REPO, "--head-sha", SHA], api=api) == 0
     body = next(b["body"] for m, p, b in api.calls if m == "PATCH" and p.endswith("/comments/99"))
-    assert "`acme`" in body and "no scorecard was produced" in body and "changes no bobbin" not in body
-    assert "bad name" not in body
+    assert "`acme.events`" in body and "no scorecard was produced" in body and "changes no bobbin" not in body
+    assert "bad name" not in body and "`acme`" not in body                         # an unnamespaced name is refused
     deleted = {p.rsplit("/", 1)[1] for m, p in api.writes() if m == "DELETE"}
     assert deleted == {"bobbin-only", "touches-core"}
     assert not any(m == "POST" for m, _p in api.writes())
@@ -153,11 +154,11 @@ def test_a_bobbin_without_a_scorecard_is_named_instead_of_no_bobbin(tmp_path):
 
 def test_a_dead_check_next_to_a_surviving_card_is_named_and_sets_no_label(tmp_path):
     api = FakeApi()
-    d = artifact(tmp_path, [card("acme")])
-    (tmp_path / "reports" / "meta.json").write_text(json.dumps({"pr": 7, "bobbins": ["acme", "gone"]}))
+    d = artifact(tmp_path, [card("acme.events")])
+    (tmp_path / "reports" / "meta.json").write_text(json.dumps({"pr": 7, "bobbins": ["acme.events", "acme.gone"]}))
     assert L.main(["--reports", d, "--repo", REPO, "--head-sha", SHA], api=api) == 0
     body = next(b for m, p, b in api.calls if p.endswith("/comments") and m == "POST")["body"]
-    assert "### `acme`: PASS" in body and "No scorecard for `gone`" in body and "No label until" in body
+    assert "### `acme.events`: PASS" in body and "No scorecard for `acme.gone`" in body and "No label until" in body
     assert "Label:" not in body
     assert not any(p.endswith("/labels") and m == "POST" for m, p in api.writes())
     deleted = {p.rsplit("/", 1)[1] for m, p in api.writes() if m == "DELETE"}
@@ -206,7 +207,7 @@ def test_a_scorecard_without_a_scope_cannot_confirm_bobbin_only(tmp_path):
 
 
 def test_every_page_of_the_file_list_is_read(tmp_path):
-    files = [f"hookspool/bobbins/acme/captures/c{i}.http" for i in range(100)] + ["hookspool/store.py"]
+    files = [f"hookspool/bobbins/acme/events/captures/c{i}.http" for i in range(100)] + ["hookspool/store.py"]
     api = FakeApi(files=files)
     assert L.main(["--reports", artifact(tmp_path, [card()]), "--repo", REPO, "--head-sha", SHA], api=api) == 0
     pages = [p for m, p, _ in api.calls if "/files?" in p]
@@ -215,14 +216,14 @@ def test_every_page_of_the_file_list_is_read(tmp_path):
 
 
 def test_a_file_list_at_githubs_limit_is_touches_core(tmp_path):
-    api = FakeApi(files=[f"hookspool/bobbins/acme/captures/c{i}.http" for i in range(3000)])
+    api = FakeApi(files=[f"hookspool/bobbins/acme/events/captures/c{i}.http" for i in range(3000)])
     assert L.main(["--reports", artifact(tmp_path, [card()]), "--repo", REPO, "--head-sha", SHA], api=api) == 0
     assert len([p for m, p, _ in api.calls if "/files?" in p]) == L.MAX_FILE_PAGES
     assert label_of(api) == "touches-core" and "only the first 3000 files" in comment_of(api)
 
 
 def test_a_rename_out_of_core_counts_its_old_name(tmp_path):
-    moved = {"filename": "hookspool/bobbins/acme/helper.py", "previous_filename": "hookspool/net.py",
+    moved = {"filename": "hookspool/bobbins/acme/events/helper.py", "previous_filename": "hookspool/net.py",
              "status": "renamed"}
     api = FakeApi(files=ACME_PR + [moved])
     assert L.main(["--reports", artifact(tmp_path, [card()]), "--repo", REPO, "--head-sha", SHA], api=api) == 0
@@ -237,13 +238,19 @@ def test_a_malformed_file_list_is_refused(tmp_path):
 
 @pytest.mark.parametrize("files,scope", [
     (ACME_PR, "bobbin-only"),
-    (["tests/bobbins/test_acme.py"], "bobbin-only"),
-    (["hookspool/bobbins/web-hook/bobbin.toml", "tests/bobbins/test_web_hook.py"], "bobbin-only"),
-    (["hookspool/bobbins/acme/bobbin.toml", "tests/bobbins/test_other.py"], "touches-core"),
-    (["hookspool/bobbins/acme/bobbin.toml", "hookspool/bobbins/other/bobbin.toml"], "touches-core"),
+    (["tests/bobbins/test_acme_events.py"], "bobbin-only"),
+    (["hookspool/bobbins/web-co/web-hook/bobbin.toml", "tests/bobbins/test_web_co_web_hook.py"], "bobbin-only"),
+    (["hookspool/bobbins/web_co/web_hook/bobbin.toml", "tests/bobbins/test_web_co_web_hook.py"], "bobbin-only"),
+    (ACME_PR + ["hookspool/bobbins/acme/__init__.py"], "bobbin-only"),          # a new vendor's empty package file
+    (["hookspool/bobbins/acme/__init__.py"], "touches-core"),                    # no bobbin: a change of its own
+    (ACME_PR + ["hookspool/bobbins/other/__init__.py"], "touches-core"),         # another vendor's
+    (["hookspool/bobbins/acme/bobbin.toml"], "touches-core"),                    # not <vendor>/<product>/
+    (["hookspool/bobbins/acme/events/x.py", "hookspool/bobbins/acme/other/y.py"], "touches-core"),   # siblings
+    (["hookspool/bobbins/acme/events/bobbin.toml", "tests/bobbins/test_other_thing.py"], "touches-core"),
+    (["hookspool/bobbins/acme/events/bobbin.toml", "hookspool/bobbins/other/thing/bobbin.toml"], "touches-core"),
     (["hookspool/bobbins/__init__.py"], "touches-core"),
-    (["hookspool/bobbins/acme/bobbin.toml", "README.md"], "touches-core"),
-    (["hookspool/bobbins/acme/bobbin.toml", "CHANGELOG.md"], "touches-core"),
+    (["hookspool/bobbins/acme/events/bobbin.toml", "README.md"], "touches-core"),
+    (["hookspool/bobbins/acme/events/bobbin.toml", "CHANGELOG.md"], "touches-core"),
     (["contrib/acme/bobbin.toml"], "touches-core"),
     ([], "touches-core"),
     (None, "touches-core"),
@@ -253,15 +260,17 @@ def test_scope_of_files(files, scope):
 
 
 @pytest.mark.parametrize("files", [
-    ACME_PR, ["tests/bobbins/test_acme.py"], ["hookspool/bobbins/acme/x.py", "README.md"],
-    ["hookspool/bobbins/acme/x.py", "CHANGELOG.md"], ["hookspool/bobbins/acme/x.py", "hookspool/bobbins/other/y.py"],
-    ["hookspool/bobbins/acme/x.py", "tests/bobbins/test_other.py"], ["docs/bobbins/README.md"],
+    ACME_PR, ["tests/bobbins/test_acme_events.py"], ["hookspool/bobbins/acme/events/x.py", "README.md"],
+    ["hookspool/bobbins/acme/events/x.py", "CHANGELOG.md"], ["hookspool/bobbins/acme/events/x.py", "hookspool/bobbins/other/thing/y.py"],
+    ["hookspool/bobbins/acme/events/x.py", "tests/bobbins/test_other_thing.py"], ["docs/bobbins/README.md"],
+    ACME_PR + ["hookspool/bobbins/acme/__init__.py"], ACME_PR + ["hookspool/bobbins/other/__init__.py"],
 ])
 def test_the_label_rule_is_the_kits_scope_rule(files):
     """One rule in two places: the label job (trusted, GitHub's list) and the kit's advisory ``scope`` check (the
     checkout's list) agree on every built-in bobbin's pull request."""
     from hookspool.testing import bobbinkit
-    outside = bobbinkit.outside_bobbin(files, "hookspool/bobbins/acme/", "tests/bobbins/test_acme.py")
+    outside = bobbinkit.outside_bobbin(files, "hookspool/bobbins/acme/events/", "tests/bobbins/test_acme_events.py",
+                                       "hookspool/bobbins/acme/__init__.py")
     assert (L.scope_of_files(files) == "bobbin-only") == (not outside), outside
 
 

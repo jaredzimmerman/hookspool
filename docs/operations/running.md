@@ -22,13 +22,13 @@ Order matters only where noted. Nothing here touches the gateway.
    already has where the provider keeps one (a GitHub hook secret, a Zoom Secret Token): then rolling a sender back needs
    no secret change. `hookspool check` warns about files readable by group or other. Env refs (`{ env = "…" }`) do not rotate
    without a restart; prefer `file` or `env_file`.
-4. **Bobbins and scripts.** Gmail, Calendar and Drive are the built-in `gmail`, `gcal` and `drive` bobbins: nothing to copy.
-   Each instance (`[bobbins.gmail]`, `[bobbins.gcal]` in the config example) keeps its state in
-   `<home>/services/<instance>`, which the unit already allows; a `state_dir` you set outside the home goes in
+4. **Bobbins and scripts.** Gmail, Calendar and Drive are the built-in `google.gmail`, `google.calendar` and `google.drive` bobbins: nothing to copy.
+   Each instance (`[bobbins.gmail]`, `[bobbins.calendar]` in the config example) keeps its state in
+   `<home>/bobbins/<instance>`, which the unit already allows; a `state_dir` you set outside the home goes in
    `ReadWritePaths` and must be private (mode 0700: it holds OAuth tokens in the clear). Each bobbin's
    `SETUP.md` lists the provider-side steps and the secrets (the OAuth credential files). Copy
    `deploy/sweeps/github_redeliver.py` to `/opt/hookspool/sweeps/` for the GitHub redelivery sweep ([Sweeps](sweeps.md)). A
-   `script:` destination of your own (for the gcal `changed` output) is written like any other; to keep a
+   `script:` destination of your own (for the `google.calendar` `changed` output) is written like any other; to keep a
    journal in it, import `deploy/scripts/hookspool_batch.py` ([`deploy/scripts/README.md`](../../deploy/scripts/README.md)).
 5. **Config.** Copy `config.example.toml` to `/var/lib/hookspool/config.toml`, replace every placeholder, then:
    ```
@@ -64,7 +64,7 @@ Order matters only where noted. Nothing here touches the gateway.
 ## Rollout order and rollback, one source at a time
 
 Leave a source's `expect_every_s` at `0` until its sender points at hookspool, then set the real value; a fresh
-install otherwise reports `gmail silent` and `gcal silent` (and alerts) for senders that were never moved.
+install otherwise reports `gmail silent` and `calendar silent` (and alerts) for senders that were never moved.
 
 Cut over one sender at a time. A source is "live" when the **provider-side URL** points at hookspool; the old
 path (gateway or bridge) stays running and untouched until the new one has run clean for a few days and its
@@ -76,10 +76,10 @@ and delivers it, so a rollback never strands events.
 | 0. install | [Install](#install), no sender pointed at it | `hookspool status` ok; a [drill](drills.md) | `systemctl disable --now` both units; delete nothing |
 | 1. GitHub | set the hook's payload URL to `https://<host>/github/ci` (CI) and `/github/prs` (PRs), same secret; narrow the hook's event list in GitHub, because the route's `events` filter on the Hermes side is gone; install the redelivery sweep | GitHub's "Redeliver" on a recent delivery shows 200 `queued`; `hookspool list --source github`; the agent wakes once for a burst | set the payload URL back; restore the Hermes `events` filter |
 | 2. Plaid | set the item webhook URL (`/item/webhook/update`, or the Link token's `webhook`) to `https://<host>/hooks/plaid`; keep the daily sync | the first real webhook from a production item is `queued` (`hookspool list --source plaid`); the 401 log line names no key. The example has `env = "production"`, so a sandbox `fire_webhook` is rejected by design (it is signed with sandbox keys): to rehearse with a sandbox item, run a scratch copy of the config with `env = "sandbox"` and put it back | set the URL back |
-| 3. Gmail | change the Pub/Sub push subscription's endpoint to `https://<host>/hooks/gmail?token=<push token>`; the watch itself is unchanged | `hookspool list --source gmail`; `script:gmail` batches go `delivered`, state advances under `<home>/services/gmail` | set the endpoint back; the old delta script's state file is untouched unless the bobbin's `state_dir` points at its directory (it does not by default) |
-| 4. Calendar | re-create the watch channel with `address = https://<host>/hooks/gcal` and the channel token (a channel's address cannot be edited); stop the old channel after the first push arrives | a change shows as one `gcal` batch per calendar after the span; `sync` pings are acknowledged and not queued | re-create the channel on the old address |
+| 3. Gmail | change the Pub/Sub push subscription's endpoint to `https://<host>/hooks/gmail?token=<push token>`; the watch itself is unchanged | `hookspool list --source gmail`; `script:gmail` batches go `delivered`, state advances under `<home>/bobbins/gmail` | set the endpoint back; the old delta script's state file is untouched unless the bobbin's `state_dir` points at its directory (it does not by default) |
+| 4. Calendar | re-create the watch channel with `address = https://<host>/hooks/calendar` and the channel token (a channel's address cannot be edited); stop the old channel after the first push arrives | a change shows as one `calendar` batch per calendar after the span; `sync` pings are acknowledged and not queued | re-create the channel on the old address |
 | 5. Trello | register a new webhook whose `callbackURL` equals the source's `callback_url` byte for byte, then delete the old one | Trello's unsigned HEAD answered 200; an action on the board is `queued` | delete the new webhook, keep the old one |
-| 6. Zoom | edit the event subscription's endpoint URL to `https://<host>/hooks/zoom` and press Validate | Validate succeeds only if the secret is right (an unsigned or mis-signed validation is a 401 by design); a test meeting event is `queued` | set the endpoint back |
+| 6. Zoom | edit the event subscription's endpoint URL to `https://<host>/hooks/meetings` and press Validate | Validate succeeds only if the secret is right (an unsigned or mis-signed validation is a 401 by design); a test meeting event is `queued` | set the endpoint back |
 | 7. retire | after a few clean days: stop and disable the old bridge for that source; remove the poll or reduce it to its [sweep](sweeps.md) | `hookspool status` shows the source's `last_event_age_s` moving | re-enable the bridge and repoint the sender |
 
 Per-step notes:

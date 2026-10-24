@@ -1,0 +1,27 @@
+name = "kaneo.projects"
+version = "1"
+summary = "Kaneo generic webhook: project and task events, HMAC-SHA256 of the JSON body in X-Kaneo-Signature"
+
+[provider]
+vendor = "Kaneo"
+product = "Project webhooks"
+homepage = "https://kaneo.app"
+webhook_docs = "https://kaneo.app/docs/core/integrations/outgoing-webhooks"
+signature_docs = "https://kaneo.app/docs/core/integrations/outgoing-webhooks#signature-verification"
+
+[source]
+span = "mail"
+
+[source.template]
+scheme = "hmac-sha256-hex"
+header = "X-Kaneo-Signature"
+key = "project.id"
+dedup = "body_sha256"
+event_type = "event"
+attrs = { event = "event", project = "project.id" }
+
+[secrets.secret]
+description = "the secret set on the Kaneo generic webhook integration"
+
+[outputs."*"]
+description = "every accepted Kaneo event (the event name is in attrs)"

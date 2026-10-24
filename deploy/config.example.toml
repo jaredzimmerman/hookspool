@@ -60,29 +60,29 @@ immediate = { quiet_s = 0, max_s = 0 }     # meetings, security
 # `hookspool bobbin expand` prints the ordinary [sources.*] tables they become.
 # ---------------------------------------------------------------------------------------------
 
-# GitHub, as the `github` bobbin (hookspool/bobbins/github/README.md). The path chooses the route: the proxy
+# GitHub, as the `github.repo` bobbin (hookspool/bobbins/github/repo/README.md). The path chooses the route: the proxy
 # sets X-Hookspool-Route to "ci" or "prs" and the routes below match it; a request that names no route goes
 # to the "*" output. GitHub does not retry a failed delivery: the sweep in docs/operations/sweeps.md redelivers.
 [bobbins.github]
-bobbin = "github"
+bobbin = "github.repo"
 secrets.secret = { file = "/etc/hookspool/secrets/github" }
 outputs = { "*" = "hermes:github-prs" }
 
-# Plaid, as the `plaid` bobbin (hookspool/bobbins/plaid/README.md): ES256 JWT verified against Plaid's published
+# Plaid, as the `plaid.items` bobbin (hookspool/bobbins/plaid/items/README.md): ES256 JWT verified against Plaid's published
 # keys. The client id and secret are used only to fetch those keys. Plaid retries for hours.
 [bobbins.plaid]
-bobbin = "plaid"
+bobbin = "plaid.items"
 settings = { env = "production" }      # or "sandbox" / "development"
 secrets.client_id = { env_file = "/etc/hookspool/plaid.env", key = "PLAID_CLIENT_ID" }
 secrets.secret = { env_file = "/etc/hookspool/plaid.env", key = "PLAID_SECRET" }
 outputs = { "*" = "hermes:plaid" }
 
-# Gmail through Cloud Pub/Sub push, as the `gmail` bobbin (hookspool/bobbins/gmail/README.md). One batch per
+# Gmail through Cloud Pub/Sub push, as the `google.gmail` bobbin (hookspool/bobbins/google/gmail/README.md). One batch per
 # mailbox; the processor reads the mailbox once for all the pushes in it. The URL is /hooks/gmail?token=...
 # Its credentials are read by the processor only (file references, never env). Leave out secrets.cred_agent and
 # `agent` when there is no assistant mailbox, and out of `outputs` what you do not want.
 [bobbins.gmail]
-bobbin = "gmail"
+bobbin = "google.gmail"
 secrets.push_token = { file = "/etc/hookspool/secrets/gmail_push_token" }
 secrets.cred_owner = { file = "/etc/hookspool/google/owner.json" }
 secrets.cred_agent = { file = "/etc/hookspool/google/assistant.json" }
@@ -92,38 +92,38 @@ outputs = { scheduling = "hermes:mail-scheduling", agent-mail = "hermes:assistan
 # the watch lapsed?). Leave it off until the sender points here (docs/operations/running.md, rollout order).
 expect = false
 
-# Google Calendar, as the `gcal` bobbin (hookspool/bobbins/gcal/README.md). Watch channels expire (at most a
+# Google Calendar, as the `google.calendar` bobbin (hookspool/bobbins/google/calendar/README.md). Watch channels expire (at most a
 # week): keep the renewal sweep running. `changed` goes to a script of your own, here a refresh script.
-[bobbins.gcal]
-bobbin = "gcal"
-secrets.channel_token = { file = "/etc/hookspool/secrets/gcal_channel_token" }
+[bobbins.calendar]
+bobbin = "google.calendar"
+secrets.channel_token = { file = "/etc/hookspool/secrets/calendar_channel_token" }
 secrets.cred = { file = "/etc/hookspool/google/owner.json" }
 settings = { tz = "America/New_York", own = ["owner@example.com", "assistant@example.com"] }
 outputs = { conflict = "hermes:calendar-conflict", brief = "hermes:calendar-brief", changed = "script:calendar-refresh" }
 expect = false                         # true: 2 days of silence opens a source_silent issue (the channel lapsed?)
 
-# Google Drive, as the `drive` bobbin (hookspool/bobbins/drive/README.md). Reports file ids and metadata, never
+# Google Drive, as the `google.drive` bobbin (hookspool/bobbins/google/drive/README.md). Reports file ids and metadata, never
 # contents. Watch channels expire (at most a week): keep the renewal sweep running (SETUP.md).
 [bobbins.drive]
-bobbin = "drive"
+bobbin = "google.drive"
 secrets.channel_token = { file = "/etc/hookspool/secrets/drive_channel_token" }
 secrets.cred = { file = "/etc/hookspool/google/owner.json" }
 settings = { own = ["owner@example.com"], skip_mime_types = ["application/vnd.google-apps.folder"] }
 outputs = { file-changed = "hermes:drive-changed", file-created = "hermes:drive-created", file-shared = "hermes:drive-shared" }
 expect = false                         # true: 7 days of silence opens a source_silent issue
 
-# Zoom event subscriptions, as the `zoom` bobbin (hookspool/bobbins/zoom/README.md). The URL-validation handshake is
+# Zoom event subscriptions, as the `zoom.meetings` bobbin (hookspool/bobbins/zoom/meetings/README.md). The URL-validation handshake is
 # answered only after the signature checks out.
-[bobbins.zoom]
-bobbin = "zoom"
+[bobbins.meetings]
+bobbin = "zoom.meetings"
 secrets.webhook_secret = { file = "/etc/hookspool/secrets/zoom_webhook_secret" }
-outputs = { "*" = "hermes:zoom" }
+outputs = { "*" = "hermes:meetings" }
 
-# Trello, as the `trello` bobbin (hookspool/bobbins/trello/README.md): base64 HMAC-SHA1 over the body plus the
+# Trello, as the `atlassian.trello` bobbin (hookspool/bobbins/atlassian/trello/README.md): base64 HMAC-SHA1 over the body plus the
 # callback URL, which must be byte for byte what the webhook was registered with. Trello's unsigned HEAD
 # handshake is answered with an empty 200.
 [bobbins.trello]
-bobbin = "trello"
+bobbin = "atlassian.trello"
 secrets.secret = { file = "/etc/hookspool/secrets/trello" }
 settings = { callback_url = "https://hooks.example.com/hooks/trello" }
 outputs = { "*" = "hermes:trello" }
@@ -162,10 +162,10 @@ max_inflight = 2
 # event_header = "X-GitHub-Event"
 # dedup_header = "X-GitHub-Delivery"
 
-# A follow-up of your own for the gcal bobbin's `changed` output (it receives the output item as its event
+# A follow-up of your own for the google.calendar bobbin's `changed` output (it receives the output item as its event
 # payload; the changed event ids and dates are in it). Delivered, retried and dead-lettered like any script.
 # Every state_dir must be in the dispatch unit's ReadWritePaths (deploy/hookspool-dispatch.service); the
-# bobbins' own state directories default to <home>/services/<instance>, below the home that is already there.
+# bobbins' own state directories default to <home>/bobbins/<instance>, below the home that is already there.
 [destinations."script:calendar-refresh"]
 argv = ["/opt/hookspool/venv/bin/python", "/opt/hookspool/scripts/refresh_events.py"]
 timeout_s = 300

@@ -15,14 +15,15 @@ Subcommands (each prints a result table and exits 1 when any row failed):
 Everything runs locally the same way as in CI::
 
     python .github/scripts/plugin_ci.py all --base origin/main
-    python .github/scripts/plugin_ci.py kit template:github code:zoom
+    python .github/scripts/plugin_ci.py kit template:github.repo code:zoom
     python .github/scripts/plugin_ci.py bobbins --base origin/main
     python .github/scripts/plugin_ci.py scan --all                     # every tracked and untracked file
 
 The table is also appended to ``$GITHUB_STEP_SUMMARY`` when that is set.
 
 What a "plugin" is
-  ``template:<name>``  ``hookspool/bobbins/<name>/bobbin.toml`` with a fixed ``[source.template]`` (captures in
+  ``template:<name>``  ``hookspool/bobbins/<vendor>/<product>/bobbin.toml`` with a fixed ``[source.template]``, named
+                       by the bobbin's ``<vendor>.<product>`` name (captures in
                        its ``captures/``); run through ``tests/test_sources_template.py`` (kit cases, captures, the
                        capture-coverage check), selected by test id. This is the repository's own regression run;
                        a contributor's command is ``hookspool bobbin check`` (the ``bobbins`` subcommand).
@@ -30,9 +31,10 @@ What a "plugin" is
                        must parametrize over ``sourcekit.CASES`` (no kit, no merge).
 
 What a changed bobbin is
-  Any directory with a ``bobbin.toml`` that holds a changed file (``hookspool/bobbins/<name>/`` or one added
-  anywhere else in the pull request, except the kit's own fixtures under ``tests/fixtures/``), the bobbin whose
-  ``tests/bobbins/test_<name>.py`` changed, and every built-in bobbin when the machinery they run on changed.
+  Any directory with a ``bobbin.toml`` that holds a changed file (``hookspool/bobbins/<vendor>/<product>/`` or one
+  added anywhere else in the pull request, except the kit's own fixtures under ``tests/fixtures/``), the bobbin whose
+  ``tests/bobbins/test_<vendor>_<product>.py`` changed, and every built-in bobbin when the machinery they run on
+  changed.
   Each gets exactly the check a contributor runs: ``hookspool bobbin check <dir>``.
 """
 from __future__ import annotations
@@ -69,14 +71,15 @@ CORE_ALLOWLIST = os.path.join(".github", "core-allowlist.txt")
 BOBBINS_DIR = "hookspool/bobbins"
 PROVIDERS_DIR = "hookspool/providers"        # helpers shared by the bobbins of one provider (14.3.7): per-vendor
 BOBBIN_MANIFEST = "bobbin.toml"
-BOBBIN_TESTS = re.compile(r"tests/bobbins/test_([a-z0-9_]+)\.py")
+BOBBIN_TESTS = re.compile(r"tests/bobbins/test_([a-z0-9_]+)\.py")     # test_<vendor>_<product>.py, '.' and '-' as '_'
+BOBBIN_NAME = re.compile(r"^[a-z][a-z0-9-]{0,39}\.[a-z][a-z0-9-]{0,39}$")
 # The machinery every bobbin runs on: a change to it re-checks every built-in bobbin.
 BOBBIN_SHARED = {"hookspool/bobbin_loader.py", "hookspool/processor.py", "hookspool/net.py", "hookspool/plugin.py",
                  "hookspool/verify.py", "hookspool/intake.py", "hookspool/config.py", "hookspool/sources/template.py"}
 BOBBIN_SHARED_TREES = ("hookspool/testing/", PROVIDERS_DIR + "/")
 NOT_A_BOBBIN_UNDER = ("tests/fixtures/",)   # the kit's own fixtures, some broken on purpose
-# Bobbins named for a kind of sender rather than a vendor: their name is an ordinary word in core.
-GENERIC_BOBBINS = {"webhook"}
+# The namespace of the generic bobbins shipped with core (hookspool.webhook): a word core uses everywhere.
+GENERIC_VENDORS = {"hookspool"}
 
 
 # ---- results ---------------------------------------------------------------------------------------------
@@ -135,28 +138,67 @@ def _is_template_bobbin(path: str) -> bool:
         return False
 
 
-def all_templates() -> list[str]:
-    names: set[str] = set()
+def _is_pointer(path: str) -> bool:
+    """An examples file that only says where its template moved (comments, no table)."""
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f) == {}
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+
+
+def builtin_bobbins() -> dict[str, str]:
+    """``<vendor>.<product>`` -> the built-in bobbin's directory (relative), for ``hookspool/bobbins/<v>/<p>/``."""
+    out: dict[str, str] = {}
     d = os.path.join(ROOT, BOBBINS_DIR)
-    if os.path.isdir(d):
-        names |= {n for n in os.listdir(d) if _is_template_bobbin(os.path.join(d, n, "bobbin.toml"))}
+    if not os.path.isdir(d):
+        return out
+    for v in sorted(os.listdir(d)):
+        vdir = os.path.join(d, v)
+        if v.startswith((".", "_")) or not os.path.isdir(vdir):
+            continue
+        for prod in sorted(os.listdir(vdir)):
+            if os.path.isfile(os.path.join(vdir, prod, BOBBIN_MANIFEST)):
+                rel = f"{BOBBINS_DIR}/{v}/{prod}"
+                out[bobbin_name(rel)] = rel
+    return out
+
+
+def bobbin_name(rel_dir: str) -> str:
+    """A bobbin directory's name: its manifest's ``name`` when that is a valid ``<vendor>.<product>``, else the
+    directory's last two components joined by a dot."""
+    try:
+        with open(os.path.join(ROOT, rel_dir, BOBBIN_MANIFEST), "rb") as f:
+            name = tomllib.load(f).get("name")
+        if isinstance(name, str) and BOBBIN_NAME.match(name):
+            return name
+    except (OSError, tomllib.TOMLDecodeError):
+        pass
+    parts = rel_dir.rstrip("/").split("/")
+    return ".".join(parts[-2:])
+
+
+def all_templates() -> list[str]:
+    names = {n for n, rel in builtin_bobbins().items()
+             if _is_template_bobbin(os.path.join(ROOT, rel, BOBBIN_MANIFEST))}
     d = os.path.join(ROOT, EXAMPLES_DIR)
     if os.path.isdir(d):
-        names |= {f[:-5] for f in os.listdir(d) if f.endswith(".toml")}
+        names |= {f[:-5] for f in os.listdir(d) if f.endswith(".toml") and not _is_pointer(os.path.join(d, f))}
     return sorted(names)
 
 
 def template_manifest(name: str) -> str | None:
     """The file that defines a template: its bobbin manifest, else the legacy examples table."""
-    for rel in (f"{BOBBINS_DIR}/{name}/bobbin.toml", f"{EXAMPLES_DIR}/{name}.toml"):
+    own = builtin_bobbins().get(name)
+    for rel in ([f"{own}/{BOBBIN_MANIFEST}"] if own else []) + [f"{EXAMPLES_DIR}/{name}.toml"]:
         if os.path.exists(os.path.join(ROOT, rel)):
             return rel
     return None
 
 
 def capture_dir(name: str) -> str:
-    own = f"{BOBBINS_DIR}/{name}/captures"
-    return own if os.path.isdir(os.path.join(ROOT, own)) else f"tests/captures/{name}"
+    own = builtin_bobbins().get(name)
+    return f"{own}/captures" if own and os.path.isdir(os.path.join(ROOT, own, "captures")) else f"tests/captures/{name}"
 
 
 def all_code_sources() -> list[str]:
@@ -205,9 +247,9 @@ def discover(files: list[str]) -> list[str]:
         m = re.fullmatch(r"tests/captures/([A-Za-z0-9_-]+)/.+", f)
         if m:
             name_hit(m.group(1))
-        m = re.fullmatch(rf"{BOBBINS_DIR}/([a-z][a-z0-9-]*)/.+", f)
-        if m:
-            name_hit(m.group(1))
+        m = re.fullmatch(rf"({BOBBINS_DIR}/[a-z][a-z0-9_-]*/[a-z][a-z0-9_-]*)/.+", f)
+        if m and os.path.isfile(os.path.join(ROOT, m.group(1), BOBBIN_MANIFEST)):
+            name_hit(bobbin_name(m.group(1)))
         m = re.fullmatch(r"tests/test_sources_([A-Za-z0-9_]+)\.py", f)
         if m and m.group(1) != "template":
             name_hit(m.group(1))
@@ -216,11 +258,13 @@ def discover(files: list[str]) -> list[str]:
 
 # ---- bobbins ----------------------------------------------------------------------------------------------
 def all_bobbins() -> list[str]:
-    """The built-in bobbin directories, relative to the repository."""
-    d = os.path.join(ROOT, BOBBINS_DIR)
-    if not os.path.isdir(d):
-        return []
-    return sorted(f"{BOBBINS_DIR}/{n}" for n in os.listdir(d) if os.path.isfile(os.path.join(d, n, BOBBIN_MANIFEST)))
+    """The built-in bobbin directories (``hookspool/bobbins/<vendor>/<product>``), relative to the repository."""
+    return sorted(builtin_bobbins().values())
+
+
+def test_key(name: str) -> str:
+    """The ``<key>`` of a bobbin's own test file ``tests/bobbins/test_<key>.py``: the name with ``.`` and ``-`` as ``_``."""
+    return re.sub(r"[.-]", "_", name)
 
 
 def bobbin_of(rel: str) -> str | None:
@@ -241,7 +285,7 @@ def discover_bobbins(files: list[str]) -> list[str]:
     builtin = all_bobbins()
     if any(f in BOBBIN_SHARED or f.startswith(BOBBIN_SHARED_TREES) for f in files):
         found |= set(builtin)
-    by_module = {os.path.basename(b).replace("-", "_"): b for b in builtin}
+    by_module = {test_key(bobbin_name(b)): b for b in builtin}
     for f in files:
         m = BOBBIN_TESTS.fullmatch(f)
         if m and m.group(1) in by_module:
@@ -253,7 +297,8 @@ def discover_bobbins(files: list[str]) -> list[str]:
 
 
 def run_bobbin(rel_dir: str, report: Report, *, base: str | None = None, strict: bool = False,
-               report_dir: str | None = None, pending: list[tuple[str, dict, str]] | None = None) -> dict | None:
+               report_dir: str | None = None, pending: list[tuple[str, dict, str]] | None = None,
+               online: bool = False) -> dict | None:
     """``hookspool bobbin check <dir> --report json`` (the contributor's command, run the same way), one result
     row, the Markdown scorecard in the job summary and, with ``report_dir``, ``<name>.json`` / ``<name>.md``.
 
@@ -266,6 +311,8 @@ def run_bobbin(rel_dir: str, report: Report, *, base: str | None = None, strict:
         argv += ["--base", base]
     if strict:
         argv.append("--strict")
+    if online:                      # the advisory provider-links row fetches the [provider] pages
+        argv.append("--online")
     env = dict(os.environ)
     env["PYTHONPATH"] = ROOT + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     t0 = time.monotonic()
@@ -412,15 +459,25 @@ def load_allowlist() -> dict[tuple[str, str], str]:
 
 
 def source_names() -> set[str]:
-    bobbins = {os.path.basename(b) for b in all_bobbins()} - GENERIC_BOBBINS
-    return set(all_templates()) | set(all_code_sources()) | bobbins
+    """The words core must not branch on: each built-in bobbin's vendor (``google``, ``atlassian``; not the core's own
+    ``hookspool.`` namespace) and full name, the code sources, and the legacy example templates (``trello``)."""
+    names = set(all_code_sources())
+    for name in builtin_bobbins():
+        vendor = name.partition(".")[0]
+        if vendor not in GENERIC_VENDORS:
+            names |= {vendor, name}
+    d = os.path.join(ROOT, EXAMPLES_DIR)
+    if os.path.isdir(d):
+        names |= {f[:-5] for f in os.listdir(d) if f.endswith(".toml")}
+    return names
 
 
 def core_files() -> list[str]:
     """The files that must stay source-agnostic: everything under ``hookspool/`` except the per-source plugin
-    modules themselves, the bobbins (``hookspool/bobbins/<name>/``) and the per-provider helpers they share
+    modules themselves, the bobbins (``hookspool/bobbins/<vendor>/<product>/``) and the per-provider helpers they share
     (``hookspool/providers/``). The shared machinery in ``hookspool/sources/`` (``__init__.py`` and the template
-    engine ``template.py``) and ``hookspool/bobbins/__init__.py`` are core and are guarded."""
+    engine ``template.py``) and ``hookspool/bobbins/__init__.py`` are core and are guarded. A vendor's
+    ``hookspool/bobbins/<vendor>/__init__.py`` is empty (the kit's core-only row checks it)."""
     out = []
     for base, _dirs, files in os.walk(os.path.join(ROOT, "hookspool")):
         rel = os.path.relpath(base, ROOT).replace(os.sep, "/")
@@ -489,7 +546,7 @@ SECRET_PATTERNS = _scan.SECRET_PATTERNS          # one set of patterns for this 
 # documentation addresses, and the public API/docs hosts the shipped sources link to.
 HOST_OK_SUFFIX = (".example", ".test", ".invalid", ".localhost", ".example.com", ".example.org", ".example.net",
                   "googleapis.com", "google.com", "github.com", "githubusercontent.com", "zoom.us", "plaid.com",
-                  "atlassian.com", "trello.com", "standardwebhooks.com", "python.org", "pypi.org",
+                  "atlassian.com", "trello.com", "kaneo.app", "standardwebhooks.com", "python.org", "pypi.org",
                   "readthedocs.io", "shields.io", "mermaid.js.org",
                   "w3.org", "hairline.lucasmarkes.com")      # the SVG namespace, and the style the banners follow
 HOST_OK_EXACT = {"localhost", "example.com", "example.org", "example.net", "127.0.0.1", "0.0.0.0", "[::1]"}
@@ -634,6 +691,8 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--report-dir", help="write <name>.json / <name>.md scorecards and meta.json here")
     b.add_argument("--pr", default=os.environ.get("PR_NUMBER"), help="the pull request number, for meta.json")
     b.add_argument("--strict", action="store_true", help="advisory checks fail too")
+    b.add_argument("--online", dest="fetch_links", action="store_true",
+                   help="also fetch each bobbin's [provider] pages (the advisory provider-links row; CI passes it)")
     k = sub.add_parser("kit")
     k.add_argument("specs", nargs="+", help="template:<name> or code:<name>")
     k.add_argument("--test-file", help="code: the kit test module (default tests/test_sources_<name>.py)")
@@ -662,10 +721,11 @@ def main(argv: list[str] | None = None) -> int:
             report.add("bobbins", "changed bobbins", True, "no bobbin touched")
         pending: list[tuple[str, dict, str]] = []
         for d in dirs:
-            run_bobbin(d, report, base=args.base, strict=args.strict, report_dir=args.report_dir, pending=pending)
+            run_bobbin(d, report, base=args.base, strict=args.strict, report_dir=args.report_dir, pending=pending,
+                       online=args.fetch_links)
         if args.report_dir:        # written after the last check: see run_bobbin on why not in between
             write_reports(args.report_dir, pending)
-            write_meta(args.report_dir, args.pr, [os.path.basename(d) for d in dirs])
+            write_meta(args.report_dir, args.pr, [bobbin_name(os.path.relpath(os.path.abspath(d), ROOT)) for d in dirs])
         report.emit("Bobbin scorecards")
     elif args.cmd == "guard":
         run_guard(report)

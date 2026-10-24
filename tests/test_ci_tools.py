@@ -118,15 +118,16 @@ def test_the_cli_exits_nonzero_for_the_bad_plugin_and_zero_for_a_good_one(tmp_pa
     bad = subprocess.run([sys.executable, SCRIPT, "kit", "code:badsig", "--test-file", "tests/badkit/kit_badsig.py"],
                          cwd=ROOT, env=env, capture_output=True, text=True)
     assert bad.returncode == 1, bad.stdout + bad.stderr
-    good = subprocess.run([sys.executable, SCRIPT, "kit", "code:zoom", "template:github"],
+    good = subprocess.run([sys.executable, SCRIPT, "kit", "code:zoom", "template:github.repo"],
                           cwd=ROOT, env=env, capture_output=True, text=True)
     assert good.returncode == 0, good.stdout + good.stderr
     summary = (tmp_path / "summary.md").read_text()
     assert "| Check | Subject | Result | Detail |" in summary          # the job summary table
-    assert "`code:badsig` | **FAIL**" in summary and "`template:github` | pass" in summary
+    assert "`code:badsig` | **FAIL**" in summary and "`template:github.repo` | pass" in summary
 
 
-@pytest.mark.parametrize("spec", ["template:github", "template:kaneo", "template:trello", "code:zoom", "code:plaid",
+@pytest.mark.parametrize("spec", ["template:github.repo", "template:kaneo.projects", "template:atlassian.trello",
+                                  "code:zoom", "code:plaid",
                                   "code:gmail", "code:gcal"])
 def test_every_shipped_source_passes_the_kit(spec):
     report = P.Report()
@@ -135,7 +136,8 @@ def test_every_shipped_source_passes_the_kit(spec):
 
 
 def test_every_shipped_source_is_discoverable_and_has_a_kit_test():
-    assert {"template:github", "template:kaneo", "template:trello"} <= {f"template:{t}" for t in P.all_templates()}
+    assert {"github.repo", "kaneo.projects", "atlassian.trello"} <= set(P.all_templates())
+    assert not {"github", "kaneo", "trello"} & set(P.all_templates()), "the examples files are pointers now"
     assert {"zoom", "plaid", "gmail", "gcal"} <= set(P.all_code_sources())
     for name in P.all_code_sources():
         assert P.uses_kit(f"tests/test_sources_{name}.py"), name
@@ -396,10 +398,10 @@ def test_workflow_files_parse_as_yaml():
         assert "pull_request" in (doc.get(True) or doc.get("on"))      # PyYAML reads the key `on` as True
 
 
-def test_pull_request_template_asks_for_the_signature_docs_link():
+def test_pull_request_template_leaves_the_signature_docs_link_to_the_manifest():
     with open(os.path.join(ROOT, ".github", "pull_request_template.md"), encoding="utf-8") as f:
         text = f.read()
-    assert "signature documentation (link)" in text
+    assert "signature documentation (link)" not in text and "[provider] signature_docs" in text
     assert "hookspool bobbin check" in text and "plugin_ci.py kit" not in text
     assert kinds(text, rel=".github/pull_request_template.md") == []
 
@@ -417,24 +419,26 @@ FIX_BOBBINS = "tests/fixtures/bobbinkit"
 def brepo(repo):
     """The tiny repo plus two built-in bobbins, a contributed one elsewhere and a kit fixture."""
     root, env = repo
-    for rel in ("hookspool/bobbins/__init__.py", "hookspool/bobbins/alpha/bobbin.toml", "hookspool/bobbins/alpha/source.py",
-                "hookspool/bobbins/web-hook/bobbin.toml", "hookspool/providers/acme.py", "contrib/acme/bobbin.toml",
-                "contrib/acme/captures/event.http", "tests/fixtures/bobbinkit/broken/bobbin.toml",
-                "tests/bobbins/test_web_hook.py", "hookspool/net.py"):
+    for rel in ("hookspool/bobbins/__init__.py", "hookspool/bobbins/acme/__init__.py", "hookspool/bobbins/acme/alpha/bobbin.toml",
+                "hookspool/bobbins/acme/alpha/source.py", "hookspool/bobbins/web-co/web-hook/bobbin.toml",
+                "hookspool/providers/acme.py", "contrib/acme/widgets/bobbin.toml", "contrib/acme/widgets/captures/event.http",
+                "tests/fixtures/bobbinkit/acme/broken/bobbin.toml", "tests/bobbins/test_web_co_web_hook.py",
+                "hookspool/net.py"):
         write(root, rel, "x = 1\n")
     commit(root, env)
     return root, env
 
 
 @pytest.mark.parametrize("touched,expected", [
-    (["hookspool/bobbins/alpha/source.py"], ["hookspool/bobbins/alpha"]),
-    (["contrib/acme/captures/event.http"], ["contrib/acme"]),               # a bobbin added anywhere
-    (["tests/bobbins/test_web_hook.py"], ["hookspool/bobbins/web-hook"]),
-    (["tests/fixtures/bobbinkit/broken/bobbin.toml"], []),                  # the kit's own fixtures: never
+    (["hookspool/bobbins/acme/alpha/source.py"], ["hookspool/bobbins/acme/alpha"]),
+    (["contrib/acme/widgets/captures/event.http"], ["contrib/acme/widgets"]),        # a bobbin added anywhere
+    (["tests/bobbins/test_web_co_web_hook.py"], ["hookspool/bobbins/web-co/web-hook"]),
+    (["tests/fixtures/bobbinkit/acme/broken/bobbin.toml"], []),                       # the kit's own fixtures: never
     (["README.md", "hookspool/store.py"], []),
-    (["hookspool/net.py"], ["hookspool/bobbins/alpha", "hookspool/bobbins/web-hook"]),
-    (["hookspool/testing/bobbinkit.py", "contrib/acme/bobbin.toml"],
-     ["contrib/acme", "hookspool/bobbins/alpha", "hookspool/bobbins/web-hook"]),
+    (["hookspool/bobbins/acme/__init__.py"], []),                                      # the vendor's package file only
+    (["hookspool/net.py"], ["hookspool/bobbins/acme/alpha", "hookspool/bobbins/web-co/web-hook"]),
+    (["hookspool/testing/bobbinkit.py", "contrib/acme/widgets/bobbin.toml"],
+     ["contrib/acme/widgets", "hookspool/bobbins/acme/alpha", "hookspool/bobbins/web-co/web-hook"]),
 ])
 def test_discover_bobbins(brepo, touched, expected):
     assert P.discover_bobbins(touched) == expected
@@ -443,38 +447,53 @@ def test_discover_bobbins(brepo, touched, expected):
 def test_core_guard_skips_bobbins_and_providers_but_knows_their_names(brepo):
     files = P.core_files()
     assert "hookspool/bobbins/__init__.py" in files and "hookspool/net.py" in files
-    assert not any(f.startswith(("hookspool/bobbins/alpha/", "hookspool/providers/")) for f in files)
-    assert {"alpha", "web-hook"} <= P.source_names()
-    assert "webhook" in P.GENERIC_BOBBINS
+    assert not any(f.startswith(("hookspool/bobbins/acme/", "hookspool/providers/")) for f in files)
+    assert {"acme", "acme.alpha", "web-co", "web-co.web-hook"} <= P.source_names()
+    assert "hookspool" in P.GENERIC_VENDORS and P.all_bobbins() == ["hookspool/bobbins/acme/alpha",
+                                                                     "hookspool/bobbins/web-co/web-hook"]
 
 
 def test_run_bobbin_writes_the_scorecards(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
     report = P.Report()
-    doc = P.run_bobbin(f"{FIX_BOBBINS}/kitcode", report, report_dir=str(tmp_path / "out"))
+    doc = P.run_bobbin(f"{FIX_BOBBINS}/acme/kitcode", report, report_dir=str(tmp_path / "out"))
     row, = report.rows
-    assert row.ok and row.check == "bobbin" and row.detail.startswith("bobbin check kitcode: PASS")
-    assert doc["ok"] and json.loads((tmp_path / "out" / "kitcode.json").read_text())["schema"] == "hookspool.bobbin-check/1"
-    assert (tmp_path / "out" / "kitcode.md").read_text().startswith("### Bobbin `kitcode`: PASS")
+    assert row.ok and row.check == "bobbin" and row.detail.startswith("bobbin check acme.kitcode: PASS")
+    out = tmp_path / "out"
+    assert doc["ok"] and json.loads((out / "acme_kitcode.json").read_text())["schema"] == "hookspool.bobbin-check/1"
+    assert (out / "acme_kitcode.md").read_text().startswith("### Bobbin `acme.kitcode`: PASS")
     report.emit("Bobbin scorecards")
     summary = (tmp_path / "summary.md").read_text()
-    assert "| bobbin | `tests/fixtures/bobbinkit/kitcode` | pass |" in summary and "### Bobbin `kitcode`" in summary
+    assert "| bobbin | `tests/fixtures/bobbinkit/acme/kitcode` | pass |" in summary and "### Bobbin `acme.kitcode`" in summary
+
+
+def test_run_bobbin_passes_online_through(monkeypatch, tmp_path):
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 1, "", "no scorecard")
+    monkeypatch.setattr(P.subprocess, "run", fake_run)
+    P.run_bobbin(f"{FIX_BOBBINS}/acme/kitcode", P.Report(), online=True)
+    P.run_bobbin(f"{FIX_BOBBINS}/acme/kitcode", P.Report())
+    assert "--online" in seen[0] and "--online" not in seen[1]
 
 
 def test_the_bobbins_command_fails_for_a_failing_bobbin(tmp_path):
-    bad = tmp_path / "kitcode"
-    shutil.copytree(os.path.join(ROOT, FIX_BOBBINS, "kitcode"), bad)
-    (bad / "README.md").write_text("# kitcode\n\nTODO\n")
+    bad = tmp_path / "acme" / "kitcode"
+    shutil.copytree(os.path.join(ROOT, FIX_BOBBINS, "acme", "kitcode"), bad)
+    with open(bad / "README.md", "a") as f:
+        f.write("\nTODO\n")
     out = tmp_path / "reports"
     env = dict(os.environ, GITHUB_STEP_SUMMARY=str(tmp_path / "s.md"))
-    p = subprocess.run([sys.executable, SCRIPT, "bobbins", str(bad), os.path.join(FIX_BOBBINS, "kittpl"),
+    p = subprocess.run([sys.executable, SCRIPT, "bobbins", str(bad), os.path.join(FIX_BOBBINS, "acme", "kittpl"),
                         "--report-dir", str(out), "--pr", "42"], cwd=ROOT, env=env, capture_output=True, text=True)
     assert p.returncode == 1, p.stdout + p.stderr
-    assert json.loads((out / "meta.json").read_text()) == {"pr": 42, "bobbins": ["kitcode", "kittpl"]}
-    assert json.loads((out / "kitcode.json").read_text())["ok"] is False
-    assert json.loads((out / "kittpl.json").read_text())["ok"] is True
+    assert json.loads((out / "meta.json").read_text()) == {"pr": 42, "bobbins": ["acme.kitcode", "acme.kittpl"]}
+    assert json.loads((out / "acme_kitcode.json").read_text())["ok"] is False
+    assert json.loads((out / "acme_kittpl.json").read_text())["ok"] is True
     summary = (tmp_path / "s.md").read_text()
-    assert "**FAIL**" in summary and "1 of 9 required checks fail (todos)" in summary
+    assert "**FAIL**" in summary and "1 of 11 required checks fail (todos)" in summary
 
 
 def test_the_bobbins_command_scores_two_bobbins_bobbin_only_with_reports_in_the_checkout(tmp_path):
@@ -484,8 +503,8 @@ def test_the_bobbins_command_scores_two_bobbins_bobbin_only_with_reports_in_the_
     root = tmp_path / "repo"
     dirs = []
     for name in ("kitcode", "kittpl"):
-        d = root / "bobbins" / name
-        shutil.copytree(os.path.join(ROOT, FIX_BOBBINS, name), d)
+        d = root / "bobbins" / "acme" / name
+        shutil.copytree(os.path.join(ROOT, FIX_BOBBINS, "acme", name), d)
         dirs.append(str(d))
     (root / ".gitignore").write_text("__pycache__/\n")        # bobbin-reports/ deliberately not ignored
     env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.test", "GIT_COMMITTER_NAME": "t",
@@ -498,11 +517,11 @@ def test_the_bobbins_command_scores_two_bobbins_bobbin_only_with_reports_in_the_
                         "--pr", "7"], cwd=ROOT, env=run_env, capture_output=True, text=True)
     assert p.returncode == 0, p.stdout + p.stderr
     for name in ("kitcode", "kittpl"):
-        doc = json.loads((out / f"{name}.json").read_text())
+        doc = json.loads((out / f"acme_{name}.json").read_text())
         scope = next(c for c in doc["checks"] if c["name"] == "scope")
         assert doc["ok"] and doc["scope"] == "bobbin-only", (name, scope)
         assert scope["result"] == "pass" and scope["findings"] == [], (name, scope)
-    assert json.loads((out / "meta.json").read_text()) == {"pr": 7, "bobbins": ["kitcode", "kittpl"]}
+    assert json.loads((out / "meta.json").read_text()) == {"pr": 7, "bobbins": ["acme.kitcode", "acme.kittpl"]}
 
 
 def test_the_bobbins_command_with_nothing_changed_writes_meta(tmp_path, repo):
@@ -526,7 +545,7 @@ def test_bobbin_workflow_jobs_and_permissions():
     co = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
     assert co["with"] == {"fetch-depth": 0, "persist-credentials": False}
     run = next(s for s in steps if "plugin_ci.py bobbins" in str(s.get("run", "")))
-    assert run["run"] == ('python .github/scripts/plugin_ci.py bobbins --base "$BASE_SHA" --pr "$PR_NUMBER"'
+    assert run["run"] == ('python .github/scripts/plugin_ci.py bobbins --online --base "$BASE_SHA" --pr "$PR_NUMBER"'
                           ' --report-dir "$RUNNER_TEMP/bobbin-reports"'), \
         "the reports live outside the checkout: inside it they are untracked files the scope check would count"
     assert run["env"] == {"BASE_SHA": "${{ github.event.pull_request.base.sha }}",
@@ -588,7 +607,7 @@ def test_pull_request_template_has_the_bobbin_section():
     with open(os.path.join(ROOT, ".github", "pull_request_template.md"), encoding="utf-8") as f:
         text = f.read()
     sec = text[text.index("## New or changed bobbin"):]
-    assert "hookspool bobbin check hookspool/bobbins/<name> --base origin/main" in sec
+    assert "hookspool bobbin check hookspool/bobbins/<vendor>/<product> --base origin/main" in sec
     boxes = re.findall(r"^- \[ \] (.+)$", sec.split("\n## ")[0], re.M)
-    assert len(boxes) == 3, boxes
-    assert "provider's documentation" in boxes[0] and "real delivery" in boxes[1] and "maintain" in boxes[2]
+    assert len(boxes) == 2, boxes          # the provider docs link is the scorecard's provider row now
+    assert "real delivery" in boxes[0] and "maintain" in boxes[1]

@@ -50,9 +50,9 @@ version = { attr = "hookspool.__version__" }
 include = ["hookspool*"]
 
 [tool.setuptools.package-data]
-hookspool = ["migrations/*.sql", "bobbins/*/bobbin.toml", "bobbins/*/README.md", "bobbins/*/SETUP.md",
-             "bobbins/*/AGENTS.md", "bobbins/*/captures/*.http", "bobbins/*/captures/kit.toml",
-             "bobbins/*/captures/schemes/*.http"]
+hookspool = ["migrations/*.sql", "bobbins/*/*/bobbin.toml", "bobbins/*/*/README.md", "bobbins/*/*/SETUP.md",
+             "bobbins/*/*/AGENTS.md", "bobbins/*/*/captures/*.http", "bobbins/*/*/captures/kit.toml",
+             "bobbins/*/*/captures/schemes/*.http"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

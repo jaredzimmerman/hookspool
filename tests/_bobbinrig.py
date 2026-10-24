@@ -34,10 +34,10 @@ class Rig:
     def __init__(self, tmp_path, bobbin: str, outputs, settings: dict, secrets: dict[str, str], *,
                  instance: str | None = None, hooks: str | None = None):
         self.tmp = tmp_path
-        self.bobbin = bobbin
-        self.instance = instance or bobbin
+        self.bobbin = bobbin                                   # <vendor>.<product>
+        self.instance = instance or bobbin.partition(".")[2]
         self.state = tmp_path / "state"
-        self.dir = os.path.join(BOBBINS, bobbin)
+        self.dir = os.path.join(BOBBINS, *bobbin.split("."))
         if hooks is not None:
             hp = tmp_path / "hooks.py"
             hp.write_text(textwrap.dedent(hooks))
