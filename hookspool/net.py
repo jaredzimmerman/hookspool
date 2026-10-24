@@ -246,8 +246,8 @@ class Http:
 
         Send ``If-None-Match`` (the ``etag`` header of the last answer) or ``If-Modified-Since`` in ``headers``:
         a 304 comes back as ``(304, "", headers)`` and is not an error. A 2xx body is decoded with the charset of
-        its ``Content-Type`` (UTF-8 when there is none; undecodable bytes become U+FFFD). Header names are lower
-        case. Every other status, the timeout and the size cap are those of ``request``."""
+        its ``Content-Type`` (else the encoding in an XML declaration, else UTF-8; undecodable bytes become U+FFFD).
+        Header names are lower case. Every other status, the timeout and the size cap are those of ``request``."""
         prefix = self._target("GET", url, label)
         if params:
             url = url + ("&" if urllib.parse.urlsplit(url).query else "?") + urllib.parse.urlencode(params,

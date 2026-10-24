@@ -12,7 +12,7 @@ REQUESTS_PER_S = 5            # half of EDGAR's limit, so a second instance or a
 MAX_FEEDS = 200               # one tick must fit its timeout: 200 requests at 5 a second is 40 s plus the transfers
 KEEP_SEEN = 100               # accessions remembered per feed
 MAX_BACKFILL = 40
-RETRY_AFTER_S = 600           # EDGAR blocks an address that breaks the rate rule for about ten minutes
+PAGE = 40                     # entries in one feed page (the count parameter); more new filings than this can be missed
 
 _CONTACT = re.compile(r"[^\s@<>()]+@[^\s@<>()]+\.[A-Za-z]{2,}")
 _CIK = re.compile(r"^[0-9]{1,10}$")
@@ -97,14 +97,15 @@ def poll(batch, ctx) -> list[dict]:
             if prev and prev.get("modified"):
                 headers["If-Modified-Since"] = prev["modified"]
             params = {"action": "getcompany", "CIK": cik, "type": form, "dateb": "", "owner": "include",
-                      "count": 40, "output": "atom"}
+                      "count": PAGE, "output": "atom"}
             pacer.wait()
             try:
                 status, text, resp = ctx.http.get_text(FEED_URL, headers, params=params, label="feed")
             except net.Permanent as e:
                 if e.status == 403:
-                    raise net.Retryable("EDGAR refused the request (HTTP 403): check user_agent and the request rate",
-                                        status=403, retry_after_s=RETRY_AFTER_S) from None
+                    # Stop at the first refusal: more requests while EDGAR blocks this address only make it worse.
+                    ctx.log(f"batch {batch.id}: EDGAR answered HTTP 403; check user_agent and the request rate")
+                    raise net.Retryable("EDGAR refused the request (HTTP 403)", status=403) from None
                 if e.status != 404:
                     raise
                 skipped += 1
@@ -130,9 +131,12 @@ def poll(batch, ctx) -> list[dict]:
             items = [i for i in (_filing(e, company, cik) for e in feed["entries"]) if i]     # newest first
             seen = [i["accession"] for i in items]
             if prev is None:
-                fresh = items[:backfill]
+                fresh = [i for i in items[:backfill] if i["accession"] not in known.get(cik, ())]
             else:
                 fresh = [i for i in items if i["accession"] not in known.get(cik, ())]
+                if len(feed["entries"]) >= PAGE and prev.get("seen") and not set(seen) & set(prev["seen"]):
+                    ctx.log(f"batch {batch.id}: possible gap: a feed returned a full page of new filings; "
+                            "older ones may have been missed")
             for i in reversed(fresh):                                                             # oldest first
                 if i["accession"] not in emitted:
                     emitted.add(i["accession"])

@@ -39,7 +39,7 @@ To receive the newest few filings the first time instead of starting from now, a
 2. After the first tick, `hookspool list --source edgar` shows a delivered batch. It carries no filings on the first pass
    unless `backfill` is set; the next new filing arrives as a `filing` item.
 3. If `hookspool issues` shows `poll:edgar:stale`, read the dispatcher log: a permanent failure about `user_agent` means
-   the setting lacks an email address, and a retry about HTTP 403 means EDGAR refused the request.
+   the setting lacks an email address, and the line `EDGAR answered HTTP 403` means EDGAR refused the request.
 
 ## Roll back
 

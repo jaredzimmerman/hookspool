@@ -11,6 +11,7 @@ The same procedure as SETUP.md, as steps. EDGAR has no push, so this is a poll b
 ## Needs from the human
 
 - The contact for EDGAR's User-Agent: a name and an email address the human reads. EDGAR requires it; do not invent one.
+- The route for the `filing` output (where the filings should go).
 - The CIK number of each company to follow, and the form types if not `8-K` and `4`.
 
 This bobbin has no secret and no provider-side step.
@@ -22,13 +23,13 @@ This bobbin has no secret and no provider-side step.
    ```toml
    [bobbins.edgar]
    bobbin = "sec.edgar"
-   settings = { user_agent = "Example Research research@example.com", ciks = ["0000000001"], forms = ["8-K", "4"] }
-   outputs = { filing = "hermes:edgar" }
+   settings = { user_agent = "<USER_AGENT>", ciks = ["<CIK>"], forms = ["8-K", "4"] }
+   outputs = { filing = "<ROUTE>" }
    ```
 
    Check: `hookspool check` exits 0, then `hookspool reload` exits 0. If `hookspool check` fails: fix what it names, then run both again.
 2. **Verify.** Goal: ticks are scheduled and delivered. Run `hookspool status` and read `polls.edgar`, then
    `hookspool list --source edgar` after `next_at`.
    Check: `next_at` is set and a delivered batch is listed. If not: run `hookspool issues` and report it. A permanent failure
-   about `user_agent` means the human must supply a contact email address; a 403 retry means EDGAR refused the request.
+   about `user_agent` means the human must supply a contact email address; the dispatcher log line `EDGAR answered HTTP 403` means EDGAR refused the request.
 3. **Roll back.** Remove the `[bobbins.edgar]` table, then run `hookspool check` and `hookspool reload`.

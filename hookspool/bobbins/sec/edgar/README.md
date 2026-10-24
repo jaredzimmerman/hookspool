@@ -17,6 +17,9 @@ method, so the dispatcher's clock ticks every 5 minutes and the poller asks each
 - Each request is a conditional GET. The poller sends `If-None-Match` or `If-Modified-Since` when the last answer carried
   an `ETag` or `Last-Modified`, and a 304 means nothing changed. EDGAR's feed pages do not always send either header; the
   poller then reads the feed every time and picks out new filings by accession number, so the output is the same.
+- Each feed lists only its newest 40 entries. If more than 40 new filings arrive between two successful reads (a busy
+  Form 4 filer after an outage), the older ones are not seen. When a feed with saved state returns a full page and none of
+  its filings was seen before, the poller logs `possible gap: a feed returned a full page of new filings`.
 - State is kept per feed: the validators, the newest accession number and the last 100 accession numbers seen.
 - The first time a feed is seen it is bootstrapped silently: nothing is emitted unless `backfill` asks for the newest few.
   Adding a company later bootstraps that company only.
@@ -30,7 +33,9 @@ EDGAR requires every automated client to identify itself and to stay under 10 re
   holds no email address. Use the form `Example Research research@example.com`, with a contact you answer.
 - Requests go out at 5 a second, half the limit, spaced by core's `ctx.pace`. That leaves room for a second instance or a
   person on the same address. One instance covers up to 200 feeds (companies times forms).
-- An HTTP 403 from EDGAR is retried after 10 minutes, since EDGAR blocks an address that broke the rate rule for about that long.
+- An HTTP 403 from EDGAR usually means the address broke a rule and is blocked for a while. The poller stops at the first
+  refusal, logs `EDGAR answered HTTP 403; check user_agent and the request rate`, and the batch is retried on the
+  dispatcher's normal retry schedule. The poller adds no delay of its own.
 
 ## Settings
 
@@ -39,7 +44,7 @@ EDGAR requires every automated client to identify itself and to stay under 10 re
 | `user_agent` | string, required | none | the User-Agent EDGAR requires: a name and an email address |
 | `ciks` | list, required | none | CIK numbers, with or without leading zeros |
 | `forms` | list | `["8-K", "4"]` | form types; EDGAR matches by prefix, so `4` also brings `4/A` |
-| `backfill` | int | `0` | how many of the newest filings in a feed to emit the first time it is seen (0 to 40) |
+| `backfill` | int | `0` | how many of the newest filings in a feed to emit the first time it is seen (0 to 40); filings another of the company's feeds already sent are not sent again |
 
 The poll interval is the manifest's `every_s = 300`. An instance may override it (60 or more). Polling only in market hours
 is a deployment choice, not a setting here.

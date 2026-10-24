@@ -5,7 +5,7 @@ state, emits) against a scripted EDGAR, with a fake clock and sleep.
 * conditional GET: the ETag and Last-Modified of an answer are saved and sent, and a 304 changes nothing;
 * bad XML and refused constructs (a DOCTYPE) skip that feed, and a tick where nothing could be read is retried;
 * fair access: no run without a User-Agent that holds an email address, one User-Agent on every request, requests paced;
-* failures: 403 is retried later, a 5xx is retried, a bad setting is permanent, a failed pass saves nothing;
+* failures: 403 stops the tick and is retried, a 5xx is retried, a bad setting is permanent, a failed pass saves nothing;
 * replay of a retried batch, the 14.3.7 rules and the documents of 14.3.8.
 """
 from __future__ import annotations
@@ -115,6 +115,36 @@ def test_backfill_emits_the_newest_few_on_the_first_pass_only(tmp_path):
     rig = make(tmp_path, {(CIK, "8-K"): [ok(feed(entry(3), entry(2), entry(1)))]}, backfill=2)
     assert [i["accession"] for i in items(rig, "1")] == [acc(2), acc(3)]
     assert items(rig, "2") == []
+
+
+def test_backfill_does_not_resend_what_another_feed_of_the_company_already_sent(tmp_path):
+    import json
+    same = ok(feed(entry(2, "4/A"), entry(1, "4")))
+    rig = make(tmp_path, {(CIK, "4"): [same], (CIK, "4/A"): [same]}, forms=["4"], backfill=2)
+    assert [i["accession"] for i in items(rig, "1")] == [acc(1), acc(2)]
+    settings = json.loads(rig.env["HOOKSPOOL_SETTINGS"])
+    rig.env["HOOKSPOOL_SETTINGS"] = json.dumps(dict(settings, forms=["4", "4/A"]))
+    assert items(rig, "2") == []                                  # the new 4/A feed brings nothing already sent
+    assert set(rig.get_state("feeds")) == {f"{CIK}|4", f"{CIK}|4/A"}
+
+
+def test_a_full_page_with_nothing_seen_before_logs_a_possible_gap(tmp_path):
+    first = ok(feed(*[entry(n) for n in range(40, 0, -1)]))
+    jump = ok(feed(*[entry(n) for n in range(100, 60, -1)]))      # 40 entries, none seen before
+    rig = make(tmp_path, {(CIK, "8-K"): [first, jump, ok(feed(*[entry(n) for n in range(101, 61, -1)]))]})
+    rc, _e, err = tick(rig, "1")
+    assert rc == 0 and "possible gap" not in err                  # a first read has no saved state to compare with
+    rc, emits, err = tick(rig, "2")
+    assert rc == 0 and "possible gap" in err and len(emits) == 40
+    rc, _e, err = tick(rig, "3")                                  # overlaps what was just seen: no gap
+    assert rc == 0 and "possible gap" not in err
+
+
+def test_a_short_page_with_nothing_seen_before_is_not_a_gap(tmp_path):
+    rig = make(tmp_path, {(CIK, "8-K"): [ok(feed(entry(1))), ok(feed(entry(9), entry(8)))]})
+    tick(rig, "1")
+    rc, _e, err = tick(rig, "2")
+    assert rc == 0 and "possible gap" not in err
 
 
 def test_a_company_added_later_bootstraps_alone(tmp_path):
@@ -272,12 +302,14 @@ def test_ciks_may_be_numbers_and_are_zero_padded_and_deduplicated(tmp_path):
     assert len(rig.edgar.calls) == 1 and rig.edgar.calls[0]["params"]["CIK"] == CIK
 
 
-def test_a_403_is_retried_later_with_a_delay(tmp_path):
+def test_a_403_stops_the_tick_and_is_logged_and_retried(tmp_path):
     blocked = net.Permanent("GET www.sec.gov feed: HTTP 403", status=403)
     rig = make(tmp_path, {(CIK, "8-K"): [blocked]})
     rc, _emits, err = tick(rig)
     assert rc == 75 and "failed (Retryable)" in err
+    assert "EDGAR answered HTTP 403" in err                       # the line the documents tell the reader to look for
     assert not rig.has_state("feeds")
+    assert len(rig.edgar.calls) == 1                              # no further request while EDGAR refuses
 
 
 def test_a_server_error_is_retried_and_a_failed_pass_changes_no_state(tmp_path):
