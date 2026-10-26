@@ -23,6 +23,10 @@ method, so the dispatcher's clock ticks every 5 minutes and the poller asks each
 - State is kept per feed: the validators, the newest accession number and the last 100 accession numbers seen.
 - The first time a feed is seen it is bootstrapped silently: nothing is emitted unless `backfill` asks for the newest few.
   Adding a company later bootstraps that company only.
+- In current mode the poller reads one global current-events feed per form (`action=getcurrent`) and filters it by a
+  watchlist of CIKs (from `ciks`, `tickers` and `tickers_file`). It pages through the feed until it reaches a filing
+  it has seen before, up to 10 pages, and logs `possible gap` when it runs out of room. Ticker symbols are resolved to
+  CIKs through SEC `company_tickers.json`, refreshed at most once a day.
 
 ## EDGAR's fair-access rules
 
@@ -42,9 +46,13 @@ EDGAR requires every automated client to identify itself and to stay under 10 re
 | setting | type | default | meaning |
 |---|---|---|---|
 | `user_agent` | string, required | none | the User-Agent EDGAR requires: a name and an email address |
-| `ciks` | list, required | none | CIK numbers, with or without leading zeros |
+| `mode` | string | `"company"` | how to poll: `company` (one Atom feed per followed CIK, the default) or `current` (one global current-events feed per form, filtered by a watchlist) |
+| `ciks` | list | `[]` | CIK numbers, with or without leading zeros. Required in company mode; in current mode they are part of the watchlist |
 | `forms` | list | `["8-K", "4"]` | form types; EDGAR matches by prefix, so `4` also brings `4/A` |
 | `backfill` | int | `0` | how many of the newest filings in a feed to emit the first time it is seen (0 to 40); filings another of the company's feeds already sent are not sent again |
+| `tickers` | list | `[]` | ticker symbols for the watchlist in current mode; resolved to CIKs through SEC `company_tickers.json` |
+| `tickers_file` | path | `""` | an absolute path to a watchlist file (one ticker per line, or a JSON list), re-read on every pass; same ownership and mode rules as a hooks file |
+| `all_filings` | bool | `false` | in current mode, emit every filing when the watchlist is empty (documented opt-in) |
 
 The poll interval is the manifest's `every_s = 300`. An instance may override it (60 or more). Polling only in market hours
 is a deployment choice, not a setting here.
@@ -64,7 +72,8 @@ None. EDGAR's feeds are public.
 ```
 
 The `key` is the CIK, so filings of one company coalesce. Filings come out oldest first within a tick. A filing that
-two of your feeds both match (`4` and `4/A`) is emitted once.
+two of your feeds both match (`4` and `4/A`) is emitted once. In current mode an item may carry a `tickers` list with
+the ticker symbols resolved for that company.
 
 ## Failures
 
