@@ -8,10 +8,12 @@ an interface, and the entry will say so.
 
 ### Changed
 
+- Docs: the tee section says that redelivering a batch an operator dropped enqueues it anew and so recreates every tee copy; the `google.gmail` docs name the two `verified` packs and the five that are not, and a test keeps the docs' status table in line with the pack files.
 - `google.gmail` Amazon pack: also matches "Your order with Amazon" (the Amazon store), digital orders (`D01-…` ids), order updates, seller purchases and returns; the DoorDash and Amazon packs are marked `verified` after a read-only run over a real mailbox.
 
 ### Added
 
+- `sec.edgar` current mode: `mode = "current"` reads EDGAR's global current-events feed once per form instead of one feed per company, and keeps the filings of a watchlist given as `ciks`, `tickers` (resolved through SEC's `company_tickers.json`, refreshed at most once a day) and `tickers_file` (an absolute path, re-read on every pass). An empty watchlist refuses to run unless `all_filings = true`. Company mode is unchanged.
 - Poll sources (ARCHITECTURE 14.4), for services with no push at all: a bobbin may declare `[poll]` (`every_s` >= 60,
   `jitter_s`, `module = "poller"`) in place of `[source]`, and its `poller.py` answers `poll(batch, ctx)` with the same
   batch, context, journal, staged state and emits as a processor. The dispatcher keeps a durable schedule in the new
