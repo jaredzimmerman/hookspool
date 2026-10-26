@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import time
 
 import pytest
@@ -14,6 +15,7 @@ import _googlestub
 from hookspool import mailrules as MR
 from hookspool.bobbins.google.gmail import processor as gm
 
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OWNER = "owner@example.test"
 AGENT = "agent@example.test"
 OUTPUTS = ("scheduling", "agent-mail", "agent-schedule", "mail-matched", "mailbox-changed")
@@ -29,6 +31,29 @@ def rule(**kw):
 
 def first(rules, frm, subject, body="", bulk=False):
     return MR.first_match(rules, frm, subject, body, bulk=bulk)
+
+
+def _doc(*parts: str) -> str:
+    with open(os.path.join(ROOT, *parts), encoding="utf-8") as f:
+        return f.read()
+
+
+def _pack_statuses() -> dict:
+    return {s["name"]: s["status"] for s in MR.summaries(PACKS)}
+
+
+def _doc_status_table() -> dict:
+    """The ``| pack | rules | what it extracts | status |`` rows of the mail-rules page, as pack -> status."""
+    out = {}
+    for ln in _doc("docs", "bobbins", "mail-rules.md").splitlines():
+        if not ln.startswith("|"):
+            continue
+        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+        name = cells[0].strip("`") if cells else ""
+        if len(cells) != 4 or name not in _pack_statuses():
+            continue
+        out[name] = cells[3].strip("`").strip()
+    return out
 
 
 # ---- the engine ------------------------------------------------------------------------------------------------
@@ -175,6 +200,21 @@ def test_every_pack_loads_and_the_listing_names_them_all():
         assert s["status"] in MR.PACK_STATUS and s["description"] and s["rules"]
     names = [r.name for p in ALL_PACKS for r in MR.load_pack(PACKS, p).rules]
     assert len(names) == len(set(names))
+
+
+def test_the_status_table_in_the_mail_rules_doc_matches_the_pack_files():
+    got, doc = _pack_statuses(), _doc_status_table()
+    assert sorted(doc) == sorted(ALL_PACKS), sorted(doc)
+    for name, status in doc.items():
+        assert status in MR.PACK_STATUS, f"{name}: the docs name an unknown status {status}"
+        assert status == got[name], f"{name}: the docs say {status}, the pack file says {got[name]}"
+
+
+def test_the_gmail_bobbin_docs_name_every_pack_and_do_not_blanket_claim_a_status():
+    readme = _doc("hookspool", "bobbins", "google", "gmail", "README.md")
+    for p in ALL_PACKS:
+        assert f"`{p}`" in readme, f"README.md does not name the {p} pack"
+    assert not re.search(r"all seven", readme, re.IGNORECASE), "the README claims a status for every pack at once"
 
 
 AMZ = "shipment-tracking@amazon.com"  # hookspool-scan: allow: the service's own sender domain

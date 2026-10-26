@@ -49,10 +49,11 @@ before the skip rules and the scheduling check. Route `mail-matched` in a destin
 
 Seven packs ship in `rule-packs/` and are switched on by name in `rule_packs`: `amazon-orders`, `doordash-orders`,
 `resy-reservations`, `opentable-reservations`, `tock-reservations`, `sevenrooms-reservations` and
-`courtlistener-alerts`. All seven are `unverified`: written from the services' published email conventions, not
-checked against real mail, so look at what arrives and put your own rule in front where it differs.
-`hookspool bobbin show google.gmail` lists them with their status. The rule format, how to write your own and each
-pack's rules are in [Mail rules and rule packs](../../../../docs/bobbins/mail-rules.md).
+`courtlistener-alerts`. Two are `verified` (`amazon-orders` and `doordash-orders`, checked against a real mailbox);
+the other five are `unverified`: written from the services' published email conventions, not checked against real
+mail, so look at what arrives and put your own rule in front where it differs. `hookspool bobbin show google.gmail`
+lists them with their status, and the status table is in
+[Mail rules and rule packs](../../../../docs/bobbins/mail-rules.md).
 
 ## Secrets
 
