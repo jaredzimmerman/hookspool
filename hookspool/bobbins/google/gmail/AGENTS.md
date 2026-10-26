@@ -58,8 +58,10 @@ Secrets used below: `push_token` (made in step 2), `cred_owner`, `cred_agent` (o
    missing secret, setting or output, fix the table and run it again.
    Optional mail rules: to report mail from services that only send email, add `rule_packs = ["<PACK>", ...]` under
    `[bobbins.gmail.settings]` and/or your own `[[bobbins.gmail.settings.rules]]` tables, and map `mail-matched` in
-   `outputs`. `hookspool bobbin show google.gmail` lists the
-   packs and their status (all `unverified`: ask the person before relying on one). The format is in
+   `outputs`. `hookspool bobbin show google.gmail` lists the packs and their status. Two are `verified`
+   (`amazon-orders` and `doordash-orders`, checked against a real mailbox); the other five are
+   `unverified`: written from the services' published email conventions, not checked against real
+   mail, so ask the person before relying on one. The status table is in
    [Mail rules and rule packs](../../../../docs/bobbins/mail-rules.md). Check: `hookspool check` exits 0 and
    `hookspool bobbin expand gmail` shows `rule_packs` in the settings; a misspelt pack name is only found when a batch
    runs: the rules are then ignored and the log gets one `mail rules ignored for this batch` line, so test with step 9.

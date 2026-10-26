@@ -68,7 +68,9 @@ script, set `state_dir` to its data directory.
 
 To recognise mail from services that only send email (orders, deliveries, reservations, court alerts), add pack names
 or your own rules to the instance's `settings` (for example `rule_packs = ["amazon-orders", "resy-reservations"]` under `[bobbins.gmail.settings]`) and
-map the `mail-matched` output in `outputs`. `hookspool bobbin show google.gmail` lists the packs and whether each is `verified` or `unverified`. The rule format,
+map the `mail-matched` output in `outputs`. `hookspool bobbin show google.gmail` lists the packs and their status: two are `verified`
+(`amazon-orders` and `doordash-orders`, checked against a real mailbox) and the other five are
+`unverified`. The rule format,
 and how a destination script routes by the item's `rule`, are in [Mail rules and rule packs](../../../../docs/bobbins/mail-rules.md).
 A misspelt pack name or a bad rule does not stop the batch: the rules are ignored and the log gets one line, `mail rules ignored for this batch`.
 Mail that arrives while the rules are broken is not matched later, even once they are fixed, so run step 4.4 right after every rules edit.
