@@ -63,8 +63,26 @@ class Edgar:
 
     def get_text(self, url, headers=None, *, params=None, bearer=None, timeout_s=None, label=None):
         self.calls.append({"url": url, "headers": dict(headers or {}), "params": dict(params or {})})
-        queue = self.answers[(params["CIK"], params["type"])]
-        a = queue.pop(0) if len(queue) > 1 else queue[0]
+        if "company_tickers.json" in str(url):
+            queue = self.answers.get("__tickers__")
+            if queue:
+                a = queue.pop(0) if len(queue) > 1 else queue[0]
+                if isinstance(a, Exception):
+                    raise a
+                return a
+            # default: map a handful of tickers to the test CIK
+            import json as _j
+            body = _j.dumps({"0": {"cik_str": 1, "ticker": "AAPL", "title": "Apple Inc."}})
+            return 200, body, {}
+        params = params or {}
+        if "CIK" in params:
+            key = (params["CIK"], params["type"])
+        else:
+            key = ("__current__", params.get("type"))
+        queue = self.answers.get(key, self.answers.get(params.get("type")))
+        if queue is None:
+            raise KeyError(key)
+        a = queue.pop(0) if (isinstance(queue, list) and len(queue) > 1) else (queue[0] if isinstance(queue, list) else queue)
         if isinstance(a, Exception):
             raise a
         return a
@@ -346,7 +364,7 @@ def test_the_manifest_is_a_poll_bobbin_with_no_secret_and_the_documented_setting
     assert errs == [], errs
     pkg = pkgs["sec.edgar"]
     assert pkg.errors == [] and pkg.builtin and pkg.poll["every_s"] == 300 and pkg.processor is None
-    assert pkg.secrets == {} and set(pkg.settings) == {"user_agent", "ciks", "forms", "backfill"}
+    assert pkg.secrets == {} and set(pkg.settings) == {"user_agent", "mode", "ciks", "forms", "backfill", "tickers", "tickers_file", "all_filings"}
     assert pkg.settings["user_agent"].get("required") is True and "default" not in pkg.settings["user_agent"]
     assert pkg.settings["forms"]["default"] == ["8-K", "4"] and set(pkg.outputs) == {"filing"}
     prov = pkg.provider

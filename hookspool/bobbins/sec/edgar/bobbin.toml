@@ -21,10 +21,15 @@ description = "the User-Agent EDGAR requires, with contact information: a name a
 type = "string"
 required = true
 
+[settings.mode]
+description = "how to poll: company (one Atom feed per followed CIK, the default) or current (one global current-events feed per form, filtered by a watchlist)"
+type = "string"
+default = "company"
+
 [settings.ciks]
-description = "the companies to follow: CIK numbers, with or without leading zeros (at most 100 companies and forms together make 200 feeds)"
+description = "the companies to follow: CIK numbers, with or without leading zeros. Required in company mode; in current mode they are part of the watchlist"
 type = "list"
-required = true
+default = []
 
 [settings.forms]
 description = "the form types to follow; EDGAR matches by prefix, so 4 also brings 4/A"
@@ -36,5 +41,20 @@ description = "how many of the newest filings in each feed to send the first tim
 type = "int"
 default = 0
 
+[settings.tickers]
+description = "ticker symbols for the watchlist in current mode; resolved to CIKs through SEC company_tickers.json"
+type = "list"
+default = []
+
+[settings.tickers_file]
+description = "an absolute path to a watchlist file (one ticker per line, or a JSON list), re-read on every pass; same ownership and mode rules as a hooks file"
+type = "path"
+default = ""
+
+[settings.all_filings]
+description = "in current mode, emit every filing when the watchlist is empty (documented opt-in)"
+type = "bool"
+default = false
+
 [outputs.filing]
-description = "a new filing for a followed company: cik, company, form, accession, filed, title, link"
+description = "a new filing for a followed company: cik, company, form, accession, filed, title, link, plus tickers when they can be resolved"
