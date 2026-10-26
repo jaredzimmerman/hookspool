@@ -223,7 +223,8 @@ never changes where an event already went. Each copy is an event of its own, in 
 act on each copy separately, so a failing tee destination never delays the primary copy. All copies of one request are
 committed in the same transaction before the sender gets its 2xx. Dedup and `ignore` run once per request: a duplicate or
 an ignored request makes no copies. (A redelivered duplicate whose primary copy is dead replays that copy only; a dead tee
-copy waits for `hookspool replay`.)
+copy waits for `hookspool replay`. A batch an operator dropped, whose redelivery comes back, is enqueued anew, and with a
+tee route that also recreates every tee copy, so a tee destination that already delivered the event gets it again.)
 
 | key | default | meaning |
 |---|---|---|
