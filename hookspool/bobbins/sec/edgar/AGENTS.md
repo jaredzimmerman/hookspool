@@ -13,6 +13,7 @@ The same procedure as SETUP.md, as steps. EDGAR has no push, so this is a poll b
 - The contact for EDGAR's User-Agent: a name and an email address the human reads. EDGAR requires it; do not invent one.
 - The route for the `filing` output (where the filings should go).
 - The CIK number of each company to follow, and the form types if not `8-K` and `4`.
+- For `current` mode: ticker symbols or a ticker file, instead of CIKs.
 
 This bobbin has no secret and no provider-side step.
 
@@ -24,6 +25,8 @@ This bobbin has no secret and no provider-side step.
    [bobbins.edgar]
    bobbin = "sec.edgar"
    settings = { user_agent = "<USER_AGENT>", ciks = ["<CIK>"], forms = ["8-K", "4"] }
+   # current mode for a large watchlist: settings = { user_agent = "<USER_AGENT>", mode = "current",
+   #   tickers = ["AAPL"], tickers_file = "/abs/path/tickers.txt", forms = ["8-K", "4"], all_filings = false }
    outputs = { filing = "<ROUTE>" }
    ```
 

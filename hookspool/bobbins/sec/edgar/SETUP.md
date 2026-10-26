@@ -33,6 +33,21 @@ outputs = { filing = "hermes:edgar" }
 
 To receive the newest few filings the first time instead of starting from now, add `backfill = 5` to `settings`.
 
+## Current mode (large watchlists)
+
+For a watchlist of hundreds of tickers, set `mode = "current"` and give `tickers` (and/or `tickers_file`) instead of
+`ciks`:
+
+```toml
+[bobbins.edgar]
+bobbin = "sec.edgar"
+settings = { user_agent = "Example Research research@example.com", mode = "current", ciks = [], tickers = ["AAPL", "MSFT"], tickers_file = "/abs/path/tickers.txt", forms = ["8-K", "4"] }
+outputs = { filing = "hermes:edgar" }
+```
+
+`tickers_file` is one ticker per line or a JSON list, re-read on every pass. An empty watchlist refuses to run unless
+`all_filings = true`. See README.md for details.
+
 ## Verify
 
 1. `hookspool status` and read `polls.edgar`: `next_at` is set.

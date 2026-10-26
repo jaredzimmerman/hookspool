@@ -10,6 +10,7 @@ state, emits) against a scripted EDGAR, with a fake clock and sleep.
 """
 from __future__ import annotations
 
+import json
 import os
 
 import _bobbinrig
@@ -370,3 +371,184 @@ def test_the_manifest_is_a_poll_bobbin_with_no_secret_and_the_documented_setting
     prov = pkg.provider
     assert prov["no_push_note"] == "EDGAR publishes RSS and Atom feeds only; there is no push."
     assert prov["no_push_docs"] == prov["api_docs"] and "webhook_docs" not in prov
+
+
+# ---- current mode ------------------------------------------------------------------------------------------
+def current_entry(n: int, cik: int = 1, form: str = "8-K", filed: str = "2026-01-02") -> str:
+    a = acc(n)
+    return (f'<entry><category label="form type" scheme="https://www.sec.gov/" term="{form}" />'
+            f'<content type="text/xml"><accession-number>{a}</accession-number><filing-date>{filed}</filing-date>'
+            f'<filing-type>{form}</filing-type></content>'
+            f'<id>urn:tag:sec.gov,2008:accession-number={a}</id>'
+            f'<link href="https://www.sec.gov/Archives/edgar/data/{cik}/{a}-index.htm" rel="alternate" type="text/html" />'
+            f'<title>Example Corp ({cik})</title><updated>{filed}T10:00:00-05:00</updated></entry>')
+
+
+def make_current(tmp_path, answers=None, **settings):
+    base = {"user_agent": UA, "mode": "current", "ciks": [], "forms": ["8-K"], "backfill": 0,
+            "tickers": [], "tickers_file": "", "all_filings": False}
+    rig = _bobbinrig.Rig(tmp_path, "sec.edgar", ["filing"], dict(base, **settings), {})
+    rig.edgar = Edgar(answers or {})
+    return rig
+
+
+def tick_at(rig, when, bid="1"):
+    return rig.run({"tick": int(when), "instance": "edgar"}, bid=bid, clock=lambda: when,
+                   extras_factory=rig.edgar.factory)
+
+
+def current_calls(rig):
+    return [c for c in rig.edgar.calls if c["params"].get("action") == "getcurrent"]
+
+
+def ticker_calls(rig):
+    return [c for c in rig.edgar.calls if "company_tickers.json" in c["url"]]
+
+
+def test_current_mode_reads_pages_until_a_seen_accession(tmp_path):
+    page0 = ok(feed(*[current_entry(n) for n in range(100, 0, -1)]))
+    page1 = ok(feed(current_entry(999)))
+    rig = make_current(tmp_path, {("__current__", "8-K"): [page0, page1]}, tickers=["AAPL"])
+    rig.seed_state("feeds", {"current|8-K": {"etag": "", "modified": "", "accession": acc(999),
+                                            "seen": [acc(999)]}})
+    rc, emits, err = tick(rig, "1")
+    assert rc == 0
+    starts = [c["params"]["start"] for c in current_calls(rig)]
+    assert starts == [0, 100]
+    assert [i["accession"] for i in (e["payload"] for e in emits)] == [acc(n) for n in range(1, 101)]
+
+
+def test_current_mode_possible_gap_when_a_full_page_has_nothing_seen_before(tmp_path):
+    page0 = ok(feed(*[current_entry(n) for n in range(100, 0, -1)]))
+    page1 = ok(feed(current_entry(101)))
+    rig = make_current(tmp_path, {("__current__", "8-K"): [page0, page1]},
+                       tickers=[], ciks=["0000000001"], all_filings=False)
+    rig.seed_state("feeds", {"current|8-K": {"etag": "", "modified": "", "accession": acc(999),
+                                            "seen": [acc(999)]}})
+    rc, emits, err = tick(rig, "1")
+    assert rc == 0
+    assert "possible gap: a feed returned a full page of new filings" in err
+    assert len(emits) == 101
+
+
+def test_current_mode_possible_gap_when_the_page_cap_is_hit(tmp_path):
+    pages = [ok(feed(*[current_entry(n + page * 100) for n in range(100, 0, -1)])) for page in range(10)]
+    rig = make_current(tmp_path, {("__current__", "8-K"): pages}, tickers=[], ciks=["0000000001"])
+    rig.seed_state("feeds", {"current|8-K": {"etag": "", "modified": "", "accession": acc(999999),
+                                            "seen": [acc(999999)]}})
+    rc, emits, err = tick(rig, "1")
+    assert rc == 0
+    assert "possible gap: a feed returned a full page of new filings" in err
+    assert "possible gap: current feed returned 10 full pages" in err
+
+
+def test_current_mode_304_on_page_one_changes_nothing(tmp_path):
+    rig = make_current(tmp_path, {("__current__", "8-K"): [NOT_MODIFIED]}, tickers=["AAPL"])
+    seeded = {"current|8-K": {"etag": '"v1"', "modified": "Mon, 05 Jan 2026 10:00:00 GMT",
+                              "accession": acc(1), "seen": [acc(1)]}}
+    rig.seed_state("feeds", seeded)
+    rc, emits, err = tick(rig, "1")
+    assert rc == 0 and emits == []
+    assert len(current_calls(rig)) == 1
+    assert rig.get_state("feeds") == seeded
+
+
+def test_current_mode_filters_by_cik(tmp_path):
+    entries = [current_entry(1, cik=1), current_entry(2, cik=2)]
+    rig = make_current(tmp_path, {("__current__", "8-K"): [ok(feed(*entries))]}, ciks=["0000000001"])
+    out = [e["payload"] for e in tick(rig, "1")[1]]
+    assert [i["cik"] for i in out] == ["0000000001"]
+
+
+def test_current_mode_filters_by_ticker(tmp_path):
+    entries = [current_entry(1, cik=1), current_entry(2, cik=2)]
+    rig = make_current(tmp_path, {("__current__", "8-K"): [ok(feed(*entries))]}, tickers=["AAPL"])
+    out = [e["payload"] for e in tick(rig, "1")[1]]
+    assert [i["cik"] for i in out] == ["0000000001"]
+
+
+def test_current_mode_tickers_file_is_reread_between_passes(tmp_path):
+    answers = {("__current__", "8-K"): [ok(feed(current_entry(1))),
+                                       ok(feed(current_entry(2), current_entry(1)))]}
+    rig = make_current(tmp_path, answers, tickers_file=str(tmp_path / "tickers.txt"))
+    rig.edgar.answers["__tickers__"] = [ok(json.dumps({"0": {"cik_str": 1, "ticker": "AAPL"},
+                                                      "1": {"cik_str": 1, "ticker": "MSFT"}}))]
+    path = tmp_path / "tickers.txt"
+    path.write_text("AAPL\n")
+    out1 = [e["payload"] for e in tick(rig, "1")[1]]
+    assert [i["accession"] for i in out1] == [acc(1)]
+    assert out1[0]["tickers"] == ["AAPL"]
+    path.write_text("MSFT\n")
+    out2 = [e["payload"] for e in tick(rig, "2")[1]]
+    assert [i["accession"] for i in out2] == [acc(2)]
+    assert out2[0]["tickers"] == ["MSFT"]
+
+
+def test_current_mode_bad_tickers_file_fails_permanently_without_a_request(tmp_path):
+    bad = tmp_path / "bad.txt"
+    bad.write_text("AAPL\n")
+    os.chmod(bad, 0o666)
+    rig = make_current(tmp_path, {("__current__", "8-K"): [ok(feed(current_entry(1)))]},
+                       tickers=[], tickers_file=str(bad))
+    rc, emits, err = tick(rig, "1")
+    assert rc == 65
+    assert rig.edgar.calls == []
+
+
+def test_current_mode_empty_watchlist_fails_unless_all_filings(tmp_path):
+    rig = make_current(tmp_path, {("__current__", "8-K"): [ok(feed(current_entry(1)))]})
+    rc, emits, err = tick(rig, "1")
+    assert rc == 65 and "watchlist" in err and rig.edgar.calls == []
+    rig2 = make_current(tmp_path, {("__current__", "8-K"): [ok(feed(current_entry(1)))]}, all_filings=True)
+    out = [e["payload"] for e in tick(rig2, "1")[1]]
+    assert [i["accession"] for i in out] == [acc(1)]
+
+
+def test_current_mode_all_filings_emits_everything(tmp_path):
+    entries = [current_entry(1, cik=1), current_entry(2, cik=2)]
+    rig = make_current(tmp_path, {("__current__", "8-K"): [ok(feed(*entries))]}, all_filings=True)
+    out = [e["payload"] for e in tick(rig, "1")[1]]
+    assert sorted(i["cik"] for i in out) == ["0000000001", "0000000002"]
+
+
+def test_current_mode_carries_tickers_when_they_resolve(tmp_path):
+    rig = make_current(tmp_path, {("__current__", "8-K"): [ok(feed(current_entry(1)))]}, tickers=["AAPL"])
+    out = [e["payload"] for e in tick(rig, "1")[1]]
+    assert out[0]["tickers"] == ["AAPL"]
+
+
+def test_company_tickers_is_fetched_at_most_once_a_day(tmp_path):
+    rig = make_current(tmp_path, {("__current__", "8-K"): [ok(feed(current_entry(1))),
+                                                          ok(feed(current_entry(2), current_entry(1)))]},
+                       tickers=["AAPL"])
+    rc, emits, err = tick(rig, "1")
+    assert rc == 0
+    assert len(ticker_calls(rig)) == 1
+    rc, emits, err = tick(rig, "2")
+    assert rc == 0
+    assert len(ticker_calls(rig)) == 1
+    rc, emits, err = tick_at(rig, T0 + 86400, bid="3")
+    assert rc == 0
+    assert len(ticker_calls(rig)) == 2
+
+
+def test_company_tickers_304_keeps_the_cached_map(tmp_path):
+    body = json.dumps({"0": {"cik_str": 1, "ticker": "AAPL"}, "1": {"cik_str": 1, "ticker": "MSFT"}})
+    rig = make_current(tmp_path, {("__current__", "8-K"): [ok(feed(current_entry(1))),
+                                                          ok(feed(current_entry(2), current_entry(1)))]},
+                       tickers=["AAPL"])
+    rig.edgar.answers["__tickers__"] = [ok(body, etag='"v1"'), (304, "", {"ETag": '"v1"'})]
+    rc, emits, err = tick(rig, "1")
+    assert rc == 0
+    cached_before = rig.get_state("tickers")["data"]
+    rc, emits, err = tick_at(rig, T0 + 86400, bid="2")
+    assert rc == 0
+    assert rig.get_state("tickers")["data"] == cached_before
+    assert len(ticker_calls(rig)) == 2
+
+
+def test_company_mode_is_unaffected_by_current_settings(tmp_path):
+    rig = make(tmp_path, {(CIK, "8-K"): [ok(feed(entry(2), entry(1))), ok(feed(entry(3), entry(2), entry(1)))]},
+               mode="company", tickers=["NOPE"], tickers_file="", all_filings=True)
+    assert items(rig, "1") == []
+    assert [i["accession"] for i in items(rig, "2")] == [acc(3)]
