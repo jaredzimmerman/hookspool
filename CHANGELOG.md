@@ -13,6 +13,10 @@ an interface, and the entry will say so.
 
 ### Added
 
+- Split lineage (schema 4, `0004_split_from.sql`): a batch cut by `hookspool split` records the batch it was cut from in
+  the new `batches.split_from` column, so a dropped parent can still be traced through its children after retention
+  prunes it; `hookspool list --split-from <id>` lists those children, and `show` and `export` carry the field. Additive
+  migration (run `hookspool migrate`; the intake may keep running during it).
 - `sec.edgar` current mode: `mode = "current"` reads EDGAR's global current-events feed once per form instead of one feed per company, and keeps the filings of a watchlist given as `ciks`, `tickers` (resolved through SEC's `company_tickers.json`, refreshed at most once a day) and `tickers_file` (an absolute path, re-read on every pass). An empty watchlist refuses to run unless `all_filings = true`. Company mode is unchanged.
 - Poll sources (ARCHITECTURE 14.4), for services with no push at all: a bobbin may declare `[poll]` (`every_s` >= 60,
   `jitter_s`, `module = "poller"`) in place of `[source]`, and its `poller.py` answers `poll(batch, ctx)` with the same

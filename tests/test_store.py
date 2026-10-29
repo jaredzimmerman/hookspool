@@ -89,9 +89,9 @@ def test_schema_check_refuses_missing_older_and_newer(tmp_path):
     sqlite3.connect(p).close()
     with pytest.raises(SchemaError, match="older"):
         s.check_schema()
-    assert s.ensure_schema() == [1, 2, 3]
+    assert s.ensure_schema() == [1, 2, 3, 4]
     assert s.ensure_schema() == []                                        # idempotent
-    assert s.check_schema() == 3
+    assert s.check_schema() == 4
     assert len(s.instance_id()) == 12
     s._conn().execute("PRAGMA user_version=99")
     with pytest.raises(SchemaError, match="newer"):
@@ -102,9 +102,9 @@ def test_schema_check_refuses_missing_older_and_newer(tmp_path):
 
 
 def test_migration_files():
-    assert [n for n, _ in store_mod.migrations()] == [1, 2, 3] and store_mod.SCHEMA_VERSION == 3
+    assert [n for n, _ in store_mod.migrations()] == [1, 2, 3, 4] and store_mod.SCHEMA_VERSION == 4
     assert [os.path.basename(p) for _, p in store_mod.migrations()] == ["0001_v2.sql", "0002_unwrap.sql",
-                                                                        "0003_polls.sql"]
+                                                                        "0003_polls.sql", "0004_split_from.sql"]
 
 
 def test_a_schema_1_spool_upgrades_in_place_keeping_its_attempts(tmp_path):
@@ -119,7 +119,7 @@ def test_a_schema_1_spool_upgrades_in_place_keeping_its_attempts(tmp_path):
     c.commit()
     c.close()
     s = Store(p, cfg())
-    assert s.ensure_schema() == [2, 3] and s.check_schema() == 3
+    assert s.ensure_schema() == [2, 3, 4] and s.check_schema() == 4
     assert [(a["batch_id"], a["events_delivered"], a["failed_event_id"]) for a in s.attempts(1)] == [(1, None, None)]
 
 
@@ -135,7 +135,7 @@ def test_an_old_or_missing_spool_names_the_upgrade_steps_that_work_under_the_uni
     s._conn().execute("UPDATE meta SET value='1' WHERE key='schema_version'")
     with pytest.raises(store_mod.SchemaError) as e:
         s.check_schema()
-    assert "older than 3: run `hookspool migrate` (stop the dispatcher first; see deploy/README.md, Upgrading)" \
+    assert "older than 4: run `hookspool migrate` (stop the dispatcher first; see deploy/README.md, Upgrading)" \
         in str(e.value)
 
 
@@ -628,6 +628,64 @@ def test_split_dead_batch_and_refusals(st):
     _, qb = st.quarantine("s", b"x", {}, "e")
     with pytest.raises(ValueError):
         st.split(qb, max_events=1)
+
+
+def test_split_records_lineage(st, clock):
+    """A split child records the batch it was cut from; the parent keeps its own lineage."""
+    b = None
+    for i in range(6):
+        b = enq(st, payload=P(i=i), max_events=10).batch_id
+        clock.advance(1)
+    st.seal_ready(clock.t + 500)
+    assert st.batch(b)["state"] == "sealed"
+    parts = st.split(b, max_events=3, now=clock.t)
+    assert len(parts) == 2
+    assert st.batch(b)["split_from"] is None                                # the parent was never split
+    for nid in parts:
+        assert st.batch(nid)["split_from"] == b                            # each child names its parent
+        assert st.list(split_from=b), f"batch {b} has no children"
+    # splitting a child again makes it the parent of its own children
+    ids = [e["id"] for e in st.events(parts[0])]
+    sub = st.split(parts[0], at=ids[2])
+    assert sub and st.batch(sub[0])["split_from"] == parts[0]
+
+
+def test_pruning_dropped_parent_keeps_split_children(st, clock):
+    """Retention prunes the dropped parent; the children keep their lineage and their content."""
+    b = None
+    for i in range(6):
+        b = enq(st, payload=P(i=i), max_events=10).batch_id
+        clock.advance(1)
+    st.seal_ready(clock.t + 500)
+    parts = st.split(b, max_events=3, now=clock.t)
+    assert len(parts) == 2 and st.batch(b)["state"] == "dropped"
+    clock.advance(8 * 86400)                                                 # past retention.dropped_days
+    out = st.prune()
+    assert out["dropped"] == 1
+    assert st.batch(b) is None                                                 # the parent was pruned
+    assert sorted(x["id"] for x in st.list(split_from=b)) == sorted(parts)     # ...its children remain
+
+
+def test_a_schema_3_spool_migrates_split_from_null(tmp_path):
+    """0004 adds ``batches.split_from``; a schema-3 batch keeps NULL (it never split)."""
+    p = str(tmp_path / "old.db")
+    c = sqlite3.connect(p)
+    for n, path in store_mod.migrations():
+        if n > 3:
+            break
+        for stmt in store_mod._split_sql(open(path, encoding="utf-8").read()):
+            c.execute(stmt)
+    c.execute("INSERT INTO meta (key, value) VALUES ('schema_version', '3')")
+    c.execute("PRAGMA user_version=3")
+    c.execute("INSERT INTO batches (route, source, destination, key, state, first_at, last_at, quiet_s,"
+              " max_s, max_events, max_bytes, count, bytes, delivered_at, sealed_at, content_hash)"
+              " VALUES ('r', 's', 'd', 'k', 'delivered', 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 'h')")
+    c.commit()
+    c.close()
+    s = Store(p, cfg())
+    assert s.ensure_schema() == [4] and s.check_schema() == 4
+    b = s.batch(1)
+    assert b is not None and b["split_from"] is None
 
 
 def test_exclude_rules(st):

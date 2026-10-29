@@ -148,6 +148,10 @@ hookspool exclude 41 9912 --yes            # leave one event out of the document
 content hash; the event itself stays stored and shows in `show --events` as excluded. After either, `replay` a dead batch
 or let a waiting one deliver.
 
+Each new batch records the batch it was cut from (`split_from`). The dropped parent keeps its own `split_from`, so the
+lineage of a split is traceable through the children even after retention prunes the parent; `list --split-from <id>`
+answers with the children of one batch.
+
 ### Drop
 
 ```

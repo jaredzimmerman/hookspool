@@ -42,6 +42,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--state", choices=STATES)
     p.add_argument("--source")
     p.add_argument("--destination")
+    p.add_argument("--split-from", dest="split_from", type=int,
+                   help="only batches cut from this batch (the children of `split`; the parent may already be dropped)")
     p.add_argument("--limit", type=int, default=50)
     p = sub.add_parser("show", help="one batch")
     p.add_argument("batch", type=int)
@@ -363,7 +365,8 @@ def _run(a, st: Store, cfg: dict) -> int:
         _out(a, st.status())
         return EXIT_OK
     if a.cmd == "list":
-        rows = st.list(a.state, source=a.source, destination=a.destination, limit=a.limit)
+        rows = st.list(a.state, source=a.source, destination=a.destination, split_from=a.split_from,
+                       limit=a.limit)
         lines = [f"{r['id']:>7} {r['state']:<9} {r['destination']:<26} n={r['count']:<4} att={r['attempts']:<3}"
                  f" first={_fmt_ts(r['first_at'])} next={_fmt_ts(r['next_attempt_at'])} key={r['key']}"
                  + (f" err={r['last_error'][:80]}" if r["last_error"] else "") for r in rows]

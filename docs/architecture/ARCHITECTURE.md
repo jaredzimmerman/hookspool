@@ -133,6 +133,7 @@ One unit of delivery to one destination.
 | `last_error` | short, scrubbed; `reason_class` of the last outcome in `last_class` |
 | `last_class` | `transport`, `throttle`, `batch`, `config`, `permanent`, `poison`, `quarantine`, NULL |
 | `delivered_at`, `result` | |
+| `split_from` | the batch this one was cut from by `split`; NULL when it never split (schema 4, `0004_split_from.sql`). No foreign key: retention prunes the dropped parent and the children keep their lineage |
 
 Indexes: `(route, key, state)` for the open-batch lookup; `(state, next_attempt_at)`; `(destination, state)`; `(state, delivered_at)` for retention.
 
@@ -455,7 +456,7 @@ Quarantine exists because of this table: with GitHub, a plugin bug that answered
 Both produce the same JSON:
 
 ```json
-{"ok": true, "degraded": [], "schema": 3,
+{"ok": true, "degraded": [], "schema": 4,
  "dispatcher": {"alive": true, "heartbeat_age_s": 4.0, "pid": 4242},
  "spool": {"last_enqueue_age_s": 12.0, "writable_checked_age_s": 20.0},
  "batches": {"open": 3, "sealed": 1, "retry": 0, "leased": 1, "delivered": 1412, "dead": 0, "dropped": 0, "quarantined": 0},
@@ -1298,7 +1299,7 @@ Exit codes: 0 ok, 1 "not found / nothing to do", 2 config or schema error, 3 loc
 ## 17. Schema versions and upgrades
 
 - `meta.schema_version` (also mirrored in `PRAGMA user_version`). Migrations are numbered SQL files under `hookspool/migrations/NNNN_<name>.sql`, applied in order inside one `BEGIN IMMEDIATE` transaction each (a migration that must rebuild a table under `foreign_keys=ON` turns the pragma off before `BEGIN` and runs `PRAGMA foreign_key_check` after). Only two callers apply them: the dispatcher at startup and `hookspool migrate`, both under `dispatch.lock`. The intake and the other CLI commands only read the version: older than known → exit 2 with "run hookspool migrate"; newer than known → exit 2 (downgrade is not supported; restore the older binary or the backup).
-- Schema 2 (`0002_unwrap.sql`) adds the unwrap columns of `attempts`; schema 3 (`0003_polls.sql`) adds the `polls` table (14.4). Both are additive.
+- Schema 2 (`0002_unwrap.sql`) adds the unwrap columns of `attempts`; schema 3 (`0003_polls.sql`) adds the `polls` table (14.4). Both are additive. Schema 4 (`0004_split_from.sql`) adds `batches.split_from`, the batch a batch was cut from by `split` (nullable, no foreign key, additive).
 - v2 ships a single migration, `0001_v2.sql`, which creates the whole schema. The v1 draft on `l/T1` was never deployed and left no database to migrate; nothing supports its schema or its JSON config.
 - Upgrades on a live host: stop the dispatcher, `hookspool migrate`, start. The intake may keep running during an additive migration; a non-additive one needs both stopped (a few seconds of 502; section 9 says which senders retry, so schedule it in a quiet hour).
 
