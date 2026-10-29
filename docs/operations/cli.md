@@ -85,13 +85,15 @@ Batches, newest first, one line each, without payloads.
 | `--state STATE` | one of `open`, `sealed`, `leased`, `retry`, `delivered`, `dead`, `dropped` |
 | `--source SOURCE` | only this source |
 | `--destination DESTINATION` | only this destination; `quarantine` lists quarantined requests |
+| `--split-from ID` | only batches cut from this batch (the children of `split`); the parent may already be dropped |
 | `--limit N` | how many rows (default 50) |
 
 Exit 1 when nothing matches.
 
 ### hookspool show
 
-One batch: its state, window, counts, timestamps and last error.
+One batch: its state, window, counts, timestamps and last error. A batch that was cut by `split` carries the batch it
+was cut from as `split_from`; one that never split carries NULL.
 
 | option | meaning |
 |---|---|
@@ -147,6 +149,8 @@ after you fix the thing that was failing.
 
 Cuts a `sealed`, `retry` or `dead` batch into smaller sealed batches of the same key. The original becomes `dropped`
 with the result `split into ...`. Use it when a destination refuses a batch as too large. Give exactly one option.
+Each new batch records the batch it was cut from (`split_from`); `list --split-from <id>` asks for those children, and
+`show` / `export` carry the field, so a dropped parent stays traceable even after retention prunes it.
 
 | option | meaning |
 |---|---|

@@ -33,7 +33,7 @@ def test_cli_round_trip(home, capsys, monkeypatch):
     assert run(capsys, "status")[0] == 2                                  # no spool yet
     assert not os.path.exists(home / "spool.db")                          # a status probe never creates it
     rc, out, _ = run(capsys, "migrate")
-    assert rc == 0 and "applied [1, 2, 3]" in out
+    assert rc == 0 and "applied [1, 2, 3, 4]" in out
     assert run(capsys, "migrate")[1].strip() == "schema is current"
     payload = json.dumps({"n": 1, "note": SENTINEL})
     for i in range(4):
@@ -96,3 +96,23 @@ def test_cli_refuses_newer_schema(home, capsys):
     assert rc == 2 and "newer" in err
     rc, _, err = run(capsys, "check")
     assert rc == 2 and "newer" in err
+
+
+def test_cli_list_split_from(home, capsys, monkeypatch):
+    assert run(capsys, "migrate")[0] == 0
+    payload = json.dumps({"n": 1})
+    for i in range(3):
+        rc, out, err = run(capsys, "--json", "enqueue", "--source", "sweep", "--key", "k", "--destination",
+                           "hermes:x", "--dedup-id", f"d{i}", stdin=payload, monkeypatch=monkeypatch)
+        assert rc == 0, err
+    rc, out, _ = run(capsys, "--json", "list")
+    rows = json.loads(out)
+    assert rc == 0 and [r["id"] for r in rows] == [1] and rows[0]["count"] == 3
+    rc, out, _ = run(capsys, "split", "1", "--max-events", "2")
+    assert rc == 0 and "split into [2, 3]" in out, out
+    rc, out, _ = run(capsys, "--json", "list", "--split-from", "1")
+    assert rc == 0 and sorted(r["id"] for r in json.loads(out)) == [2, 3]
+    rc, out, _ = run(capsys, "--json", "list", "--split-from", "999")
+    assert rc == 1 and json.loads(out) == []
+    rc, out, _ = run(capsys, "--json", "show", "2")
+    assert rc == 0 and json.loads(out)["split_from"] == 1

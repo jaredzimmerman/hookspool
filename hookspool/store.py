@@ -41,7 +41,7 @@ CLASSES = ("transport", "throttle", "batch", "config", "permanent", "poison", "q
 QUARANTINE = "quarantine"
 KEY_MAX_BYTES = 512
 ERROR_MAX = 500
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
 EMIT_KEYS = ("source", "key", "action", "payload", "route", "event_type", "dedup_id",
              "quiet_s", "max_s", "max_events", "max_bytes", "not_before")
@@ -961,11 +961,11 @@ class Store:
                 live = [e for e in part if e["excluded_at"] is None]
                 cur = c.execute(
                     "INSERT INTO batches (route, source, destination, key, state, first_at, last_at, quiet_s,"
-                    " max_s, max_events, max_bytes, not_before, count, bytes)"
-                    " VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " max_s, max_events, max_bytes, not_before, count, bytes, split_from)"
+                    " VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (b["route"], b["source"], b["destination"], b["key"], min(e["received_at"] for e in part),
                      max(e["received_at"] for e in part), b["quiet_s"], b["max_s"], b["max_events"],
-                     b["max_bytes"], now, len(live), sum(e["size"] for e in live)))
+                     b["max_bytes"], now, len(live), sum(e["size"] for e in live), batch_id))
                 nid = int(cur.lastrowid)
                 c.executemany("UPDATE events SET batch_id=? WHERE id=?", [(nid, e["id"]) for e in part])
                 self._seal(c, nid, now)
@@ -1368,12 +1368,14 @@ class Store:
     def attempts(self, batch_id: int) -> list[dict]:
         return [dict(r) for r in self._read("SELECT * FROM attempts WHERE batch_id=? ORDER BY id", (batch_id,))]
 
-    def list(self, state: str | None = None, *, source: str | None = None, destination: str | None = None,
+    def list(self, state: str | None = None, *, source: str | None = None,
+             destination: str | None = None, split_from: int | None = None,
              limit: int = 50) -> list[dict]:
         q = ("SELECT id, route, source, destination, key, state, first_at, last_at, count, bytes, attempts,"
-             " next_attempt_at, last_error, last_class, delivered_at, result FROM batches WHERE 1=1")
+             " next_attempt_at, last_error, last_class, delivered_at, result, split_from FROM batches WHERE 1=1")
         args: list = []
-        for col, v in (("state", state), ("source", source), ("destination", destination)):
+        for col, v in (("state", state), ("source", source), ("destination", destination),
+                       ("split_from", split_from)):
             if v:
                 q += f" AND {col}=?"
                 args.append(v)
