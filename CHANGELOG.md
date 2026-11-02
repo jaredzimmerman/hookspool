@@ -13,6 +13,7 @@ an interface, and the entry will say so.
 
 ### Added
 
+- Docs: per-event results design section (ARCHITECTURE 6.4.2): opt-in `per_event_results` response shape, handled state per event per batch, skip-on-retry and delivery rule.
 - Split lineage (schema 4, `0004_split_from.sql`): a batch cut by `hookspool split` records the batch it was cut from in
   the new `batches.split_from` column, so a dropped parent can still be traced through its children after retention
   prunes it; `hookspool list --split-from <id>` lists those children, and `show` and `export` carry the field. Additive

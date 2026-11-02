@@ -338,6 +338,16 @@ Some receivers expect the sender's original payload, one request per event, not 
 - **Hermes answers.** `ignored` (the route's own `events` filter) and `coalesced` (its own `coalesce`) are expected when the gateway sees original events, so they are `ok` without a notice or an issue. `check` does not fail on a route's `events` or `coalesce` when its destination unwraps (section 5).
 - **Coalescing.** Unwrap is meant for routes with coalescing off (`quiet_s = max_s = 0`, the `immediate` span), so each event is its own batch. With a window, every event of the batch is still delivered, in order, and the receiver gets them as a burst; `check` warns but does not fail. All the requests of one attempt share the attempt's deadline (section 6.2); a batch that runs out of time resumes on the next attempt, its accepted events answered `duplicate`.
 
+#### 6.4.2 Per-event results (opt-in)
+
+A destination may opt in with `per_event_results = true` (`http` and `hermes` destinations only; script destinations already get this from the journal and the stable batch id). With the option off, a 2xx means delivered and nothing else changes.
+
+With the option on, on a 2xx the dispatcher reads the JSON body. A top-level `handled` array lists event ids the receiver has fully processed; each listed id that belongs to the batch is stored as handled for that batch. A missing `handled` field with the option on counts every event of that attempt as handled. The field is ignored when the option is off.
+
+Handled state lives per event per batch, lasts as long as the batch (the spool is the durable record and outlives the receiver's duplicate window), and is cleared when the batch reaches `delivered`, `dead` or `dropped`. On retry the dispatcher delivers only the events that are not yet handled, and marks the batch delivered once every event is handled and the latest attempt was ok. A handled event is never re-sent inside that batch.
+
+Hermes itself has no per-event handled signal today, so per-event results only help receivers that send them; using this with Hermes needs a gateway change or an adapter outside core.
+
 ### 6.5 Retry, backoff and the attempt counter
 
 | outcome | class | examples | batch | counted | breaker |
