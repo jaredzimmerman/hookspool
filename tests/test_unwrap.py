@@ -269,6 +269,37 @@ def test_unwrap_deliver_stops_at_the_first_failure_and_reports_progress():
     assert out.reason == "event 1 (2 of 3): http 429"
 
 
+def test_unwrap_deliver_aggregates_partial_handled_across_events() -> None:
+    doc = doc_for(3)
+
+    def send(meta, body, eid):
+        handled = {0: [0], 1: [], 2: [2]}.get(meta["id"], [])
+        return Outcome.ok("ok", handled=handled)
+
+    out = unwrap_deliver(doc, "hs_x_7", replace(make_ctx(), payloads=(b"a", b"b", b"c")), send)
+    assert (out.kind, out.events_delivered) == ("ok", 3)
+    assert out.handled == [0, 2]
+
+
+def test_unwrap_deliver_all_handled_returns_none() -> None:
+    doc = doc_for(2)
+
+    def send(meta, body, eid):
+        return Outcome.ok("ok", handled=[meta["id"]])
+
+    out = unwrap_deliver(doc, "hs_x_7", replace(make_ctx(), payloads=(b"a", b"b")), send)
+    assert out.handled is None
+    assert out.events_delivered == 2
+
+
+def test_unwrap_deliver_missing_handled_counts_every_event_as_handled() -> None:
+    doc = doc_for(2)
+    out = unwrap_deliver(doc, "hs_x_7", replace(make_ctx(), payloads=(b"a", b"b")),
+                         lambda m, b, i: Outcome.ok())
+    assert out.handled is None
+    assert out.events_delivered == 2
+
+
 def test_a_hermes_413_names_the_fix_for_one_event_when_unwrapped(make_config, stub):
     s = stub()
     for spec, want in ((dict(UNWRAP), "exclude the event or raise max_body_bytes"), ({}, "split the batch")):

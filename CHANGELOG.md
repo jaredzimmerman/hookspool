@@ -259,6 +259,9 @@ Moving a 0.1 deployment across is in [Upgrading to 0.2](docs/operations/upgradin
 
 ### Fixed
 
+- `unwrap_deliver`: aggregate the per-event `handled` lists into the batch outcome so partial
+  settlement works for real unwrap destinations, not just the test stub.
+
 - The dispatcher's hot reload validated the new file without loading source plugins, so any config
   with a `template` source was refused ("unknown key") and the dispatcher kept running on the old
   config while the intake had already reloaded. Reload now validates the way `check` and startup do.
