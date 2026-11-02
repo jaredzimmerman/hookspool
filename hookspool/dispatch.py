@@ -493,6 +493,27 @@ class Dispatcher:
                   "events_delivered": out.events_delivered, "failed_event_id": out.failed_event_id}
         try:
             if out.kind == "ok":
+                receipts = getattr(w.dest, "receipts", False)
+                if receipts:
+                    all_ids = [int(m["id"]) for m in (w.doc.get("event_meta") or []) if m.get("id") is not None]
+                    if getattr(w.dest, "per_event_results", False) and getattr(w.dest, "unwrap", False):
+                        if out.handled is None:
+                            self.store.mark_handled(bid, all_ids, now=now)
+                        else:
+                            self.store.mark_handled(bid, out.handled, now=now)
+                    rid = out.receipt_id
+                    if not rid:
+                        rid = f"rcpt_{bid}_{w.attempt.id}"
+                    try:
+                        self.store.mark_awaiting_receipt(bid, w.owner, rid, attempt_id=w.attempt.id,
+                                                        status=out.status, duration_ms=w.duration_ms, now=now,
+                                                        handled_event_ids=None)
+                    except Exception as e:
+                        log.warning("receipt admission failed batch=%d: %s", bid, e.__class__.__name__)
+                        self.store.mark_retry(bid, w.owner, f"receipt admission failed: {e}", "batch", now, False, **common)
+                        return
+                    log.info("awaiting receipt batch=%d destination=%s receipt=%s", bid, name, rid)
+                    return
                 per_event = getattr(w.dest, "per_event_results", False) and getattr(w.dest, "unwrap", False)
                 if per_event:
                     all_ids = [int(m["id"]) for m in (w.doc.get("event_meta") or []) if m.get("id") is not None]
@@ -741,6 +762,12 @@ class Dispatcher:
         self._check_sources(now)
         self._check_polls(now)
         self._resolve_exhausted(now)
+        try:
+            expired = self.store.expire_receipts(now)
+            if expired:
+                log.warning("receipts expired -> uncertain: %s", expired)
+        except Exception:
+            pass
 
     def _check_sources(self, now: float) -> None:
         for name, s in (self.config.get("sources") or {}).items():

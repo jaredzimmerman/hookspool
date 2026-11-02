@@ -302,6 +302,8 @@ table with a `type`.
 | `event_header` | `hermes`, `http` | none | with `unwrap`: the header that carries each event's type (for example `X-GitHub-Event`). A `hermes` destination without it falls back to the source's `event_header` |
 | `dedup_header` | `hermes`, `http` | none | with `unwrap`: the header that carries each event's sender-side dedup id when it has one (for example `X-GitHub-Delivery`) |
 | `per_event_results` | `hermes`, `http` | `false` | with `unwrap`: the receiver reports which events it has fully processed in a `handled` array on each 2xx; a retry only delivers the events not yet handled (see [Per-event results](#per-event-results-settle-an-event-at-a-time)) |
+| `receipts` | `hermes`, `http` | `false` | opt in to receipts: a 2xx may carry a `receipt_id`; the batch stays open as `awaiting_receipt` until the receiver settles it (see [Receipts](#receipts)) |
+| `receipt_dispositions` | `hermes`, `http` | none | with `receipts`: maps the opaque disposition string a receiver reports to `settled`, `retry` or `issue` |
 
 `quarantine` is a reserved name that never delivers.
 

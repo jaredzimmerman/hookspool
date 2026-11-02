@@ -57,6 +57,7 @@ class HermesDestination(Destination):
         if self.unwrap:
             self.idempotency = "per-event"
         self.per_event_results = self.spec.get("per_event_results") is True
+        self.receipts = self.spec.get("receipts") is True
         eh, dh = self.spec.get("event_header"), self.spec.get("dedup_header")
         self.event_header = eh if header_name_ok(eh) else None
         self.dedup_header = dh if header_name_ok(dh) else None
@@ -160,6 +161,7 @@ class HermesDestination(Destination):
         if 200 <= code < 300:
             status = ""
             handled = None
+            parsed = {}
             try:
                 parsed = json.loads(resp.body or b"{}")
                 if isinstance(parsed, dict):
@@ -182,7 +184,14 @@ class HermesDestination(Destination):
             # unwrap: the gateway sees original events, so its own filter and coalescing are expected
             notice = status if status in NOTICE_STATUSES and not self.unwrap else None
             reason = f"http {code}" + (f" {status}" if status else "")
-            return Outcome.ok(reason, status=code, notice=notice, handled=handled if self.per_event_results else None)
+            receipt_id = None
+            if self.receipts and isinstance(parsed, dict):
+                rid = parsed.get("receipt_id") or parsed.get("receipt")
+                if rid is not None:
+                    receipt_id = str(rid)
+            return Outcome.ok(reason, status=code, notice=notice,
+                            handled=handled if self.per_event_results else None,
+                            receipt_id=receipt_id if self.receipts else None)
         if code == 401:
             return Outcome.config("bad secret: Hermes rejected the signature (http 401)", status=code,
                                   detail=f"http 401: route {self.route!r} signature rejected; check the secret")
