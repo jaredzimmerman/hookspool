@@ -151,7 +151,7 @@ becomes `verified` only after its patterns have been compared with real message 
 
 ### What is still missing
 
-No pack is `verified` yet. A pack is verified when at least 95% of the service's transactional mail from its sender
+Two packs are `verified`: `amazon-orders` and `doordash-orders`. The other five (`resy-reservations`, `opentable-reservations`, `tock-reservations`, `sevenrooms-reservations`, `courtlistener-alerts`) remain `unverified`; a pack is verified when at least 95% of the service's transactional mail from its sender
 domains lands on the right kind and its marketing and newsletter mail is not claimed. That has to be measured on a real
 mailbox, and the measurement has not been done for any of the seven. The report to produce for each pack is: messages
 matched, the count per kind, and the most common subject shapes (digits replaced by `#`, names by a placeholder) from the
