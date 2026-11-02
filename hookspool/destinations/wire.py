@@ -316,6 +316,8 @@ def unwrap_deliver(doc: dict, delivery_id: str, ctx: DeliveryContext,
         why = "internal error: stored payloads are not available for an unwrap delivery"
         return replace(Outcome.transport(why, detail=why), events_delivered=0)
     n = len(meta)
+    all_ids = [m.get("id") for m in meta]
+    handled_ids: set[int] = set()
     last: Outcome | None = None
     for i, (m, body) in enumerate(zip(meta, payloads)):
         eid = m.get("id")
@@ -329,7 +331,19 @@ def unwrap_deliver(doc: dict, delivery_id: str, ctx: DeliveryContext,
             return replace(out, reason=f"{where}: {out.reason}",
                            detail=f"{where}: {out.detail or out.reason}; {i} of {n} delivered before it",
                            events_delivered=i, failed_event_id=None if eid is None else int(eid))
+        if out.handled is None:
+            # the receiver reports nothing: every event of this attempt counts as handled
+            handled_ids.update(int(x) for x in all_ids if x is not None)
+        else:
+            for item in out.handled:
+                try:
+                    handled_ids.add(int(item))
+                except (TypeError, ValueError):
+                    continue
         last = out
     status = last.status if last is not None else None
+    final_handled = None if all(eid is not None and int(eid) in handled_ids for eid in all_ids) \
+        else sorted(handled_ids)
     return replace(Outcome.ok(f"{n} event(s) delivered one by one", status=status,
-                              detail=f"unwrap: {n} of {n} event(s) delivered"), events_delivered=n)
+                              detail=f"unwrap: {n} of {n} event(s) delivered",
+                              handled=final_handled), events_delivered=n)

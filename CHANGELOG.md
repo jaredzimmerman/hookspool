@@ -16,6 +16,7 @@ an interface, and the entry will say so.
 - Docs: per-event results design section (ARCHITECTURE 6.4.2): opt-in `per_event_results` response shape, handled state per event per batch, skip-on-retry and delivery rule.
 - Docs: receipts design section (ARCHITECTURE 6.4.3): opt-in `receipts`, `awaiting_receipt` and `uncertain` states, callback format, failure table and ordering decision.
 - Docs: mail rules readme adds `resy-reservations`, `opentable-reservations`, `tock-reservations`, `sevenrooms-reservations` and `courtlistener-alerts` as rule packs with verification status pending; see `docs/bobbins/mail-rules.md` for the measurement procedure.
+- `per_event_results` (`http`, `hermes`): on a 2xx the dispatcher reads the response body's `handled` array and stores each listed event id as handled for that batch; when every event is handled the batch is `delivered`, otherwise it retries delivering only the events not yet handled. Handled state is cleared on `delivered`, `dead` or `dropped`.
 - Split lineage (schema 4, `0004_split_from.sql`): a batch cut by `hookspool split` records the batch it was cut from in
   the new `batches.split_from` column, so a dropped parent can still be traced through its children after retention
   prunes it; `hookspool list --split-from <id>` lists those children, and `show` and `export` carry the field. Additive
@@ -257,6 +258,9 @@ Moving a 0.1 deployment across is in [Upgrading to 0.2](docs/operations/upgradin
   bobbin starts from `hookspool bobbin new` and is checked by `hookspool bobbin check`.
 
 ### Fixed
+
+- `unwrap_deliver`: aggregate the per-event `handled` lists into the batch outcome so partial
+  settlement works for real unwrap destinations, not just the test stub.
 
 - The dispatcher's hot reload validated the new file without loading source plugins, so any config
   with a `template` source was refused ("unknown key") and the dispatcher kept running on the old

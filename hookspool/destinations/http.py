@@ -15,6 +15,7 @@ accepts the Standard Webhooks document.
 """
 from __future__ import annotations
 
+import json
 from typing import ClassVar
 from urllib.parse import urlsplit
 
@@ -37,6 +38,9 @@ class HttpDestination(Destination):
         self.unwrap = self.spec.get("unwrap") is True
         if self.unwrap:
             self.idempotency = "per-event"
+        self.per_event_results = (
+            self.spec.get("per_event_results") is True and self.type_name in ("hermes", "http")
+        )
         eh, dh = self.spec.get("event_header"), self.spec.get("dedup_header")
         self.event_header = eh if header_name_ok(eh) else None
         self.dedup_header = dh if header_name_ok(dh) else None
@@ -91,7 +95,10 @@ class HttpDestination(Destination):
         except NetError as e:
             return net_outcome(e, timed_out_reason=why)
         if 200 <= resp.status < 300:
-            return Outcome.ok(f"http {resp.status}", status=resp.status)
+            handled = None
+            if self.per_event_results:
+                handled = _parse_handled(resp.body)
+            return Outcome.ok(f"http {resp.status}", status=resp.status, handled=handled)
         return classify_status(resp, ctx.now(), redirect_permanent=True)
 
     def check(self) -> list[str]:
@@ -111,5 +118,33 @@ class HttpDestination(Destination):
                 problems.append(f"{self.name}: header {k!r} contains a line break")
             elif not (header_value_ok(k) and header_value_ok(v)):
                 problems.append(f"{self.name}: header {k!r} has characters that cannot be sent (control or"
-                                " non-Latin-1); it is left out of every delivery")
+                                f" non-Latin-1); it is left out of every delivery")
         return problems
+
+
+def _parse_handled(body: bytes) -> list[int] | None:
+    """The receiver's ``handled`` array from a 2xx body, or None when there is none.
+
+    A missing or unreadable field means the receiver reports nothing: every event of the
+    attempt counts as handled (the dispatcher treats None as "all handled").
+    """
+    if not body:
+        return None
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    handled = parsed.get("handled")
+    if handled is None:
+        return None
+    if not isinstance(handled, list):
+        return None
+    out: list[int] = []
+    for item in handled:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return out

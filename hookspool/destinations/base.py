@@ -48,6 +48,7 @@ class Outcome:
     notice: str | None = None          # e.g. "ignored": opens an issue, outcome unchanged
     events_delivered: int | None = None  # unwrap: events accepted by this attempt, in order
     failed_event_id: int | None = None   # unwrap: the event whose request failed (the attempt stopped there)
+    handled: list[int] | None = None     # per_event_results: event ids the receiver reported handled on this attempt
 
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
@@ -64,8 +65,9 @@ class Outcome:
     # ---- constructors (§6.5 table) ----------------------------------------------------------
     @classmethod
     def ok(cls, reason: str = "ok", *, status: int | None = None, detail: str = "", emits: list | None = None,
-           notice: str | None = None) -> "Outcome":
-        return cls("ok", None, status, reason, detail, None, list(emits or []), notice)
+           notice: str | None = None, handled: list[int] | None = None) -> "Outcome":
+        return cls("ok", None, status, reason, detail, None, list(emits or []), notice,
+                   None, None, handled)
 
     @classmethod
     def transport(cls, reason: str, *, status: int | None = None, detail: str = "") -> "Outcome":
