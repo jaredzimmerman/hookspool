@@ -120,7 +120,7 @@ One unit of delivery to one destination.
 | `id` | PK |
 | `route`, `source`, `destination` | denormalised for queries; `destination = "quarantine"` for a quarantine batch |
 | `key` | coalesce key (`"quarantine"` for a quarantine batch) |
-| `state` | `open`, `sealed`, `leased`, `retry`, `delivered`, `dead`, `dropped` |
+| `state` | `open`, `sealed`, `leased`, `retry`, `delivered`, `dead`, `dropped`, `awaiting_receipt`, `uncertain` (the last two only on receipt-opt-in routes, section 6.4.3) |
 | `first_at`, `last_at` | first and most recent event; immutable facts |
 | `quiet_s`, `max_s`, `max_events`, `max_bytes` | the window this batch was opened with (config changes do not move open batches) |
 | `not_before` | from replay; NULL otherwise |
@@ -347,6 +347,31 @@ With the option on, on a 2xx the dispatcher reads the JSON body. A top-level `ha
 Handled state lives per event per batch, lasts as long as the batch (the spool is the durable record and outlives the receiver's duplicate window), and is cleared when the batch reaches `delivered`, `dead` or `dropped`. On retry the dispatcher delivers only the events that are not yet handled, and marks the batch delivered once every event is handled and the latest attempt was ok. A handled event is never re-sent inside that batch.
 
 Hermes itself has no per-event handled signal today, so per-event results only help receivers that send them; using this with Hermes needs a gateway change or an adapter outside core.
+
+#### 6.4.3 Receipts for work still running (opt-in)
+
+Routes that need to know a batch was not merely admitted but finished use `receipts = true` on the destination (`http` and `hermes`; static setting, no runtime capability handshake). Routes that do not use it keep today's behavior, where a 2xx means delivered.
+
+On admission the receiver returns a receipt id and the batch moves to `awaiting_receipt` (admitted, waiting for its receipt) instead of `delivered`. Settlement is a callback signed like outgoing deliveries, idempotent by receipt id and event id. The receiver reports an opaque disposition string (`visible`, `silent`, `blocked`, ...); a destination setting maps each disposition to `settled`, `retry` or `issue`. Core gives the disposition no other meaning. Per-event results (6.4.2) still apply inside a receipt.
+
+A batch that cannot be settled goes to `uncertain`: it opens an issue and waits for the operator. Nothing is discarded automatically; `uncertain` is never auto-dropped.
+
+New batch states: `awaiting_receipt` (admitted, waiting for its receipt) and `uncertain` (cannot be settled; opens an issue and waits for the operator; never auto-dropped or discarded).
+
+Failure handling:
+
+| Case | What happens |
+|---|---|
+| callback lost | bounded status polling, then `uncertain` |
+| receiver said running, then went away | `uncertain`; no replay unless the operator replays |
+| receipt expires | `uncertain`, never dropped |
+| cancel | the existing `drop` command |
+
+Ordering: a per-key concurrency setting defaults to 1 so order is preserved; an explicit opt-in relaxes ordering while a receipt is open.
+
+Schema change: `batches` gains the two states above and a receipt id column; a `receipts` table holds receipt id, batch id, disposition mapping result and expiry. Full schema in the implementation issue.
+
+Hermes has no receipts today; using receipts with Hermes needs a gateway change or an adapter outside core.
 
 ### 6.5 Retry, backoff and the attempt counter
 
