@@ -91,10 +91,11 @@ ROUTE_KEYS = {"name", "source", "match", "destination", "tee", *WINDOW_FIELDS}
 MAX_TEES = 8                         # tee routes per source (``check``) and copies per event (intake)
 _DEST_COMMON = {"type", "module", "timeout_s", "max_body_bytes", "max_inflight"}
 _DEST_UNWRAP = {"unwrap", "event_header", "dedup_header"}       # one request per event (hermes, http)
+_DEST_PER_EVENT = {"per_event_results"}                         # opt-in per-event settlement (hermes, http)
 DEST_KEYS = {
-    "hermes": _DEST_COMMON | _DEST_UNWRAP,
+    "hermes": _DEST_COMMON | _DEST_UNWRAP | _DEST_PER_EVENT,
     "script": _DEST_COMMON | {"argv", "processor", "cwd", "env_file", "env", "state_dir"},
-    "http": _DEST_COMMON | {"url", "secret", "secret_previous", "headers", "allow_insecure"} | _DEST_UNWRAP,
+    "http": _DEST_COMMON | {"url", "secret", "secret_previous", "headers", "allow_insecure"} | _DEST_UNWRAP | _DEST_PER_EVENT,
 }
 # Keys that existed in the v1 draft or the first v2 draft and were removed on purpose.
 REMOVED_KEYS = {
@@ -347,6 +348,12 @@ def destination_unwrap(cfg: dict, name: str) -> bool:
     """True when the destination delivers one request per event (``unwrap = true``)."""
     d = (cfg.get("destinations") or {}).get(name) or {}
     return isinstance(d, dict) and d.get("unwrap") is True and destination_type(cfg, name) in ("hermes", "http")
+
+
+def destination_per_event_results(cfg: dict, name: str) -> bool:
+    """True when the destination opts in to per-event results (``per_event_results = true``)."""
+    d = (cfg.get("destinations") or {}).get(name) or {}
+    return isinstance(d, dict) and d.get("per_event_results") is True and destination_type(cfg, name) in ("hermes", "http")
 
 
 def destination_max_body_bytes(cfg: dict, name: str) -> int | None:

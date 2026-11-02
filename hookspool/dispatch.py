@@ -412,6 +412,19 @@ class Dispatcher:
                 if [i for i, _ in rows] != [m["id"] for m in doc["event_meta"]]:
                     raise RuntimeError("stored payloads do not match the document")
                 payloads = tuple(p for _, p in rows)
+                if getattr(dest, "per_event_results", False):   # per-event settlement: skip handled events
+                    meta_all = doc["event_meta"]
+                    handled = self.store.handled_event_ids(bid)
+                    if handled:
+                        keep_meta = [m for m in meta_all if int(m.get("id")) not in handled]
+                        keep_ids = {int(m["id"]) for m in keep_meta}
+                        doc["event_meta"] = keep_meta
+                        events_all = doc.get("events") or []
+                        keep_idx = [i for i, m in enumerate(meta_all) if int(m.get("id")) in keep_ids]
+                        doc["events"] = [events_all[i] for i in keep_idx]
+                        doc["count"] = len(keep_meta)
+                        payloads = tuple(p for m, p in zip(meta_all, payloads) if int(m.get("id")) in keep_ids)
+                        body = encode_body(doc)
         except Exception as e:      # unreadable batch: put it back, uncounted
             log.error("cannot build document batch=%d: %s", bid, e.__class__.__name__)
             try:
@@ -480,6 +493,24 @@ class Dispatcher:
                   "events_delivered": out.events_delivered, "failed_event_id": out.failed_event_id}
         try:
             if out.kind == "ok":
+                per_event = getattr(w.dest, "per_event_results", False) and getattr(w.dest, "unwrap", False)
+                if per_event:
+                    all_ids = [int(m["id"]) for m in (w.doc.get("event_meta") or []) if m.get("id") is not None]
+                    if out.handled is None:
+                        self.store.mark_handled(bid, all_ids, now=now)
+                    else:
+                        self.store.mark_handled(bid, out.handled, now=now)
+                    remaining = [eid for eid in all_ids if eid not in self.store.handled_event_ids(bid)]
+                    if remaining:
+                        self.store.mark_retry(bid, w.owner,
+                                              f"partial settlement: {len(remaining)} of {len(all_ids)} events settled",
+                                              "batch", now, False, attempt_id=w.attempt.id, status=out.status,
+                                              duration_ms=w.duration_ms,
+                                              events_delivered=out.events_delivered,
+                                              failed_event_id=out.failed_event_id)
+                        log.info("partial settlement batch=%d destination=%s attempt=%d handled=%d remaining=%d",
+                                 bid, name, w.attempt.n, len(all_ids) - len(remaining), len(remaining))
+                        return
                 try:
                     self.store.mark_delivered(bid, w.owner, out.detail or out.reason, out.emits, **common)
                 except InvalidEvent as e:

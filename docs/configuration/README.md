@@ -301,6 +301,7 @@ table with a `type`.
 | `unwrap` | `hermes`, `http` | `false` | deliver each event on its own, as the sender sent it, instead of the batch document (see [Unwrap](#unwrap-one-request-per-event)) |
 | `event_header` | `hermes`, `http` | none | with `unwrap`: the header that carries each event's type (for example `X-GitHub-Event`). A `hermes` destination without it falls back to the source's `event_header` |
 | `dedup_header` | `hermes`, `http` | none | with `unwrap`: the header that carries each event's sender-side dedup id when it has one (for example `X-GitHub-Delivery`) |
+| `per_event_results` | `hermes`, `http` | `false` | with `unwrap`: the receiver reports which events it has fully processed in a `handled` array on each 2xx; a retry only delivers the events not yet handled (see [Per-event results](#per-event-results-settle-an-event-at-a-time)) |
 
 `quarantine` is a reserved name that never delivers.
 
@@ -344,6 +345,22 @@ url = "https://audit.example.com/hooks/in"
 secret = { file = "/etc/hookspool/secrets/audit" }
 headers = { "X-Env" = "prod" }
 ```
+
+## Per-event results: settle an event at a time
+
+With `unwrap = true`, a `hermes` or `http` destination can opt in to per-event results with `per_event_results = true`. On a 2xx the dispatcher reads the response body's `handled` array: each listed event id that belongs to the batch is stored as handled for that batch. When every event of the batch is handled, the batch is `delivered`; otherwise the attempt is a `retry` and the next attempt delivers only the events not yet handled. A handled event is never re-sent inside that batch. Handled state is cleared when the batch reaches `delivered`, `dead` or `dropped`.
+
+A missing or unreadable `handled` field means the receiver reports nothing: every event of the attempt counts as handled, so the batch is delivered on the first 2xx. Use this with destinations that cannot send a `handled` array only when a 2xx really means every event was processed.
+
+```toml
+[destinations."http:webhook"]
+url = "https://hooks.example.com/in"
+secret = { file = "/etc/hookspool/secrets/webhook" }
+unwrap = true
+per_event_results = true
+```
+
+Per-event results are most useful with `unwrap`; without it the whole batch is one request and there is no per-event body to read. Hermes itself has no per-event handled signal today, so using this with Hermes needs a gateway change or an adapter outside core.
 
 ## Secrets
 

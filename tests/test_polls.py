@@ -453,7 +453,7 @@ def test_status_shows_each_poll_instance(st):
 
 # ---- the schema --------------------------------------------------------------------------------------------------
 def test_a_schema_2_spool_migrates_through_3_and_4(tmp_path):
-    """A schema-2 spool upgrades through every pending migration (schema 4 is the newest)."""
+    """A schema-2 spool upgrades through every pending migration (schema 5 is the newest)."""
     p = str(tmp_path / "old.db")
     c = sqlite3.connect(p)
     for _n, path in store_mod.migrations()[:2]:
@@ -466,9 +466,9 @@ def test_a_schema_2_spool_migrates_through_3_and_4(tmp_path):
     c.commit()
     c.close()
     s = Store(p, poll_cfg())
-    with pytest.raises(store_mod.SchemaError, match="older than 4"):
+    with pytest.raises(store_mod.SchemaError, match="older than 5"):
         s.check_schema()
-    assert s.ensure_schema() == [3, 4] and s.check_schema() == 4
+    assert s.ensure_schema() == [3, 4, 5] and s.check_schema() == 5
     assert s.poll_rows() == {} and len(s.list(limit=10)) == 1
     assert s.poll_tick("feed", "hermes:t", 600, 0, now=T0).action == "scheduled"
 

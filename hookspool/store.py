@@ -41,7 +41,7 @@ CLASSES = ("transport", "throttle", "batch", "config", "permanent", "poison", "q
 QUARANTINE = "quarantine"
 KEY_MAX_BYTES = 512
 ERROR_MAX = 500
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
 EMIT_KEYS = ("source", "key", "action", "payload", "route", "event_type", "dedup_id",
              "quiet_s", "max_s", "max_events", "max_bytes", "not_before")
@@ -722,6 +722,7 @@ class Store:
         def after(c):
             for ev in prepared:
                 results.append(self._enqueue_txn(c, now, ev))
+            c.execute("DELETE FROM batch_handled WHERE batch_id=?", (batch_id,))
             _hook("deliver:after_emits")
         self._fenced(batch_id, owner, now, attempt_id,
                      {"outcome": "ok", "klass": None, "status": status, "error": None,
@@ -761,6 +762,29 @@ class Store:
                      "UPDATE batches SET state='dead', next_attempt_at=NULL, attempts = attempts + ?, last_error=?,"
                      " last_class=?, lease_until=NULL, lease_owner=NULL",
                      (int(bool(counted)), scrub(error), klass))
+        self.clear_handled(batch_id)
+
+    def clear_handled(self, batch_id: int) -> None:
+        """Drop handled-state for a batch that reached a terminal state."""
+        self._write(lambda c: c.execute("DELETE FROM batch_handled WHERE batch_id=?", (batch_id,)))
+
+    def handled_event_ids(self, batch_id: int) -> set[int]:
+        """The event ids of ``batch_id`` the receiver has reported as handled."""
+        c = self._conn()
+        return {int(r[0]) for r in c.execute(
+            "SELECT event_id FROM batch_handled WHERE batch_id=?", (batch_id,))}
+
+    def mark_handled(self, batch_id: int, event_ids: Iterable[int], now: float | None = None) -> None:
+        """Record that the receiver fully processed these events of the batch."""
+        now = self.now() if now is None else now
+        ids = {int(e) for e in event_ids}
+        if not ids:
+            return
+        def fn(c):
+            c.executemany("INSERT OR IGNORE INTO batch_handled (batch_id, event_id, handled_at) "
+                          "VALUES (?, ?, ?)",
+                          [(batch_id, eid, now) for eid in sorted(ids)])
+        self._write(fn)
 
     def mark_dead_unleased(self, batch_id: int, error: str, klass: str = "poison",
                            now: float | None = None) -> bool:
@@ -1022,7 +1046,10 @@ class Store:
             elif b["state"] == "dead":
                 self._resolve_dead_issues(c, b["destination"], now)
             return True
-        return self._write(fn)
+        out = self._write(fn)
+        if out:
+            self.clear_handled(batch_id)
+        return out
 
     # ---- destinations ------------------------------------------------------------------------------------
     @staticmethod
