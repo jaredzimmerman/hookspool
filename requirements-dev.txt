@@ -3,4 +3,4 @@
 cryptography>=42
 PyJWT>=2.8
 pytest>=8
-ruff>=0.17.1,<0.18
+ruff>=0.17.3,<0.18
