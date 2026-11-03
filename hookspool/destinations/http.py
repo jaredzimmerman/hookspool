@@ -41,6 +41,9 @@ class HttpDestination(Destination):
         self.per_event_results = (
             self.spec.get("per_event_results") is True and self.type_name in ("hermes", "http")
         )
+        self.receipts = (
+            self.spec.get("receipts") is True and self.type_name in ("hermes", "http")
+        )
         eh, dh = self.spec.get("event_header"), self.spec.get("dedup_header")
         self.event_header = eh if header_name_ok(eh) else None
         self.dedup_header = dh if header_name_ok(dh) else None
@@ -98,7 +101,10 @@ class HttpDestination(Destination):
             handled = None
             if self.per_event_results:
                 handled = _parse_handled(resp.body)
-            return Outcome.ok(f"http {resp.status}", status=resp.status, handled=handled)
+            receipt_id = None
+            if self.receipts:
+                receipt_id = _parse_receipt_id(resp.body)
+            return Outcome.ok(f"http {resp.status}", status=resp.status, handled=handled, receipt_id=receipt_id)
         return classify_status(resp, ctx.now(), redirect_permanent=True)
 
     def check(self) -> list[str]:
@@ -120,6 +126,21 @@ class HttpDestination(Destination):
                 problems.append(f"{self.name}: header {k!r} has characters that cannot be sent (control or"
                                 f" non-Latin-1); it is left out of every delivery")
         return problems
+
+
+def _parse_receipt_id(body: bytes) -> str | None:
+    if not body:
+        return None
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    rid = parsed.get("receipt_id") or parsed.get("receipt")
+    if rid is None:
+        return None
+    return str(rid)
 
 
 def _parse_handled(body: bytes) -> list[int] | None:

@@ -23,6 +23,10 @@ names, sizes, codes and durations only: never bodies, headers, secrets or query 
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
 import ipaddress
 import json
 import logging
@@ -40,6 +44,8 @@ from urllib.parse import urlsplit
 
 from . import config as _config
 from . import logs as _logs
+from . import verify as _verify
+from .destinations.wire import BadSecret, signing_key
 from .plugin import (ALWAYS_STRIPPED, PluginError, RawRequest, Request, Response, SecretError, Source,
                      load_source, parse_capture)
 from .store import InvalidEvent, SchemaError, SpoolError, Store
@@ -330,6 +336,11 @@ class Intake:
                 return Response.json(code, doc)
             return Response(200, self.metrics_text().encode("utf-8"),
                             {"Content-Type": "text/plain; version=0.0.4; charset=utf-8"})
+        if path.startswith("/settle/"):
+            receipt_id = path[len("/settle/"):]
+            if method != "POST":
+                return _empty(405, {"Allow": "POST", "Connection": "close"})
+            return self._settle(receipt_id, headers, rfile)
         name = path[len("/hooks/"):] if path.startswith("/hooks/") else ""
         src = snap.sources.get(name) if name and "/" not in name else None
         if src is None:
@@ -370,6 +381,128 @@ class Intake:
         req = Request(method, target, headers, body, remote_addr=remote, now=self.now(),
                       config=src.public_config())
         return self._process(snap, src, req)
+
+    # -- receipt settlement callback (ARCHITECTURE §6.4.3) ---------------------
+    def _settle(self, receipt_id: str, headers: list[tuple[str, str]], rfile) -> Response:
+        """A receiver settles a receipt: a callback signed like an outgoing delivery.
+
+        The signature is the Standard Webhooks scheme (``webhook-id``,
+        ``webhook-timestamp`` and ``webhook-signature: v1,<base64>`` over
+        ``<id>.<ts>.<body>``, the same scheme outgoing deliveries use), verified
+        with the destination's secret. The body is JSON
+        ``{"disposition": "...", "event_ids": [...]}``. Idempotent by receipt id:
+        a repeat call returns ``duplicate``. Returns the settlement result:
+        settled / retry / issue (or 404 when the receipt is unknown, 401 when
+        the signature is bad, 400 when the body is malformed).
+        """
+        if receipt_id == "" or "/" in receipt_id:
+            return _empty(404, {"Connection": "close"})
+
+        hmap: dict[str, str] = {}
+        for k, v in headers:
+            hmap.setdefault(k.lower(), v)
+
+        # body
+        cl = hmap.get("content-length")
+        length = 0
+        if cl is not None and cl.strip():
+            cl = cl.strip()
+            if not (cl.isascii() and cl.isdigit()):
+                return _empty(400, {"Connection": "close"})
+            length = int(cl)
+        cap = int((self.cfg.get("intake") or {}).get("max_body_bytes") or 1048576)
+        if length > cap:
+            return _empty(413, {"Connection": "close"})
+        body = rfile.read(length) if length else b""
+        if len(body) != length:
+            return _empty(400, {"Connection": "close"})
+
+        # signature, exactly like an outgoing delivery (§6.4)
+        wid = hmap.get("webhook-id", "")
+        ts = hmap.get("webhook-timestamp", "")
+        sig = hmap.get("webhook-signature", "")
+        if not wid or not ts or not sig:
+            return _empty(401, {"Connection": "close"})
+        if not _verify.within_tolerance(ts, self.now(), 300.0):
+            return _empty(401, {"Connection": "close"})
+
+        # receipt -> batch -> destination -> secret
+        row = self.store.receipt(receipt_id)
+        if row is None:
+            return _empty(404, {"Connection": "close"})
+        batch = self.store.batch(int(row["batch_id"]))
+        if batch is None:
+            return _empty(404, {"Connection": "close"})
+        dest_name = batch.get("destination") or ""
+        # resolve the shared secret the same way the destination does, so a
+        # callback signed like an outgoing delivery verifies against it
+        secret = ""
+        try:
+            from .destinations import build as _build_destination
+            d = _build_destination(self.cfg, dest_name)
+            if hasattr(d, "_secrets"):
+                secs = d._secrets()
+                if secs:
+                    secret = secs[0]
+            elif hasattr(d, "_route"):
+                try:
+                    secret, _ = d._route()
+                except LookupError:
+                    secret = ""
+        except Exception:  # noqa: BLE001
+            secret = ""
+        try:
+            key = signing_key(secret)
+        except BadSecret:
+            return _empty(503, {"Retry-After": str(RETRY_AFTER_S), "Connection": "close"})
+
+        # parse signature candidates (v1,<b64>, possibly several space-joined)
+        candidates: list[str] = []
+        for part in sig.split():
+            k, sep, v = part.strip().partition(",")
+            if sep and k == "v1" and v.strip():
+                candidates.append(v.strip())
+        if not candidates:
+            return _empty(401, {"Connection": "close"})
+        try:
+            ts_int = int(ts)
+        except ValueError:
+            return _empty(401, {"Connection": "close"})
+        msg = wid.encode("utf-8") + b"." + str(ts_int).encode("ascii") + b"." + body
+        expected = hmac.new(key, msg, hashlib.sha256).digest()
+        ok = False
+        for c in candidates:
+            try:
+                got = base64.b64decode(c.encode("ascii") + b"=" * (-len(c) % 4), validate=True)
+            except (binascii.Error, ValueError):
+                got = None
+            if got is not None and _verify.equal(got, expected):
+                ok = True
+        if not ok:
+            return _empty(401, {"Connection": "close"})
+
+        # parse the body
+        try:
+            parsed = json.loads(body) if body else {}
+        except ValueError:
+            return _empty(400, {"Connection": "close"})
+        if not isinstance(parsed, dict):
+            return _empty(400, {"Connection": "close"})
+        disposition = parsed.get("disposition")
+        if not isinstance(disposition, str) or not disposition:
+            return _empty(400, {"Connection": "close"})
+        event_ids = parsed.get("event_ids")
+        if event_ids is not None:
+            if not isinstance(event_ids, list) or any(
+                    isinstance(e, bool) or not isinstance(e, int) for e in event_ids):
+                return _empty(400, {"Connection": "close"})
+
+        result = self.store.settle_receipt(receipt_id, disposition,
+                                           event_ids=event_ids if event_ids is not None else None,
+                                           now=self.now())
+        if result is None:
+            return _empty(404, {"Connection": "close"})
+        return Response.json(200, {"result": result})
 
     def _process(self, snap: _Snapshot, src: Source, req: Request) -> Response:
         name = src.name

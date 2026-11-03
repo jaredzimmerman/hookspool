@@ -92,10 +92,11 @@ MAX_TEES = 8                         # tee routes per source (``check``) and cop
 _DEST_COMMON = {"type", "module", "timeout_s", "max_body_bytes", "max_inflight"}
 _DEST_UNWRAP = {"unwrap", "event_header", "dedup_header"}       # one request per event (hermes, http)
 _DEST_PER_EVENT = {"per_event_results"}                         # opt-in per-event settlement (hermes, http)
+_DEST_RECEIPTS = {"receipts", "receipt_dispositions"}           # opt-in receipts (hermes, http)
 DEST_KEYS = {
-    "hermes": _DEST_COMMON | _DEST_UNWRAP | _DEST_PER_EVENT,
+    "hermes": _DEST_COMMON | _DEST_UNWRAP | _DEST_PER_EVENT | _DEST_RECEIPTS,
     "script": _DEST_COMMON | {"argv", "processor", "cwd", "env_file", "env", "state_dir"},
-    "http": _DEST_COMMON | {"url", "secret", "secret_previous", "headers", "allow_insecure"} | _DEST_UNWRAP | _DEST_PER_EVENT,
+    "http": _DEST_COMMON | {"url", "secret", "secret_previous", "headers", "allow_insecure"} | _DEST_UNWRAP | _DEST_PER_EVENT | _DEST_RECEIPTS,
 }
 # Keys that existed in the v1 draft or the first v2 draft and were removed on purpose.
 REMOVED_KEYS = {
@@ -354,6 +355,21 @@ def destination_per_event_results(cfg: dict, name: str) -> bool:
     """True when the destination opts in to per-event results (``per_event_results = true``)."""
     d = (cfg.get("destinations") or {}).get(name) or {}
     return isinstance(d, dict) and d.get("per_event_results") is True and destination_type(cfg, name) in ("hermes", "http")
+
+
+def destination_receipts(cfg: dict, name: str) -> bool:
+    """True when the destination opts in to receipts (``receipts = true``)."""
+    d = (cfg.get("destinations") or {}).get(name) or {}
+    return isinstance(d, dict) and d.get("receipts") is True and destination_type(cfg, name) in ("hermes", "http")
+
+
+def destination_receipt_dispositions(cfg: dict, name: str) -> dict:
+    """The disposition -> (settled|retry|issue) mapping for a receipt destination."""
+    d = (cfg.get("destinations") or {}).get(name) or {}
+    v = d.get("receipt_dispositions") if isinstance(d, dict) else None
+    if isinstance(v, dict):
+        return {str(k): str(val) for k, val in v.items()}
+    return {}
 
 
 def destination_max_body_bytes(cfg: dict, name: str) -> int | None:

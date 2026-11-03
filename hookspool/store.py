@@ -35,13 +35,13 @@ from typing import Any, Callable, Iterable, Iterator
 
 from . import config as _config
 
-STATES = ("open", "sealed", "leased", "retry", "delivered", "dead", "dropped")
+STATES = ("open", "sealed", "leased", "retry", "delivered", "dead", "dropped", "awaiting_receipt", "uncertain")
 PENDING = ("open", "sealed", "leased", "retry")
 CLASSES = ("transport", "throttle", "batch", "config", "permanent", "poison", "quarantine")
 QUARANTINE = "quarantine"
 KEY_MAX_BYTES = 512
 ERROR_MAX = 500
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
 EMIT_KEYS = ("source", "key", "action", "payload", "route", "event_type", "dedup_id",
              "quiet_s", "max_s", "max_events", "max_bytes", "not_before")
@@ -613,7 +613,7 @@ class Store:
         now = self.now() if now is None else now
         q = ("SELECT b.* FROM batches b WHERE b.state IN ('sealed', 'retry')"
              " AND b.id = (SELECT b2.id FROM batches b2 WHERE b2.route = b.route AND b2.key = b.key"
-             "  AND b2.state IN ('open', 'sealed', 'retry', 'leased') ORDER BY b2.first_at, b2.id LIMIT 1)"
+             "  AND b2.state IN ('open', 'sealed', 'retry', 'leased', 'awaiting_receipt') ORDER BY b2.first_at, b2.id LIMIT 1)"
              " AND (b.state = 'sealed' OR b.next_attempt_at IS NULL OR b.next_attempt_at <= ?)"
              " AND (b.not_before IS NULL OR b.not_before <= ?)"
              " ORDER BY b.first_at, b.id")
@@ -723,6 +723,7 @@ class Store:
             for ev in prepared:
                 results.append(self._enqueue_txn(c, now, ev))
             c.execute("DELETE FROM batch_handled WHERE batch_id=?", (batch_id,))
+            c.execute("DELETE FROM receipts WHERE batch_id=?", (batch_id,))
             _hook("deliver:after_emits")
         self._fenced(batch_id, owner, now, attempt_id,
                      {"outcome": "ok", "klass": None, "status": status, "error": None,
@@ -763,6 +764,7 @@ class Store:
                      " last_class=?, lease_until=NULL, lease_owner=NULL",
                      (int(bool(counted)), scrub(error), klass))
         self.clear_handled(batch_id)
+        self._write(lambda c: c.execute("DELETE FROM receipts WHERE batch_id=?", (batch_id,)))
 
     def clear_handled(self, batch_id: int) -> None:
         """Drop handled-state for a batch that reached a terminal state."""
@@ -785,6 +787,145 @@ class Store:
                           "VALUES (?, ?, ?)",
                           [(batch_id, eid, now) for eid in sorted(ids)])
         self._write(fn)
+
+    # ---- receipts (ARCHITECTURE §6.4.3) -------------------------------------------------------
+    def mark_awaiting_receipt(self, batch_id: int, owner: str, receipt_id: str, *, expiry: float | None = None,
+                              attempt_id: int | None = None, status: int | None = None,
+                              duration_ms: float | None = None, now: float | None = None,
+                              handled_event_ids: Iterable[int] | None = None) -> None:
+        """leased -> awaiting_receipt, recording the receipt id returned on admission."""
+        now = self.now() if now is None else now
+        if expiry is None:
+            expiry = now + 3600.0
+        if handled_event_ids is not None:
+            self.mark_handled(batch_id, handled_event_ids, now=now)
+
+        def after(c):
+            c.execute("INSERT OR REPLACE INTO receipts (receipt_id, batch_id, expiry, created_at) "
+                      "VALUES (?, ?, ?, ?)", (str(receipt_id), batch_id, float(expiry), now))
+            c.execute("UPDATE batches SET receipt_id=? WHERE id=?", (str(receipt_id), batch_id))
+
+        self._fenced(batch_id, owner, now, attempt_id,
+                     {"outcome": "ok", "klass": None, "status": status, "error": None,
+                      "duration_ms": duration_ms, "counted": True,
+                      "events_delivered": None, "failed_event_id": None},
+                     "UPDATE batches SET state='awaiting_receipt', next_attempt_at=NULL, attempts = attempts + 1, "
+                     "last_error=NULL, last_class=NULL, lease_until=NULL, lease_owner=NULL, receipt_id=?",
+                     (str(receipt_id),), after)
+
+    def mark_uncertain(self, batch_id: int, reason: str = "", *, now: float | None = None) -> bool:
+        """Move a batch to ``uncertain`` (cannot be settled). Opens/updates an issue. Never auto-dropped."""
+        now = self.now() if now is None else now
+        def fn(c):
+            b = c.execute("SELECT state, destination, source FROM batches WHERE id=?", (batch_id,)).fetchone()
+            if b is None:
+                return False
+            if b["state"] in ("delivered", "dropped"):
+                return False
+            c.execute("UPDATE batches SET state='uncertain', next_attempt_at=NULL, last_error=? "
+                      "WHERE id=?", (scrub(reason) if reason else "uncertain", batch_id))
+            # open an issue for the destination
+            try:
+                self._issue_open_txn(c, f"receipt:uncertain:{b['destination']}", "delivery", now,
+                                     destination=b["destination"], sample_batch_id=batch_id,
+                                     error=scrub(reason) if reason else "receipt could not be settled")
+            except Exception:
+                pass
+            c.execute("DELETE FROM receipts WHERE batch_id=?", (batch_id,))
+            return True
+        out = self._write(fn)
+        if out:
+            self.clear_handled(batch_id)
+        return bool(out)
+
+    def settle_receipt(self, receipt_id: str, disposition: str, *, event_ids: Iterable[int] | None = None,
+                       handled: Iterable[int] | None = None, handled_event_ids: Iterable[int] | None = None,
+                       now: float | None = None) -> str | None:
+        """Settle a receipt. Returns the resulting state ('settled'/'retry'/'issue'/'duplicate') or None.
+
+        Idempotent by receipt id and event id: a second call with the same receipt id is a no-op
+        (returns 'duplicate'). Per-event results apply: handled event ids are recorded.
+        """
+        now = self.now() if now is None else now
+        if event_ids is None:
+            event_ids = handled if handled is not None else handled_event_ids
+        rid = str(receipt_id)
+        # load receipt + batch
+        c = self._conn()
+        row = c.execute("SELECT r.batch_id, r.settled_at, b.destination, b.state FROM receipts r "
+                        "JOIN batches b ON b.id = r.batch_id WHERE r.receipt_id=?", (rid,)).fetchone()
+        if row is None:
+            return None
+        batch_id = int(row["batch_id"])
+        if row["settled_at"] is not None:
+            return "duplicate"
+        dest = row["destination"]
+        dispositions = {}  # filled from config if available
+        try:
+            dispositions = _config.destination_receipt_dispositions(self.config, dest)
+        except Exception:
+            dispositions = {}
+        action = dispositions.get(str(disposition), "issue")
+        if action not in ("settled", "retry", "issue"):
+            action = "issue"
+        if event_ids is not None:
+            try:
+                self.mark_handled(batch_id, list(event_ids), now=now)
+            except Exception:
+                pass
+
+        def fn(c):
+            cur = c.execute("UPDATE receipts SET disposition=?, result=?, settled_at=? WHERE receipt_id=? AND settled_at IS NULL",
+                      (str(disposition), action, now, rid))
+            return cur.rowcount
+        updated = self._write(fn)
+        if not updated:
+            return "duplicate"
+
+        if action == "settled":
+            # check if all events handled
+            # mark delivered if no remaining handled gaps; simplest: mark delivered
+            try:
+                self._write(lambda c: c.execute(
+                    "UPDATE batches SET state='delivered', delivered_at=?, result=? WHERE id=? AND state='awaiting_receipt'",
+                    (now, scrub(f"receipt:{disposition}"), batch_id)))
+            except Exception:
+                pass
+            self.clear_handled(batch_id)
+            return "settled"
+        if action == "retry":
+            self._write(lambda c: c.execute(
+                "UPDATE batches SET state='retry', next_attempt_at=?, last_error=? WHERE id=? AND state='awaiting_receipt'",
+                (now, scrub(f"receipt:{disposition}"), batch_id)))
+            return "retry"
+        # issue -> uncertain
+        self.mark_uncertain(batch_id, f"receipt disposition {disposition!r} mapped to issue")
+        return "issue"
+
+    def receipt(self, receipt_id: str) -> dict | None:
+        c = self._conn()
+        r = c.execute("SELECT * FROM receipts WHERE receipt_id=?", (str(receipt_id),)).fetchone()
+        return None if r is None else dict(r)
+
+    def receipts_for_batch(self, batch_id: int) -> list[dict]:
+        c = self._conn()
+        return [dict(r) for r in c.execute("SELECT * FROM receipts WHERE batch_id=?", (int(batch_id),))]
+
+    def expire_receipts(self, now: float | None = None) -> list[int]:
+        """Move batches whose receipts have expired to ``uncertain``. Returns batch ids."""
+        now = self.now() if now is None else now
+        c = self._conn()
+        rows = c.execute("SELECT receipt_id, batch_id FROM receipts WHERE expiry IS NOT NULL AND expiry <= ? AND settled_at IS NULL", (now,)).fetchall()
+        out = []
+        for r in rows:
+            bid = int(r["batch_id"])
+            if self.mark_uncertain(bid, "receipt expired"):
+                out.append(bid)
+            try:
+                self._write(lambda c: c.execute("DELETE FROM receipts WHERE receipt_id=?", (str(r["receipt_id"]),)))
+            except Exception:
+                pass
+        return out
 
     def mark_dead_unleased(self, batch_id: int, error: str, klass: str = "poison",
                            now: float | None = None) -> bool:
@@ -1032,13 +1173,14 @@ class Store:
         return self._write(fn)
 
     def drop(self, batch_id: int, now: float | None = None, reason: str = "") -> bool:
-        """open/sealed/retry/dead -> dropped (operator only; never automatic)."""
+        """open/sealed/retry/dead/awaiting_receipt/uncertain -> dropped (operator only; never automatic)."""
         now = self.now() if now is None else now
 
         def fn(c):
             b = c.execute("SELECT state, destination, source FROM batches WHERE id=?", (batch_id,)).fetchone()
-            if b is None or b["state"] not in ("open", "sealed", "retry", "dead"):
+            if b is None or b["state"] not in ("open", "sealed", "retry", "dead", "awaiting_receipt", "uncertain"):
                 return False
+            c.execute("DELETE FROM receipts WHERE batch_id=?", (batch_id,))
             c.execute("UPDATE batches SET state='dropped', dropped_at=?, next_attempt_at=NULL, result=? WHERE id=?",
                       (now, scrub("dropped" + (f": {reason}" if reason else "")), batch_id))
             if b["destination"] == QUARANTINE:

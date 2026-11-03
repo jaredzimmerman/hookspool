@@ -302,6 +302,8 @@ table with a `type`.
 | `event_header` | `hermes`, `http` | none | with `unwrap`: the header that carries each event's type (for example `X-GitHub-Event`). A `hermes` destination without it falls back to the source's `event_header` |
 | `dedup_header` | `hermes`, `http` | none | with `unwrap`: the header that carries each event's sender-side dedup id when it has one (for example `X-GitHub-Delivery`) |
 | `per_event_results` | `hermes`, `http` | `false` | with `unwrap`: the receiver reports which events it has fully processed in a `handled` array on each 2xx; a retry only delivers the events not yet handled (see [Per-event results](#per-event-results-settle-an-event-at-a-time)) |
+| `receipts` | `hermes`, `http` | `false` | opt in to receipts: a 2xx may carry a `receipt_id`; the batch stays open as `awaiting_receipt` until the receiver settles it (see [Receipts](#receipts)) |
+| `receipt_dispositions` | `hermes`, `http` | none | with `receipts`: maps the opaque disposition string a receiver reports to `settled`, `retry` or `issue` |
 
 `quarantine` is a reserved name that never delivers.
 
@@ -361,6 +363,36 @@ per_event_results = true
 ```
 
 Per-event results are most useful with `unwrap`; without it the whole batch is one request and there is no per-event body to read. Hermes itself has no per-event handled signal today, so using this with Hermes needs a gateway change or an adapter outside core.
+
+## Receipts
+
+A `hermes` or `http` destination can opt in with `receipts = true`. Routes that do not use it keep today's behavior, where a 2xx means delivered.
+
+With the option on, on a 2xx the receiver may return a `receipt_id` in the response body; the batch moves to `awaiting_receipt` (admitted, waiting for its receipt) instead of `delivered`. Settlement is a callback signed like an outgoing delivery, idempotent by receipt id and event id. The receiver reports an opaque disposition string (`visible`, `silent`, `blocked`, ...); `receipt_dispositions` maps each disposition to `settled`, `retry` or `issue`. Core gives the disposition no other meaning. Per-event results (above) still apply inside a receipt.
+
+A batch that cannot be settled goes to `uncertain`: it opens an issue and waits for the operator. Nothing is discarded automatically; `uncertain` is never auto-dropped.
+
+Failure handling:
+
+| Case | What happens |
+|---|---|
+| callback lost | bounded status polling, then `uncertain` |
+| receiver said running, then went away | `uncertain`; no replay unless the operator replays |
+| receipt expires | `uncertain`, never dropped |
+| cancel | the existing `drop` command |
+
+Ordering: per-key concurrency defaults to 1, so order is preserved; an explicit opt-in relaxes ordering while a receipt is open.
+
+```toml
+[destinations."http:webhook"]
+url = "https://hooks.example.com/in"
+secret = { file = "/etc/hookspool/secrets/webhook" }
+unwrap = true
+receipts = true
+receipt_dispositions = { visible = "settled", silent = "settled", blocked = "issue" }
+```
+
+Hermes has no receipts today, so using this with Hermes needs a gateway change or an adapter outside core.
 
 ## Secrets
 

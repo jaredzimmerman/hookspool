@@ -466,9 +466,9 @@ def test_a_schema_2_spool_migrates_through_3_and_4(tmp_path):
     c.commit()
     c.close()
     s = Store(p, poll_cfg())
-    with pytest.raises(store_mod.SchemaError, match="older than 5"):
+    with pytest.raises(store_mod.SchemaError, match="older than 6"):
         s.check_schema()
-    assert s.ensure_schema() == [3, 4, 5] and s.check_schema() == 5
+    assert s.ensure_schema() == [3, 4, 5, 6] and s.check_schema() == 6
     assert s.poll_rows() == {} and len(s.list(limit=10)) == 1
     assert s.poll_tick("feed", "hermes:t", 600, 0, now=T0).action == "scheduled"
 
