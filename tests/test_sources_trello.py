@@ -187,8 +187,9 @@ def test_config_check_accepts_the_example(tmp_path):
     sec.write_text(SECRET)
     os.chmod(sec, 0o600)
     text = sourcekit.source_table_text("trello")
+    subs = tmp_path / "subscriptions.json"
+    subs.write_text("{}")
     p = tmp_path / "c.toml"
-    p.write_text(f'[spool]\nhome = "{tmp_path / "home"}"\n[alerts]\ndry = true\n{text}\n'
-                 f'secrets.secret = {{ file = "{sec}" }}\n')
+    p.write_text(f'[spool]\nhome = "{tmp_path / "home"}"\n[alerts]\ndry = true\n{text}\nsecrets.secret = {{ file = "{sec}" }}\n[hermes]\nsubscriptions_path = "{subs}"\n')
     rep = hs_config.check(hs_config.load_config(str(p)), check_secrets=True)
     assert [e for e in rep.errors if "trello" in e] == [], rep.errors
